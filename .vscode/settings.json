@@ -1,0 +1,9 @@
+{
+  "explorer.excludeGitIgnore": false,
+  "files.associations": {
+    "*.lua": "luau"
+  },
+  "luau-lsp.sourcemap.enabled": true,
+  "luau-lsp.sourcemap.rojoProjectFile": "default.project.json",
+  "luau-lsp.platform.type": "roblox"
+}

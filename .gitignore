@@ -1,0 +1,13 @@
+# Project place file
+/Clean a Business.rbxlx
+
+# Roblox Studio lock files
+/*.rbxlx.lock
+/*.rbxl.lock
+
+sourcemap.json
+
+# Wally-installed packages (restore with `wally install`; wally.lock is committed)
+/Packages/
+/ServerPackages/
+/DevPackages/

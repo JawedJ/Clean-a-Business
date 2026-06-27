@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aftman trust *)",
+      "Bash(wally install *)",
+      "Bash(rm -rf src/ReplicatedStorage/Packages)",
+      "Bash(rm -f build_test.rbxl)",
+      "Bash(git check-ignore *)",
+      "Bash(mkdir -p src/StarterPlayer/StarterPlayerScripts src/StarterPlayer/StarterCharacterScripts)",
+      "Bash(touch src/StarterPlayer/StarterPlayerScripts/.gitkeep src/StarterPlayer/StarterCharacterScripts/.gitkeep)",
+      "Bash(cd \"c:/Users/plazm/Desktop/rblx-code/Clean a Business\" && rojo build default.project.json -o build_test.rbxl 2>&1; rm -f build_test.rbxl)",
+      "Bash(code --version)",
+      "Bash(code --list-extensions)",
+      "Bash(code --install-extension JohnnyMorganz.luau-lsp)",
+      "Bash(rojo sourcemap *)"
+    ]
+  }
+}

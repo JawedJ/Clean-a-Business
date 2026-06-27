@@ -1,0 +1,42 @@
+{
+  "name": "Clean a Business",
+  "globIgnorePaths": [
+    "**/.gitkeep"
+  ],
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "SharedModules": {
+        "$path": "src/ReplicatedStorage/SharedModules"
+      },
+      "Packages": {
+        "$path": "Packages"
+      },
+      "Remotes": {
+        "$path": "src/ReplicatedStorage/Remotes"
+      }
+    },
+
+    "ServerScriptService": {
+      "Main": {
+        "$path": "src/ServerScriptService/Main.server.luau"
+      },
+      "Modules": {
+        "$path": "src/ServerScriptService/Modules"
+      }
+    },
+
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "$path": "src/StarterPlayer/StarterPlayerScripts"
+      },
+      "StarterCharacterScripts": {
+        "$className": "StarterCharacterScripts",
+        "$path": "src/StarterPlayer/StarterCharacterScripts"
+      }
+    }
+  }
+}
