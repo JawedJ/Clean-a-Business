@@ -16,7 +16,7 @@ local AssetService = game:GetService("AssetService")
 local IMAGE_SIZE = 128
 local SNAP_THRESHOLD = 0.9
 -- Cleaning brush is a thin rectangle, sized in STUDS (consistent across all faces).
-local BRUSH_WORLD_WIDTH = 1.5 -- size along the face's horizontal (right) axis
+local BRUSH_WORLD_WIDTH = 1.875 -- size along the face's horizontal (right) axis
 local BRUSH_WORLD_HEIGHT = 0.3 -- size along the face's vertical (up) axis -- thin
 
 -- Dirt texture. Must be an asset you / the place owner own -- EditableImage refuses
@@ -264,24 +264,22 @@ function CleanableSurface.erase(
 		cy0 = math.clamp(v0 * (IMAGE_SIZE - 1), 0, IMAGE_SIZE - 1)
 	end
 
-	-- One read/write over the bounding box covering the whole swept stroke.
+	-- Bounding box covering the whole swept stroke; read it, erase within it, write it back.
 	local bx0 = math.max(0, math.floor(math.min(cx0, cx1) - hw))
 	local by0 = math.max(0, math.floor(math.min(cy0, cy1) - hh))
 	local bx1 = math.min(IMAGE_SIZE - 1, math.ceil(math.max(cx0, cx1) + hw))
 	local by1 = math.min(IMAGE_SIZE - 1, math.ceil(math.max(cy0, cy1) + hh))
 	local w = bx1 - bx0 + 1
 	local h = by1 - by0 + 1
-	if w <= 0 or h <= 0 then
-		return
-	end
-
 	local region = data.image:ReadPixelsBuffer(Vector2.new(bx0, by0), Vector2.new(w, h))
 
 	-- Stamp the rectangle along the segment at sub-brush spacing (no gaps on fast swipes).
+	-- Spacing is half the brush's thin extent for solid overlap; the cap is high enough to
+	-- never under-sample even a corner-to-corner jump (clamped endpoints bound the distance).
 	local dcx = cx1 - cx0
 	local dcy = cy1 - cy0
 	local dist = math.sqrt(dcx * dcx + dcy * dcy)
-	local steps = math.clamp(math.ceil(dist / math.min(hw, hh)), 1, 256)
+	local steps = math.clamp(math.ceil(dist / (math.min(hw, hh) * 0.5)), 1, 512)
 	for s = 0, steps do
 		local t = s / steps
 		local cx = cx0 + dcx * t

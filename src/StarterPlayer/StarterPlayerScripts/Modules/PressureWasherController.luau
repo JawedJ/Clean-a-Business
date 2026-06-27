@@ -26,8 +26,6 @@ local MAX_AMMO = assert(CONFIG.MaxAmmo, "pressureWasher config missing MaxAmmo")
 local AMMO_PER_STEP = assert(CONFIG.AmmoPerStep, "pressureWasher config missing AmmoPerStep")
 local REGEN_PER_SEC = assert(CONFIG.RegenPerSec, "pressureWasher config missing RegenPerSec")
 
-local MAX_STROKE_DIST = 8 -- studs; don't connect a stroke across jumps bigger than this
-
 local player = Players.LocalPlayer
 
 local PressureWasherController = {}
@@ -42,10 +40,27 @@ local hookedTools: { [Tool]: boolean } = {}
 -- Previous frame's cleaning hit, used to draw a continuous stroke (no gaps).
 local lastHitPos: Vector3? = nil
 local lastHitPart: BasePart? = nil
+local lastHitNormal: Vector3? = nil
+
+-- Tolerate a few frames where the aim ray slips off the surface (common while moving the
+-- camera near an edge) before breaking the stroke, so the stroke bridges back gap-free.
+local missFrames = 0
+local MAX_MISS_FRAMES = 4
 
 local function endStroke()
 	lastHitPos = nil
 	lastHitPart = nil
+	lastHitNormal = nil
+	missFrames = 0
+end
+
+-- A frame that didn't land on a cleanable surface. Keep the stroke alive briefly so a
+-- momentary slip off the part doesn't start a fresh (gapped) stamp on return.
+local function softMiss()
+	missFrames += 1
+	if missFrames > MAX_MISS_FRAMES then
+		endStroke()
+	end
 end
 
 local function getSurface(part: BasePart): CleanableSurface.CleanableSurface
@@ -81,12 +96,12 @@ end
 local function fireStep()
 	local result = aim()
 	if not result then
-		endStroke()
+		softMiss()
 		return
 	end
 	local hit = result.Instance
 	if not hit or not hit:IsA("BasePart") or not CollectionService:HasTag(hit, SURFACE_TAG) then
-		endStroke()
+		softMiss()
 		return
 	end
 
@@ -96,17 +111,28 @@ local function fireStep()
 		return
 	end
 
+	missFrames = 0
 	ammo = math.max(0, ammo - AMMO_PER_STEP)
 
-	-- Continue the stroke only if last frame's hit was on the same part and close by.
+	-- Continue the stroke from last frame's hit whenever we were already cleaning this
+	-- same part. This fills the gap between frames so fast sweeps leave no missed strips.
 	local fromPos: Vector3? = nil
-	if lastHitPart == hit and lastHitPos and (result.Position - lastHitPos).Magnitude <= MAX_STROKE_DIST then
+	if lastHitPart == hit then
 		fromPos = lastHitPos
 	end
 
 	surface:erase(result.Position, result.Normal, fromPos)
+
+	-- If we swept onto a different face of the same part this frame, also extend the
+	-- stroke on the face we just left (up to the shared edge) so crossing an edge fast
+	-- doesn't leave a missed strip behind on the previous face.
+	if fromPos and lastHitNormal and lastHitNormal:Dot(result.Normal) < 0.99 then
+		surface:erase(result.Position, lastHitNormal, fromPos)
+	end
+
 	lastHitPos = result.Position
 	lastHitPart = hit
+	lastHitNormal = result.Normal
 
 	if surface.cleaned then
 		cleanRemote:FireServer(hit)
