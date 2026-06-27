@@ -7,12 +7,7 @@ export type Item = {
 	Cost: number,
 	UniqueID: string,
 
-	-- Optional per-tool stats (e.g. the pressure washer). Tools that don't use a
-	-- stat leave it nil.
-	Range: number?, -- max cleaning raycast distance (studs)
-	MaxAmmo: number?, -- water tank capacity
-	AmmoPerStep: number?, -- water drained per cleaning tick
-	RegenPerSec: number?, -- water regenerated per second while not firing
+	Range: number?, -- max cleaning distance (studs)
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -27,11 +22,12 @@ export type Business = {
 	Cleaned: boolean,
 	Name: string,
 	UniqueID: string,
-	CleanedParts: { [string]: boolean }?,
+	CleanedParts: { [string]: boolean }?, -- the key is the parts identifier, and the booelan indicates if the corrosponding part is cleaned or not.
 	CleanedStains: { [string]: boolean }?,
 
 
 }
+
 
 
 local DataTemplate = {
