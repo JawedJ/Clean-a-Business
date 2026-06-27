@@ -22,6 +22,10 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Unlocked = true,
 		Cost = 0,
 		UniqueID = "pressureWasher",
+		Range = 60,
+		MaxAmmo = 100,
+		AmmoPerStep = 0.6,
+		RegenPerSec = 30,
 	},
 }
 

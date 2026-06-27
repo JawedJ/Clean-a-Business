@@ -6,6 +6,13 @@ export type Item = {
 	Unlocked: boolean,
 	Cost: number,
 	UniqueID: string,
+
+	-- Optional per-tool stats (e.g. the pressure washer). Tools that don't use a
+	-- stat leave it nil.
+	Range: number?, -- max cleaning raycast distance (studs)
+	MaxAmmo: number?, -- water tank capacity
+	AmmoPerStep: number?, -- water drained per cleaning tick
+	RegenPerSec: number?, -- water regenerated per second while not firing
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -64,7 +71,11 @@ local DataTemplate = {
 			Equipped = false,
 			Unlocked = true,
 			Cost = 0,
-			UniqueID = "pressureWasher"
+			UniqueID = "pressureWasher",
+			Range = 60,
+			MaxAmmo = 100,
+			AmmoPerStep = 0.6,
+			RegenPerSec = 30,
 		},
 
 	} :: { [string]: Item },

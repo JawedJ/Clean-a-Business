@@ -12,7 +12,26 @@
       "Bash(code --version)",
       "Bash(code --list-extensions)",
       "Bash(code --install-extension JohnnyMorganz.luau-lsp)",
-      "Bash(rojo sourcemap *)"
+      "Bash(rojo sourcemap *)",
+      "mcp__robloxstudio__get_class_info",
+      "Bash(cat .mcp.json)",
+      "Bash(ls -la .claude)",
+      "Bash(cat .claude/settings*.json)",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -m 4 -i http://localhost:58741/)",
+      "Bash(curl -s -m 4 -i http://localhost:58741/status)",
+      "mcp__robloxstudio__get_instance_children",
+      "mcp__robloxstudio__create_object",
+      "mcp__robloxstudio__set_properties",
+      "mcp__robloxstudio__add_tag",
+      "mcp__robloxstudio__set_attribute",
+      "mcp__robloxstudio__set_property",
+      "Bash(echo \"exit: $?\")",
+      "mcp__robloxstudio__get_output_log",
+      "mcp__robloxstudio__get_playtest_output",
+      "mcp__robloxstudio__start_playtest",
+      "mcp__robloxstudio__stop_playtest",
+      "mcp__robloxstudio__execute_luau"
     ]
   }
 }
