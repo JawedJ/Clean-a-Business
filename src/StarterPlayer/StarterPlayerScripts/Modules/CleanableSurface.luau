@@ -15,7 +15,9 @@ local AssetService = game:GetService("AssetService")
 
 local IMAGE_SIZE = 128
 local SNAP_THRESHOLD = 0.9
-local BRUSH_WORLD_RADIUS = 0.6 -- cleaning brush radius in STUDS (consistent across all faces)
+-- Cleaning brush is a thin rectangle, sized in STUDS (consistent across all faces).
+local BRUSH_WORLD_WIDTH = 1.5 -- size along the face's horizontal (right) axis
+local BRUSH_WORLD_HEIGHT = 0.3 -- size along the face's vertical (up) axis -- thin
 
 -- Dirt texture. Must be an asset you / the place owner own -- EditableImage refuses
 -- assets you lack permission for. Loaded once and baked into the dirt buffer.
@@ -130,13 +132,14 @@ local function buildDirtBuffer(): buffer
 	return temp:ReadPixelsBuffer(Vector2.zero, Vector2.new(IMAGE_SIZE, IMAGE_SIZE))
 end
 
-local function ensureDirtBuffer(): buffer?
-	local b = dirtBuffer
-	if not b then
-		b = buildDirtBuffer()
-		dirtBuffer = b
+local function ensureDirtBuffer(): buffer
+	local existing = dirtBuffer
+	if existing then
+		return existing
 	end
-	return b
+	local built = buildDirtBuffer()
+	dirtBuffer = built
+	return built
 end
 
 -- Preloads the dirt buffer (yields). Call once before building any surfaces.
@@ -225,8 +228,15 @@ local function mapUV(part: BasePart, worldPos: Vector3, face: Enum.NormalId): (n
 	return u, v
 end
 
--- Erases a brush circle on whichever face the hit belongs to.
-function CleanableSurface.erase(self: CleanableSurface, worldPos: Vector3, worldNormal: Vector3)
+-- Erases the thin-rectangle brush on whichever face the hit belongs to. If
+-- `fromWorldPos` is given (a continuous stroke), the brush is stamped along the
+-- segment between the two points so fast mouse movement leaves no gaps.
+function CleanableSurface.erase(
+	self: CleanableSurface,
+	worldPos: Vector3,
+	worldNormal: Vector3,
+	fromWorldPos: Vector3?
+)
 	if self.cleaned then
 		return
 	end
@@ -238,34 +248,52 @@ function CleanableSurface.erase(self: CleanableSurface, worldPos: Vector3, world
 		return
 	end
 
-	local u, v = mapUV(self.part, worldPos, face)
-	local cx = math.clamp(math.round(u * (IMAGE_SIZE - 1)), 0, IMAGE_SIZE - 1)
-	local cy = math.clamp(math.round(v * (IMAGE_SIZE - 1)), 0, IMAGE_SIZE - 1)
-
-	-- Convert the world-space brush radius to pixel radii for this face, so the brush
-	-- is a consistent real-world size regardless of face size. (The square image
-	-- stretches onto the face, so X and Y can get different pixel radii.)
+	-- Brush half-extents in pixels (consistent world size regardless of face size).
 	local width, height = faceDimensions(self.part, face)
-	local rx = math.max(1, BRUSH_WORLD_RADIUS / width * IMAGE_SIZE)
-	local ry = math.max(1, BRUSH_WORLD_RADIUS / height * IMAGE_SIZE)
+	local hw = math.max(0.5, (BRUSH_WORLD_WIDTH * 0.5) / width * IMAGE_SIZE)
+	local hh = math.max(0.5, (BRUSH_WORLD_HEIGHT * 0.5) / height * IMAGE_SIZE)
 
-	local x0 = math.max(0, math.floor(cx - rx))
-	local y0 = math.max(0, math.floor(cy - ry))
-	local x1 = math.min(IMAGE_SIZE - 1, math.ceil(cx + rx))
-	local y1 = math.min(IMAGE_SIZE - 1, math.ceil(cy + ry))
-	local w = x1 - x0 + 1
-	local h = y1 - y0 + 1
+	-- Stroke endpoints in pixel space (start defaults to end = a single stamp).
+	local u1, v1 = mapUV(self.part, worldPos, face)
+	local cx1 = math.clamp(u1 * (IMAGE_SIZE - 1), 0, IMAGE_SIZE - 1)
+	local cy1 = math.clamp(v1 * (IMAGE_SIZE - 1), 0, IMAGE_SIZE - 1)
+	local cx0, cy0 = cx1, cy1
+	if fromWorldPos then
+		local u0, v0 = mapUV(self.part, fromWorldPos, face)
+		cx0 = math.clamp(u0 * (IMAGE_SIZE - 1), 0, IMAGE_SIZE - 1)
+		cy0 = math.clamp(v0 * (IMAGE_SIZE - 1), 0, IMAGE_SIZE - 1)
+	end
+
+	-- One read/write over the bounding box covering the whole swept stroke.
+	local bx0 = math.max(0, math.floor(math.min(cx0, cx1) - hw))
+	local by0 = math.max(0, math.floor(math.min(cy0, cy1) - hh))
+	local bx1 = math.min(IMAGE_SIZE - 1, math.ceil(math.max(cx0, cx1) + hw))
+	local by1 = math.min(IMAGE_SIZE - 1, math.ceil(math.max(cy0, cy1) + hh))
+	local w = bx1 - bx0 + 1
+	local h = by1 - by0 + 1
 	if w <= 0 or h <= 0 then
 		return
 	end
 
-	local region = data.image:ReadPixelsBuffer(Vector2.new(x0, y0), Vector2.new(w, h))
-	for j = 0, h - 1 do
-		for i = 0, w - 1 do
-			local ndx = ((x0 + i) - cx) / rx
-			local ndy = ((y0 + j) - cy) / ry
-			if ndx * ndx + ndy * ndy <= 1 then -- inside the world-circle (pixel-ellipse)
-				local alphaIndex = (j * w + i) * 4 + 3
+	local region = data.image:ReadPixelsBuffer(Vector2.new(bx0, by0), Vector2.new(w, h))
+
+	-- Stamp the rectangle along the segment at sub-brush spacing (no gaps on fast swipes).
+	local dcx = cx1 - cx0
+	local dcy = cy1 - cy0
+	local dist = math.sqrt(dcx * dcx + dcy * dcy)
+	local steps = math.clamp(math.ceil(dist / math.min(hw, hh)), 1, 256)
+	for s = 0, steps do
+		local t = s / steps
+		local cx = cx0 + dcx * t
+		local cy = cy0 + dcy * t
+		local rx0 = math.max(bx0, math.floor(cx - hw))
+		local ry0 = math.max(by0, math.floor(cy - hh))
+		local rx1 = math.min(bx1, math.ceil(cx + hw))
+		local ry1 = math.min(by1, math.ceil(cy + hh))
+		for py = ry0, ry1 do
+			local rowBase = (py - by0) * w
+			for px = rx0, rx1 do
+				local alphaIndex = (rowBase + (px - bx0)) * 4 + 3
 				if buffer.readu8(region, alphaIndex) ~= 0 then
 					data.erasedPixels += 1
 					buffer.writeu8(region, alphaIndex, 0)
@@ -273,7 +301,8 @@ function CleanableSurface.erase(self: CleanableSurface, worldPos: Vector3, world
 			end
 		end
 	end
-	data.image:WritePixelsBuffer(Vector2.new(x0, y0), Vector2.new(w, h), region)
+
+	data.image:WritePixelsBuffer(Vector2.new(bx0, by0), Vector2.new(w, h), region)
 
 	if data.erasedPixels / data.totalPixels >= SNAP_THRESHOLD then
 		-- Face fully clean: destroy the overlay. This reveals the clean part and,

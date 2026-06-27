@@ -26,6 +26,8 @@ local MAX_AMMO = assert(CONFIG.MaxAmmo, "pressureWasher config missing MaxAmmo")
 local AMMO_PER_STEP = assert(CONFIG.AmmoPerStep, "pressureWasher config missing AmmoPerStep")
 local REGEN_PER_SEC = assert(CONFIG.RegenPerSec, "pressureWasher config missing RegenPerSec")
 
+local MAX_STROKE_DIST = 8 -- studs; don't connect a stroke across jumps bigger than this
+
 local player = Players.LocalPlayer
 
 local PressureWasherController = {}
@@ -36,6 +38,15 @@ local firing = false
 local ammo = MAX_AMMO
 local surfaces: { [BasePart]: CleanableSurface.CleanableSurface } = {}
 local hookedTools: { [Tool]: boolean } = {}
+
+-- Previous frame's cleaning hit, used to draw a continuous stroke (no gaps).
+local lastHitPos: Vector3? = nil
+local lastHitPart: BasePart? = nil
+
+local function endStroke()
+	lastHitPos = nil
+	lastHitPart = nil
+end
 
 local function getSurface(part: BasePart): CleanableSurface.CleanableSurface
 	local existing = surfaces[part]
@@ -70,23 +81,36 @@ end
 local function fireStep()
 	local result = aim()
 	if not result then
+		endStroke()
 		return
 	end
 	local hit = result.Instance
 	if not hit or not hit:IsA("BasePart") or not CollectionService:HasTag(hit, SURFACE_TAG) then
+		endStroke()
 		return
 	end
 
 	local surface = getSurface(hit)
 	if surface.cleaned then
+		endStroke()
 		return
 	end
 
 	ammo = math.max(0, ammo - AMMO_PER_STEP)
-	surface:erase(result.Position, result.Normal)
+
+	-- Continue the stroke only if last frame's hit was on the same part and close by.
+	local fromPos: Vector3? = nil
+	if lastHitPart == hit and lastHitPos and (result.Position - lastHitPos).Magnitude <= MAX_STROKE_DIST then
+		fromPos = lastHitPos
+	end
+
+	surface:erase(result.Position, result.Normal, fromPos)
+	lastHitPos = result.Position
+	lastHitPart = hit
 
 	if surface.cleaned then
 		cleanRemote:FireServer(hit)
+		endStroke()
 	end
 end
 
@@ -161,6 +185,7 @@ function PressureWasherController.init()
 		if firing and equippedTool and ammo > 0 then
 			fireStep()
 		else
+			endStroke() -- not cleaning this frame; next stroke starts fresh
 			ammo = math.min(MAX_AMMO, ammo + REGEN_PER_SEC * dt)
 		end
 	end)
