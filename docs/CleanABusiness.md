@@ -1,6 +1,7 @@
 # Clean a Business — Technical Specification
 
-Reference doc for AI agents writing the codebase. Concise and technical.
+Reference doc for AI agents working on the codebase. Concise and technical.
+Split into **what exists today** and **the design vision** it's building toward.
 
 ## Overview
 
@@ -8,212 +9,270 @@ Simulator-style Roblox game. Players clean businesses with tools (broom, pressur
 washer) and continuously unlock more content — tools, businesses, upgrades, plot
 expansions — as they progress.
 
-- **8 players per server**, each with their own plot.
+- **8 players per server** (target), each with their own plot.
 - Each plot **grows** as the owner completes more businesses.
 - Players clean **only their own plot**.
 - Server is authoritative; clients read replicated data and send validated requests.
 
 **Design imperative:** the set of unlockables (tools, businesses, upgrades) grows
 indefinitely over the game's life. Every system must be data-driven and additive —
-adding a new tool/business/unlockable must require new data + config, not rewrites.
+adding a new tool/business/unlockable should require new data + config, not rewrites.
 
-## Gameplay Loop
+---
+
+# Current Implementation
+
+What is actually built and running right now. The only complete gameplay system is
+the **pressure washer cleaning loop**.
+
+## Cleaning system (implemented)
+
+### Surfaces
+- A cleanable surface is any `BasePart` with the `CollectionService` tag
+  **`CleanableSurface`** plus two attributes:
+  - `BusinessId` — which business it belongs to (e.g. `"mcDonalds"`).
+  - `SurfaceId` — stable per-surface id, unique within the business (e.g. `"demo_1"`).
+- The surface's part shows its normal "clean" look. A **dirt overlay** is layered on
+  the part's **FRONT face only** as a `Decal` whose `TextureContent` references a
+  client-built `EditableImage`. Cleaning erases overlay pixels to reveal the part.
+- Surfaces are authored **in the Studio place**, not in code (Workspace isn't
+  Rojo-mounted). Current demo content: `Workspace.CleanableWalls` holds 3 walls tagged
+  and attributed to the `mcDonalds` business.
+
+### `CleanableSurface` (client OOP class)
+One instance per cleanable part. Owns the dirt overlay and the erase logic.
+- On construct: creates a 512×512 `EditableImage`, draws the dirt texture
+  (`CleaningConfig.DirtAsset`) into it (upscaling if the source is smaller), and falls
+  back to a **flat brown** (`FallbackColor` @ `FallbackTransparency`) if the asset fails
+  to load. Counts the initial opaque pixels as `dirtyTotal`.
+- **Performance contract (the whole reason past attempts went choppy):** the pixels
+  live in **one persistent `buffer`**, read back exactly once at construct. Erasing
+  mutates that buffer **in place** and does a **single `WritePixelsBuffer` per frame**.
+  There is **zero per-frame heap allocation**, so there's no GC churn that builds up
+  over time — cleaning cost is constant, not growing. Do **not** reintroduce per-frame
+  `ReadPixelsBuffer`/buffer allocation.
+- `clean(worldPos, fromWorldPos?)`: maps the world hit point to a pixel coord on the
+  front face, erases a **circular stamp** (a world-space circle → ellipse in pixel
+  space on non-square parts), and **interpolates stamps along the segment** from the
+  previous point so fast strokes leave no gaps.
+- **Completion:** when erased fraction ≥ `CompletionThreshold` (0.95), the surface
+  marks itself cleaned, destroys the decal, and fires its `onCleaned` callback.
+
+### `PressureWasherController` (client)
+- Detects the tool via the `ToolId` attribute and binds its `Equipped` / `Activated`
+  (hold to fire) / `Deactivated` / `Unequipped` events. **No ammo** — firing is
+  unrestricted while held.
+- Each `Heartbeat` while firing: raycasts from the mouse (`ViewportPointToRay`), and if
+  it hits a tagged part **on its front face** (`Normal·LookVector > 0.99`), tells that
+  surface to clean. Tracks the last hit so consecutive frames bridge into one stroke.
+
+### `SurfaceManager` (client)
+- Builds/destroys `CleanableSurface` instances for tagged parts (handles parts that
+  stream/spawn in later via `GetInstanceAddedSignal`).
+- On build, checks saved data — if the part is **already cleaned** in a prior session,
+  it **skips the overlay entirely** (part renders bare, no EditableImage created).
+- Exposes `getSurface(part)` for the controller, and fires the `CleanSurface` remote on
+  completion.
+
+### Persistence (implemented)
+- Saved per player at `BusinessList[BusinessId].CleanedParts[SurfaceId] = true`.
+- Flow: client completes a surface → fires `CleanSurface` remote → server validates
+  (part is tagged, has `BusinessId`/`SurfaceId`, business exists in the player's data) →
+  `DataService:set(...)`. On rejoin, the client reads `CleanedParts` and skips overlays
+  for already-cleaned surfaces.
+- **Per-player only.** Each player has their own cleaned state; players do **not** see
+  each other's in-progress or completed cleaning yet (see Planned).
+- ⚠️ **Known exploit gap:** completion is currently client-asserted. The server only
+  validates that the part/business exist, not that cleaning actually happened. Fine
+  while nothing is rewarded; must be hardened (rate-limit, timing, proximity/ownership)
+  before cleaning grants Cash/XP.
+
+
+### `CleaningConfig` (shared)
+Single source of truth for cleaning tunables, consumed by client and server:
+`SurfaceTag`, `ToolId`, `BusinessIdAttribute`/`SurfaceIdAttribute`, `DirtAsset`,
+`ImageSize`, `BrushWorldRadius`, `CompletionThreshold`, `Range`, brown fallback,
+and `FlipU`/`FlipV` (flip if the cleaned spot appears mirrored from where you aim).
+
+### Tool
+- The **Pressure Washer** `Tool` lives in **`StarterPack`** (authored in Studio, so it
+  auto-gives to every player). It has a `Handle` and a `ToolId = "pressureWasher"`
+  attribute. There is no server-side tool-giving code.
+
+## Implemented files
+
+```
+ReplicatedStorage/SharedModules/
+  DataTemplate.luau     saved-data shape + defaults
+  ToolConfig.luau       tool definitions catalog
+  BusinessConfig.luau   business definitions catalog
+  CleaningConfig.luau   cleaning tunables (shared by client + server)
+ReplicatedStorage/Remotes/
+  CleanSurface          RemoteEvent (client → server completion report)
+
+ServerScriptService/
+  Main.server.luau      inits DataService (useMock) + CleaningService
+  Modules/CleaningService.luau   validates + saves cleaned surfaces
+  Modules/InventoryManager.luau  present but NOT yet wired into Main
+
+StarterPlayer/StarterPlayerScripts/
+  Main.client.luau                 inits DataService client + SurfaceManager + PressureWasherController
+  Modules/SurfaceManager.luau      owns surface lifetime + persistence checks + remote
+  Modules/CleanableSurface.luau    dirt-overlay OOP class
+  Modules/PressureWasherController.luau   tool input + raycast + cleaning
+```
+
+Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `Workspace.CleanableWalls`.
+
+## Not yet implemented / planned
+
+- **Broom** tool — only a data/config entry exists; no behavior. Intended to clear
+  **stain decals** (tracked in `Business.CleanedStains`) discretely on tool use with
+  server-side proximity validation.
+- **Rewards & progression** — completing a business awarding Cash/XP, unlock flow,
+  plot growth. `InventoryManager` exists but isn't initialized or used yet.
+- **StreamingEnabled** handling — the tag-added signal already builds surfaces on
+  stream-in and applies saved state correctly, but the broader streaming model below is
+  a target, not a guarantee.
+
+---
+
+# Design Vision & Principles
+
+Forward-looking guidance. Still authoritative for *how* new systems should be built,
+even where the feature itself isn't implemented yet.
+
+## Gameplay loop (target)
 
 1. Player spawns on their own plot with a starting business and starting tools.
-2. Player equips a tool and cleans cleanable surfaces / stains in the active business.
+2. Player equips a tool and cleans surfaces / stains in the active business.
 3. Completing a business awards Cash + XP and unlocks new content (next business,
    tools, upgrades, plot expansion).
 4. Player spends Cash / reaches Levels to unlock the next tier of content.
 5. Repeat against a steadily expanding catalog of businesses and tools.
 
-## Tools
+## Replication model (target)
 
-Tools are inventory items (see `DataTemplate.Item`): `Name`, `Equipped`, `Unlocked`,
-`Cost`, `UniqueID`. New tools are added as data + a behavior handler keyed by `UniqueID`.
-
-### Broom
-- Cleans **stain decals** (tracked per-business in `Business.CleanedStains`).
-- Activates **on tool use** when the player is near a stain.
-- Discrete: one activation clears a nearby stain (validate proximity server-side).
-
-### Pressure Washer
-- **Continuous-fire** cleaning tool with an **ammo/water limit**.
-- Operates on **EditableImage dirt overlays** (full mechanic below).
-- Firing consumes ammo per frame/tick; cleaning is gated on remaining ammo.
-
-## Cleaning System Architecture
-
-### Cleanable surfaces
-- Each cleanable surface renders its **normal clean look** plus a **dirt overlay** as
-  an `EditableImage`. Cleaning erases overlay pixels to reveal the clean surface.
-- **Keep surfaces flat.** UV-mapping a 3D hit point to a 2D pixel is hard on complex
-  geometry — flat surfaces keep the mapping tractable.
-
-### Per-frame firing loop (client)
-While the pressure washer is firing:
-1. **Raycast** from the nozzle.
-2. Map the **3D hit point → 2D pixel coordinate** on the surface's EditableImage (UV).
-3. Erase a **brush circle** via `EditableImage:DrawCircle`.
-4. **Gate on ammo** — stop when depleted.
-
-### Coverage & completion
-- Track **coverage** (fraction of overlay erased).
-- At **90% coverage**, **snap the whole surface fully clean** (erase remaining dirt in
-  one step).
-- The client then **requests completion from the server**.
-- The server **validates** the request and writes a **per-surface completion boolean**
-  via DataService.
-
-### Replication model
-- **Pixel erasing is client-only, visual, never saved or replicated.**
-- Leaving mid-surface **loses in-progress** erasing (nothing persisted until the
-  completion boolean is written).
-- Other players see only the **binary result**: a surface is fully dirty or fully clean.
-  The 90% snap makes this a single **dirty → clean flip**; in-progress erasing is never
-  visible to others.
-- Only the **completion boolean** is saved/replicated — never pixel data.
+- **Pixel erasing stays client-only, visual, never saved or replicated.**
+- Leaving mid-surface **loses in-progress** erasing (nothing persists until completion).
+- Only the **completion boolean** is saved/replicated — never pixel data. 
 
 ## Data / Persistence — DataService
 
 The game uses the **DataService** package (`leifstout/dataservice`) for **all player
-data**. It pairs with the existing `DataTemplate` module, which defines the saved-data
-shape and is the foundation the rest builds on.
+data**, paired with the `DataTemplate` module which defines the saved-data shape.
 
 **Rules:**
-- Route **all player data changes through DataService**. Prefer its own methods
-  (get/set/update, array operations, change signals, etc.) over hand-rolled handling.
-- Let DataService's **built-in replication** keep clients in sync — don't build a
-  parallel replication path.
-- **Server-authoritative:** clients read replicated data and send validated requests for
-  any change. The server validates before writing.
+- Route **all player data changes through DataService**; prefer its methods
+  (get/set/update, array ops, change signals) over hand-rolled handling.
+- Let DataService's **built-in replication** keep clients in sync — no parallel path.
+- **Server-authoritative:** clients send validated requests; the server validates
+  before writing.
 
 ### Saved-data shape (`DataTemplate`)
-Located at `src/ReplicatedStorage/SharedModules/DataTemplate.luau`. Current fields:
+`src/ReplicatedStorage/SharedModules/DataTemplate.luau`:
 
 - `Cash: number`
-- `Level: { CurrentLevel: number, XP: number }` — XP-to-next-level computed by a formula
-  (function TBD).
-- `BusinessList: { [string]: Business }` — keyed by `UniqueID`. Each `Business`:
-  `BaseRate`, `Unlocked`, `Cleaned`, `Name`, `UniqueID`, `CleanedParts: {[string]: boolean}?`
-  (per-surface completion booleans for pressure-washer surfaces),
-  `CleanedStains: {[string]: boolean}?` (per-stain booleans for broom).
-- `Inventory: { [string]: Item }` — keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
-  `Unlocked`, `Cost`, `UniqueID`.
+- `Level: { CurrentLevel: number, XP: number }` — XP-to-next-level via a formula (TBD).
+- `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
+  `BaseRate`, `Unlocked`, `Cleaned`, `Name`, `UniqueID`,
+  `CleanedParts: {[string]: boolean}?` (per-surface completion for the pressure washer),
+  `CleanedStains: {[string]: boolean}?` (per-stain completion for the broom).
+- `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
+  `Unlocked`, `Cost`, `UniqueID`. (The pressure-washer entry still carries vestigial
+  ammo fields from before ammo was removed — unused.)
 
-Per-surface completion writes from the cleaning system land in `CleanedParts`;
-broom stain completions land in `CleanedStains`. Both are the only cleaning state
-persisted.
+**Why string-id maps, not Instance refs:** saved data is JSON-only (no Instances), and
+an Instance is a new object every session anyway. A stable `SurfaceId` string survives
+save/load and a `{[id]: true}` map gives O(1) membership, dedupe, and clean per-key
+writes via DataService's path API.
 
-## EditableImage Constraints
+## EditableImage constraints
 
-Document and respect these limits:
+- **Max 1024×1024**, **not resizable** after creation (current overlays are 512×512).
+- **One EditableImage update per frame per client** — prefer **fewer/larger** surfaces.
+- **Memory-expensive:** only the **active business** should hold live editable images;
+  completed/distant businesses should use static textures.
 
-- **Max 1024×1024**, and **not resizable** after creation.
-- **Only one EditableImage updates per frame per client** — prefer **fewer/larger**
-  surfaces over many small ones.
-- **Memory-expensive:** only the **active business** holds live editable images.
-  Completed/distant businesses use **static textures**.
-- **Requires creator ID / age verification** to ship — account for this in release reqs.
+## StreamingEnabled (target)
 
-## StreamingEnabled
-
-The game uses **StreamingEnabled**.
-
-- Cleaning code **must not assume surfaces are loaded** — wait for instances to stream
-  in and **handle `nil`**.
-- Players clean only their **own nearby plot**, so the **active business is reliably
-  streamed in**.
+- Cleaning code **must not assume surfaces are loaded** — wait for instances and handle
+  `nil`. (The tag-added signal already covers stream-in.)
+- Players clean only their **own nearby plot**, so the active business is reliably
+  streamed in.
 - **Saved completion data replicates regardless of streaming**, so surfaces render to
-  the correct state when they load (read the completion boolean on stream-in and set
-  dirty/clean accordingly).
+  the correct state on load.
 
-## Architecture — Entry Points & Service Modules
+## Architecture — entry points & service modules
 
 The entire game runs from **exactly two executing scripts**:
 
 - **One server entry point** — `ServerScriptService/Main.server.luau`.
-- **One client entry point** — a single `LocalScript` in `StarterPlayerScripts`.
+- **One client entry point** — `StarterPlayerScripts/Main.client.luau`.
 
-**No other Script or LocalScript runs anything on its own.** Everything else in the game
-is a **ModuleScript**. The two Main scripts do nothing but **require and initialize the
-service modules** in the correct order.
+**No other Script or LocalScript runs on its own.** Everything else is a ModuleScript.
+The two Main scripts do nothing but **require and initialize service modules** in order.
 
 ### Service modules
 - Treat every system as a **service**: a self-contained module owning one domain
-  (e.g. `InventoryManager`, `CleaningService`, `BusinessManager`, `ToolService`,
-  `UnlockManager`).
-- Each service exposes an **`Init` function** that wires it up (connect events, build
-  state, cache references). The relevant Main script calls each service's `Init` once,
-  in dependency order, at startup. A service does nothing until `Init` runs.
-- Services expose a clear **public API** (named functions) and keep internals private.
-  Example: `InventoryManager.Init()`, then `InventoryManager.EquipTool(...)`,
-  `InventoryManager.UnlockItem(...)`, etc., called by other services or by request
-  handlers — never by a second loose script.
-- Server services and client services are separate modules behind their respective Main
-  scripts; shared logic/types/config live in `SharedModules`.
+  (e.g. `CleaningService`, `SurfaceManager`, `InventoryManager`, future
+  `BusinessManager`, `UnlockManager`).
+- Each exposes an **`init` function** that wires it up (connect events, build state,
+  cache refs). The relevant Main calls each `init` once, in dependency order. A service
+  does nothing until `init` runs.
+- Services expose a clear **public API** and keep internals private. Server and client
+  services are separate modules; shared logic/types/config live in `SharedModules`.
 
 ```
-Main.server.luau                 (the only server Script)
-  └── requires + Init()s:  DataService, InventoryManager, BusinessManager, CleaningService, ...
-
-Main client LocalScript          (the only client Script)
-  └── requires + Init()s:  InventoryController, CleaningController, ToolController, UI, ...
+Main.server.luau         requires + init: DataService, CleaningService, (later) InventoryManager, ...
+Main.client.luau         requires + init: DataService, SurfaceManager, PressureWasherController, (later) UI, ...
 ```
 
 ### Build reusable systems
-This is a priority, not a nicety. The catalog of tools, businesses, and unlockables grows
-continuously, so systems must be **generic and reusable rather than special-cased**:
+A priority, not a nicety — the catalog grows continuously:
+- A service handles a **whole category** (all tools, all businesses), data-driven — not
+  one hardcoded instance. Adding content = new data + config (+ a behavior handler keyed
+  by `UniqueID` if needed), with no new top-level scripts and minimal Main edits.
+- Prefer composition and shared helpers over duplication.
+- Keep services decoupled: communicate through public APIs / signals, not internals.
 
-- A service handles a **whole category** (all tools, all businesses), driven by data —
-  not one hardcoded instance. Adding a new tool/business/unlockable = new data + config
-  (and a behavior handler keyed by `UniqueID` if needed), with **no new top-level
-  scripts and no edits to the Main files** beyond a possible single new `Init` call.
-- Prefer composition and shared helpers over duplicated logic. If two systems need the
-  same behavior, extract a shared module.
-- Keep services decoupled: communicate through public APIs / signals, not by reaching
-  into another service's internals.
+## Code standards
 
-## Code Standards
-
-Clean, performant, well-structured code is a priority. The catalog of tools, businesses,
-and unlockables grows continuously — structure code to **scale additively**.
-
-- **Typing:** strict Luau (`--!strict`) throughout. Strong use of types everywhere.
+- **Typing:** strict Luau (`--!strict`) throughout. (`CleanableSurface` is `--!nonstrict`
+  on purpose — the EditableImage/Content APIs aren't fully covered by the type solver.)
 - **Structure by shape of data:**
-  - **Classes** (OOP, metatables) for **many-instance stateful objects** (e.g. a
-    cleanable surface, an equipped tool instance).
-  - **Modules/singletons** for systems that exist once (e.g. cleaning controller,
-    unlock manager).
+  - **Classes** (OOP, metatables) for many-instance stateful objects (a cleanable
+    surface, an equipped tool instance).
+  - **Modules/singletons** for systems that exist once (controllers, managers).
   - **Plain typed tables** for pure data (templates, configs).
-- **Extensibility:** adding a tool/business/unlockable = new data + config + (if needed)
-  a behavior handler keyed by `UniqueID`. No core rewrites.
-- **Naming (Luau conventions):**
-  - `PascalCase` — types, classes, modules.
-  - `camelCase` — variables, functions, parameters.
-  - Match existing `DataTemplate` style (PascalCase data fields as defined there).
+- **Extensibility:** new content = new data + config + (if needed) a behavior handler
+  keyed by `UniqueID`. No core rewrites.
+- **Naming:** `PascalCase` for types/classes/modules; `camelCase` for
+  variables/functions/params; match existing `DataTemplate` field style.
 
-## Rojo / Project Structure
+## Rojo / project structure
 
-The codebase uses **Rojo**; sync map is in `default.project.json`.
+Sync map is in `default.project.json`.
 
 ```
 src/
   ReplicatedStorage/
-    SharedModules/      -> ReplicatedStorage.SharedModules   (DataTemplate, shared types/configs)
-    Remotes/            -> ReplicatedStorage.Remotes         (RemoteEvents/Functions)
+    SharedModules/   -> ReplicatedStorage.SharedModules   (DataTemplate, configs, shared types)
+    Remotes/         -> ReplicatedStorage.Remotes         (RemoteEvents/Functions)
   ServerScriptService/
-    Main.server.luau    -> ServerScriptService.Main          (server entry point)
-    Modules/            -> ServerScriptService.Modules        (server systems)
+    Main.server.luau -> ServerScriptService.Main          (server entry point)
+    Modules/         -> ServerScriptService.Modules        (server systems)
   StarterPlayer/
-    StarterPlayerScripts/      -> client controllers
+    StarterPlayerScripts/      -> client entry point + client modules
     StarterCharacterScripts/   -> per-character client scripts
-Packages/               -> ReplicatedStorage.Packages         (Wally deps, incl. DataService)
+Packages/            -> ReplicatedStorage.Packages         (Wally deps, incl. DataService)
 ```
 
 - **Wally** manages dependencies (`wally.toml`); `DataService` lives in `Packages`.
-- **All server module scripts live in `ServerScriptService/Modules`** (e.g.
-  `InventoryManager`). The only server Script outside it is `Main.server.luau`.
-- Shared types/configs go in `SharedModules` so client and server consume one source of
-  truth (as `DataTemplate` already does).
+- **All server module scripts live in `ServerScriptService/Modules`**; the only server
+  Script outside it is `Main.server.luau`.
+- Shared types/configs go in `SharedModules` (one source of truth for client + server).
+- **Workspace and StarterPack are not Rojo-mounted** — physical instances (cleanable
+  parts, the tool) are authored directly in the Studio place.
 - Client/server boundaries communicate via `ReplicatedStorage/Remotes`; all state
   mutation requests are server-validated.

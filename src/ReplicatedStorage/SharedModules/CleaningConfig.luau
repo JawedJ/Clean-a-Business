@@ -23,7 +23,7 @@ local CleaningConfig = {
 	ImageSize = 512,
 
 	-- Brush radius in studs (world space). Converted to pixels per surface.
-	BrushWorldRadius = 1.5,
+	BrushWorldRadius = 1.0,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
 	CompletionThreshold = 0.95,
