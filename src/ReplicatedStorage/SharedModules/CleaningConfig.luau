@@ -26,7 +26,7 @@ local CleaningConfig = {
 	BrushWorldRadius = 1.0,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
-	CompletionThreshold = 0.95,
+	CompletionThreshold = 0.98,
 
 	-- Max cleaning distance (studs).
 	Range = 70,

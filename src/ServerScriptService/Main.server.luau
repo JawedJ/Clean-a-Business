@@ -4,6 +4,7 @@ local CleaningService = require(game.ServerScriptService.Modules.CleaningService
 
 DataService:init({
 	template = DataTemplate,
+	useMock = true,
 })
 
 
