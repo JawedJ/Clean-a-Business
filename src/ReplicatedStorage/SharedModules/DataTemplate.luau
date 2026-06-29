@@ -8,6 +8,7 @@ export type Item = {
 	UniqueID: string,
 
 	Range: number?, -- max cleaning distance (studs)
+	Power: number?
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula

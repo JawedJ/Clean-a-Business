@@ -14,8 +14,23 @@ local BusinessSpawner = require(script.Parent.BusinessSpawner)
 
 local PlotService = {}
 
+-- Stud offset above the spawn part so the character drops in instead of clipping.
+local SPAWN_OFFSET = Vector3.new(0, 5, 0)
+
 local ownerByPlot: { [Instance]: Player } = {}
 local plotByPlayer: { [Player]: Instance } = {}
+local characterConns: { [Player]: RBXScriptConnection } = {}
+
+-- Teleport a character onto its plot's spawn part (upright, slightly above it).
+local function spawnCharacterAt(character: Model, plot: Instance)
+	local spawnPart = plot:FindFirstChild(Config.PlotSpawnPartName)
+	if not spawnPart or not spawnPart:IsA("BasePart") then
+		warn(string.format("[PlotService] Plot %s has no %q part to spawn on.", plot.Name, Config.PlotSpawnPartName))
+		return
+	end
+	character:WaitForChild("HumanoidRootPart")
+	character:PivotTo(CFrame.new(spawnPart.Position + SPAWN_OFFSET))
+end
 
 -- First plot (in Plot1..PlotN order) that nobody currently owns.
 local function findFreePlot(): Instance?
@@ -41,9 +56,23 @@ local function assign(player: Player)
 	-- Fill the plot with the player's owned businesses. Spawned in its own thread
 	-- since it yields for data to load; the plot is already assigned by now.
 	task.spawn(BusinessSpawner.populate, player, plot)
+
+	-- Spawn the character on the plot now and on every future respawn.
+	characterConns[player] = player.CharacterAdded:Connect(function(character)
+		spawnCharacterAt(character, plot)
+	end)
+	if player.Character then
+		task.spawn(spawnCharacterAt, player.Character, plot)
+	end
 end
 
 local function release(player: Player)
+	local conn = characterConns[player]
+	if conn then
+		conn:Disconnect()
+		characterConns[player] = nil
+	end
+
 	local plot = plotByPlayer[player]
 	if plot then
 		ownerByPlot[plot] = nil

@@ -23,6 +23,10 @@ local CleaningConfig = {
 	PlotCount = 8,
 	PlotAttribute = "Plot",
 
+	-- Part inside each plot folder the owner's character is teleported onto when
+	-- they're assigned the plot and whenever they respawn.
+	PlotSpawnPartName = "spawnPart",
+
 	-- Business templates (Models named after their businessId) live in
 	-- ReplicatedStorage.<BusinessesFolderName>. On assignment, each owned business
 	-- is cloned into the plot's Businesses folder and pivoted onto its spawn part,
@@ -38,7 +42,8 @@ local CleaningConfig = {
 	-- The dirt overlay texture. If it fails to load we fall back to a flat brown.
 	DirtAsset = "rbxassetid://103492282492264",
 
-	-- EditableImage resolution (square). 512x512.
+	-- EditableImage resolution (square), in pixels. Lower = cheaper to build/clean,
+	-- at lower cleaning resolution (e.g. 256 is 4x less pixel work than 512).
 	ImageSize = 512,
 
 	-- Brush radius in studs (world space). Converted to pixels per surface.

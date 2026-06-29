@@ -7,6 +7,10 @@
 --   * Erasing mutates that buffer IN PLACE, then does a single WritePixelsBuffer.
 --   * There is ZERO per-frame heap allocation, so there is no GC churn to build
 --     up over time. The cost of cleaning is constant, not growing.
+--   * Every surface starts from the SAME dirt image, so the initial pixels and
+--     dirty-pixel count are computed ONCE (getTemplate) and cloned per surface.
+--     Construction therefore does no per-surface DrawImage / ReadPixelsBuffer and
+--     no per-surface counting loop -- just a buffer copy + one upload.
 --
 -- (nonstrict: the EditableImage / Content APIs aren't fully covered by the Luau
 --  type solver yet, and casting every call would just add noise.)
@@ -63,6 +67,10 @@ local function loadDirt(image: EditableImage): boolean
 	end))
 end
 
+-- The initial dirt pixels shared by every surface, built once on first use.
+local templatePixels: buffer? = nil
+local templateDirtyTotal = 0
+
 -- Fills `image` with the flat brown fallback at the configured transparency.
 local function fillBrown(image: EditableImage)
 	local c = Config.FallbackColor
@@ -80,6 +88,33 @@ local function fillBrown(image: EditableImage)
 		buffer.writeu8(px, o + 3, a)
 	end
 	image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, px)
+end
+
+-- Builds (once) and returns the dirt pixel buffer + its dirty-pixel count that
+-- every surface starts from. Yields on the first call while the dirt asset loads.
+local function getTemplate(): (buffer, number)
+	if templatePixels then
+		return templatePixels, templateDirtyTotal
+	end
+
+	-- Draw the initial dirt onto a throwaway image and read it back once.
+	local scratch = AssetService:CreateEditableImage({ Size = SIZE_VEC })
+	if not loadDirt(scratch) then
+		fillBrown(scratch)
+	end
+	local px = scratch:ReadPixelsBuffer(Vector2.zero, SIZE_VEC)
+	scratch:Destroy()
+
+	local dirty = 0
+	for i = 0, IMAGE_SIZE * IMAGE_SIZE - 1 do
+		if buffer.readu8(px, i * 4 + 3) ~= 0 then
+			dirty += 1
+		end
+	end
+
+	templatePixels = px
+	templateDirtyTotal = math.max(dirty, 1)
+	return px, templateDirtyTotal
 end
 
 local CleanableSurface = {}
@@ -102,22 +137,15 @@ export type CleanableSurface = typeof(setmetatable(
 ))
 
 function CleanableSurface.new(part: BasePart): CleanableSurface
+	local template, dirtyTotal = getTemplate()
+
+	-- Persistent working copy: clone the shared template (a fast buffer copy, not a
+	-- per-surface DrawImage + read-back), then upload it once.
+	local pixels = buffer.create(IMAGE_SIZE * IMAGE_SIZE * 4)
+	buffer.copy(pixels, 0, template, 0, buffer.len(template))
+
 	local image = AssetService:CreateEditableImage({ Size = SIZE_VEC })
-
-	if not loadDirt(image) then
-		fillBrown(image)
-	end
-
-	-- Persistent working copy of the pixels (read back exactly once).
-	local pixels = image:ReadPixelsBuffer(Vector2.zero, SIZE_VEC)
-
-	-- Count how much dirt there is so we know when the surface is "clean".
-	local dirtyTotal = 0
-	for i = 0, IMAGE_SIZE * IMAGE_SIZE - 1 do
-		if buffer.readu8(pixels, i * 4 + 3) ~= 0 then
-			dirtyTotal += 1
-		end
-	end
+	image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, pixels)
 
 	local decal = Instance.new("Decal")
 	decal.Face = Enum.NormalId.Left
@@ -133,7 +161,7 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		-- Left face spans local Z (depth, u) and local Y (height, v).
 		rx = Config.BrushWorldRadius / part.Size.Z * IMAGE_SIZE,
 		ry = Config.BrushWorldRadius / part.Size.Y * IMAGE_SIZE,
-		dirtyTotal = math.max(dirtyTotal, 1),
+		dirtyTotal = dirtyTotal,
 		cleanedCount = 0,
 		cleaned = false,
 		onCleaned = nil,

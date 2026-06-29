@@ -44,11 +44,12 @@ the **pressure washer cleaning loop**.
   is assigned one by `PlotService` and may only clean the walls within it.
 
 ### Plots & business spawning
-- Each plot is a Folder under Workspace holding two Folders: `Businesses` (empty at
+- Each plot is a Folder under Workspace holding two Folders — `Businesses` (empty at
   start) and `BusinessSpawns` (invisible parts named `<businessId>Spawn` marking
-  where each business sits).
+  where each business sits) — plus a `spawnPart` the owner spawns on.
 - `PlotService` (server) assigns each joining player a free plot, publishes its name
-  via the `Plot` player attribute, and frees it on leave.
+  via the `Plot` player attribute, teleports the player's character onto the plot's
+  `spawnPart` (on assignment and every respawn), and frees it on leave.
 - `BusinessSpawner` (server) then reads the player's owned businesses (entries in
   `BusinessList` with `Unlocked == true`) and, for each, clones the template Model
   from `ReplicatedStorage.Businesses.<businessId>` into the plot's `Businesses` folder
@@ -59,15 +60,17 @@ the **pressure washer cleaning loop**.
 
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
-- On construct: creates a 512×512 `EditableImage`, draws the dirt texture
-  (`CleaningConfig.DirtAsset`) into it (upscaling if the source is smaller), and falls
-  back to a **flat brown** (`FallbackColor` @ `FallbackTransparency`) if the asset fails
-  to load. Counts the initial opaque pixels as `dirtyTotal`.
+- **Shared dirt template:** the initial dirt image is identical for every surface, so
+  it's drawn + read back + pixel-counted **exactly once** (`getTemplate`, lazily on the
+  first surface; the dirt asset downloads on that call). Each surface then just
+  **`buffer.copy`s** that template into its own working buffer and does **one**
+  `WritePixelsBuffer` to seed its `EditableImage`. No per-surface `DrawImage`,
+  `ReadPixelsBuffer`, or counting loop.
 - **Performance contract (the whole reason past attempts went choppy):** the pixels
-  live in **one persistent `buffer`**, read back exactly once at construct. Erasing
-  mutates that buffer **in place** and does a **single `WritePixelsBuffer` per frame**.
-  There is **zero per-frame heap allocation**, so there's no GC churn that builds up
-  over time — cleaning cost is constant, not growing. Do **not** reintroduce per-frame
+  live in **one persistent `buffer`** per surface. Erasing mutates that buffer **in
+  place** and does a **single `WritePixelsBuffer` per frame**. There is **zero
+  per-frame heap allocation**, so there's no GC churn that builds up over time —
+  cleaning cost is constant, not growing. Do **not** reintroduce per-frame
   `ReadPixelsBuffer`/buffer allocation.
 - `clean(worldPos, fromWorldPos?)`: maps the world hit point to a pixel coord on the
   left face, erases a **circular stamp** (a world-space circle → ellipse in pixel
@@ -85,9 +88,13 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   surface to clean. Tracks the last hit so consecutive frames bridge into one stroke.
 
 ### `SurfaceManager` (client)
-- Builds/destroys `CleanableSurface` instances for tagged parts (handles parts that
-  stream/spawn in later via `GetInstanceAddedSignal`).
-- On build, checks saved data — if the part is **already cleaned** in a prior session,
+- Builds/destroys `CleanableSurface` instances for the walls in the local player's plot
+  (handles walls/businesses that spawn in later via `ChildAdded`).
+- **Budgeted building:** walls are queued (after cheap resolve/already-cleaned checks)
+  and a long-lived drainer builds them under a per-frame time budget (`FRAME_BUDGET`,
+  ~2ms), so a business spawning a burst of walls never stalls a frame. `removeSurface`
+  cancels a still-queued wall.
+- On build, checks saved data — if the wall is **already cleaned** in a prior session,
   it **skips the overlay entirely** (part renders bare, no EditableImage created).
 - Exposes `getSurface(part)` for the controller, and fires the `CleanSurface` remote on
   completion.
@@ -198,8 +205,12 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   `CleanedParts: {[string]: boolean}?` (per-surface completion for the pressure washer),
   `CleanedStains: {[string]: boolean}?` (per-stain completion for the broom).
 - `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
-  `Unlocked`, `Cost`, `UniqueID`. (The pressure-washer entry still carries vestigial
-  ammo fields from before ammo was removed — unused.)
+  `Unlocked`, `Cost`, `UniqueID`, optional `Range?` (max cleaning distance, studs) and
+  optional `Power?`. **`Power`** is a tool tier that will gate **which floor/surface
+  types a tool can clean** (a tool cleans a surface only if its `Power` ≥ the surface's
+  required power) — defined in `ToolConfig` now, not yet enforced in cleaning logic.
+  (The pressure-washer entry still carries vestigial ammo fields from before ammo was
+  removed — unused.)
 
 **Why string-id maps, not Instance refs:** saved data is JSON-only (no Instances), and
 an Instance is a new object every session anyway. A stable `SurfaceId` string survives

@@ -6,8 +6,14 @@
 -- It builds one CleanableSurface per wall (and any added later), tears them down
 -- when removed, and reports completion to the server. The controller looks
 -- surfaces up here via getSurface.
+--
+-- Building an overlay is main-thread work (EditableImage create + upload), so
+-- when a business spawns its walls are not built all at once: they're queued and
+-- drained under a small per-frame time budget, spreading the cost across frames
+-- so a burst of walls never stalls a frame.
 
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -20,9 +26,14 @@ local CleanSurface = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Cle
 
 local localPlayer = Players.LocalPlayer
 
+-- Seconds of overlay-building allowed per frame before yielding to the next one.
+local FRAME_BUDGET = 0.002
+
 local SurfaceManager = {}
 
 local surfaces: { [BasePart]: CleanableSurface.CleanableSurface } = {}
+local buildQueue: { BasePart } = {}
+local queued: { [BasePart]: boolean } = {}
 
 -- True if this wall was already cleaned in a previous session (per saved data).
 local function isAlreadyCleaned(identity: SurfaceResolver.SurfaceIdentity): boolean
@@ -30,33 +41,65 @@ local function isAlreadyCleaned(identity: SurfaceResolver.SurfaceIdentity): bool
 	return cleanedParts ~= nil and cleanedParts[identity.surfaceId] == true
 end
 
+-- Actually create the overlay for a wall (the expensive, main-thread part).
+local function buildSurface(part: BasePart)
+	if surfaces[part] then
+		return
+	end
+	-- Re-resolve at build time: the part may have moved/left the queue meanwhile.
+	local identity = SurfaceResolver.resolve(part)
+	if not identity or isAlreadyCleaned(identity) then
+		return
+	end
+	local surface = CleanableSurface.new(part)
+	surface.onCleaned = function()
+		CleanSurface:FireServer(part)
+	end
+	surfaces[part] = surface
+end
+
+-- Queue a wall for building, after cheap checks so we never queue non-walls.
 local function addSurface(inst: Instance)
-	if not inst:IsA("BasePart") or surfaces[inst] then
+	if not inst:IsA("BasePart") or surfaces[inst] or queued[inst] then
 		return
 	end
 	local identity = SurfaceResolver.resolve(inst)
-	if not identity then
+	if not identity or isAlreadyCleaned(identity) then
 		return
 	end
-	-- Already cleaned in saved data: leave the wall bare, never build the overlay.
-	if isAlreadyCleaned(identity) then
-		return
-	end
-	local surface = CleanableSurface.new(inst)
-	surface.onCleaned = function()
-		CleanSurface:FireServer(inst)
-	end
-	surfaces[inst] = surface
+	queued[inst] = true
+	table.insert(buildQueue, inst)
 end
 
 local function removeSurface(inst: Instance)
 	if not inst:IsA("BasePart") then
 		return
 	end
+	queued[inst] = nil -- cancel a pending build if it hasn't run yet
 	local surface = surfaces[inst]
 	if surface then
 		surface:destroy()
 		surfaces[inst] = nil
+	end
+end
+
+-- Long-lived drainer: each frame, build queued walls until the budget is spent.
+local function processQueue()
+	while true do
+		if #buildQueue == 0 then
+			RunService.Heartbeat:Wait()
+		else
+			local startClock = os.clock()
+			repeat
+				local part = table.remove(buildQueue)
+				-- queued[part] is cleared by removeSurface if the wall went away.
+				if part and queued[part] then
+					queued[part] = nil
+					buildSurface(part)
+				end
+			until #buildQueue == 0 or (os.clock() - startClock) >= FRAME_BUDGET
+			RunService.Heartbeat:Wait()
+		end
 	end
 end
 
@@ -95,6 +138,8 @@ local function getAssignedPlot(): Instance
 end
 
 function SurfaceManager.init()
+	task.spawn(processQueue)
+
 	local plot = getAssignedPlot()
 	local businesses = plot:WaitForChild(Config.BusinessesFolderName)
 	for _, businessFolder in businesses:GetChildren() do
