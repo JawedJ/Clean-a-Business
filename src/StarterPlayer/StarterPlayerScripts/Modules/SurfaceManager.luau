@@ -20,7 +20,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local SurfaceResolver = require(ReplicatedStorage.SharedModules.SurfaceResolver)
 local CleanableSurface = require(script.Parent.CleanableSurface)
+local VfxManager = require(ReplicatedStorage.SharedModules.VfxManager)
+local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
+
+-- Sound played when the local player finishes cleaning a wall.
+local COMPLETION_SOUND = "PressureCompletionAudio"
 
 local CleanSurface = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanSurface") :: RemoteEvent
 
@@ -54,6 +59,8 @@ local function buildSurface(part: BasePart)
 	local surface = CleanableSurface.new(part)
 	surface.onCleaned = function()
 		CleanSurface:FireServer(part)
+		VfxManager.cleanPop(part)
+		SoundManager.playOneShot(COMPLETION_SOUND)
 	end
 	surfaces[part] = surface
 end
