@@ -5,16 +5,35 @@
 -- (tool giving + surface spawning) so the tag/id strings never drift apart.
 
 local CleaningConfig = {
-	-- CollectionService tag every cleanable BasePart carries.
-	SurfaceTag = "CleanableSurface",
-
 	-- Attribute value identifying the pressure washer Tool.
 	ToolId = "pressureWasher",
 
-	-- Attributes each cleanable part carries, used to key its saved cleaned state
+	-- Cleanable walls live in the workspace under each plot:
+	--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>
+	-- The business folder's name is the BusinessId and the part's name is the
+	-- SurfaceId used to key saved cleaned state
 	-- (BusinessList[BusinessId].CleanedParts[SurfaceId] = true).
-	BusinessIdAttribute = "BusinessId",
-	SurfaceIdAttribute = "SurfaceId",
+	BusinessesFolderName = "Businesses",
+	CleanablesFolderName = "Cleanables",
+	WallsFolderName = "CleanableWalls",
+
+	-- Plots are direct children of Workspace named Plot1..Plot(PlotCount). Each
+	-- joining player is assigned one and may only clean walls within it. The
+	-- assigned plot's name is published to the owner via this player attribute.
+	PlotCount = 8,
+	PlotAttribute = "Plot",
+
+	-- Business templates (Models named after their businessId) live in
+	-- ReplicatedStorage.<BusinessesFolderName>. On assignment, each owned business
+	-- is cloned into the plot's Businesses folder and pivoted onto its spawn part,
+	-- which lives in the plot's SpawnsFolderName folder and is named
+	-- <businessId> .. SpawnSuffix (e.g. "mcDonaldsSpawn").
+	SpawnsFolderName = "BusinessSpawns",
+	SpawnSuffix = "Spawn",
+
+	-- Reference part inside each business template. The business is translated so
+	-- this part lands exactly on its spawn point (orientation kept as authored).
+	BusinessBasePartName = "BasePart",
 
 	-- The dirt overlay texture. If it fails to load we fall back to a flat brown.
 	DirtAsset = "rbxassetid://103492282492264",
@@ -36,7 +55,7 @@ local CleaningConfig = {
 	FallbackTransparency = 0.2,
 
 	-- Flip these if the cleaned spot appears mirrored from where you aim.
-	FlipU = true,
+	FlipU = false,
 	FlipV = false,
 }
 

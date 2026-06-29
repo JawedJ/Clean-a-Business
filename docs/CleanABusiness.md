@@ -28,16 +28,34 @@ the **pressure washer cleaning loop**.
 ## Cleaning system (implemented)
 
 ### Surfaces
-- A cleanable surface is any `BasePart` with the `CollectionService` tag
-  **`CleanableSurface`** plus two attributes:
-  - `BusinessId` — which business it belongs to (e.g. `"mcDonalds"`).
-  - `SurfaceId` — stable per-surface id, unique within the business (e.g. `"demo_1"`).
+- A cleanable surface is any `BasePart` placed in a business's `CleanableWalls`
+  folder, at this exact hierarchy:
+  `Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>`.
+  - `businessId` is the **business folder's name** (e.g. `"mcDonalds"`).
+  - `surfaceId` is the **wall part's name** (e.g. `"CleanableWall1"`), unique within
+    the business.
+  - `SurfaceResolver` (SharedModules) walks this hierarchy to derive the identity;
+    no tags or attributes are needed. Anything outside this exact structure is ignored.
 - The surface's part shows its normal "clean" look. A **dirt overlay** is layered on
-  the part's **FRONT face only** as a `Decal` whose `TextureContent` references a
+  the part's **LEFT face only** as a `Decal` whose `TextureContent` references a
   client-built `EditableImage`. Cleaning erases overlay pixels to reveal the part.
 - Surfaces are authored **in the Studio place**, not in code (Workspace isn't
-  Rojo-mounted). Current demo content: `Workspace.CleanableWalls` holds 3 walls tagged
-  and attributed to the `mcDonalds` business.
+  Rojo-mounted). The workspace holds 8 plots (`Plot1`..`Plot8`); each joining player
+  is assigned one by `PlotService` and may only clean the walls within it.
+
+### Plots & business spawning
+- Each plot is a Folder under Workspace holding two Folders: `Businesses` (empty at
+  start) and `BusinessSpawns` (invisible parts named `<businessId>Spawn` marking
+  where each business sits).
+- `PlotService` (server) assigns each joining player a free plot, publishes its name
+  via the `Plot` player attribute, and frees it on leave.
+- `BusinessSpawner` (server) then reads the player's owned businesses (entries in
+  `BusinessList` with `Unlocked == true`) and, for each, clones the template Model
+  from `ReplicatedStorage.Businesses.<businessId>` into the plot's `Businesses` folder
+  and translates it so the template's `BasePart` lands on the matching
+  `<businessId>Spawn` part (orientation kept as authored).
+- The client's `SurfaceManager` watches its plot's `Businesses` folder, so walls in a
+  spawned business become cleanable as soon as the Model replicates in.
 
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
@@ -52,7 +70,7 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   over time — cleaning cost is constant, not growing. Do **not** reintroduce per-frame
   `ReadPixelsBuffer`/buffer allocation.
 - `clean(worldPos, fromWorldPos?)`: maps the world hit point to a pixel coord on the
-  front face, erases a **circular stamp** (a world-space circle → ellipse in pixel
+  left face, erases a **circular stamp** (a world-space circle → ellipse in pixel
   space on non-square parts), and **interpolates stamps along the segment** from the
   previous point so fast strokes leave no gaps.
 - **Completion:** when erased fraction ≥ `CompletionThreshold` (0.95), the surface
@@ -63,7 +81,7 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   (hold to fire) / `Deactivated` / `Unequipped` events. **No ammo** — firing is
   unrestricted while held.
 - Each `Heartbeat` while firing: raycasts from the mouse (`ViewportPointToRay`), and if
-  it hits a tagged part **on its front face** (`Normal·LookVector > 0.99`), tells that
+  it hits a cleanable part **on its left face** (`Normal·(-RightVector) > 0.99`), tells that
   surface to clean. Tracks the last hit so consecutive frames bridge into one stroke.
 
 ### `SurfaceManager` (client)
@@ -77,9 +95,9 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
 ### Persistence (implemented)
 - Saved per player at `BusinessList[BusinessId].CleanedParts[SurfaceId] = true`.
 - Flow: client completes a surface → fires `CleanSurface` remote → server validates
-  (part is tagged, has `BusinessId`/`SurfaceId`, business exists in the player's data) →
-  `DataService:set(...)`. On rejoin, the client reads `CleanedParts` and skips overlays
-  for already-cleaned surfaces.
+  (`SurfaceResolver` resolves the wall, the wall is on the player's `PlotService`-assigned
+  plot, business exists in the player's data) → `DataService:set(...)`. On rejoin, the
+  client reads `CleanedParts` and skips overlays for already-cleaned surfaces.
 - **Per-player only.** Each player has their own cleaned state; players do **not** see
   each other's in-progress or completed cleaning yet (see Planned).
 - ⚠️ **Known exploit gap:** completion is currently client-asserted. The server only
@@ -90,9 +108,10 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
 
 ### `CleaningConfig` (shared)
 Single source of truth for cleaning tunables, consumed by client and server:
-`SurfaceTag`, `ToolId`, `BusinessIdAttribute`/`SurfaceIdAttribute`, `DirtAsset`,
-`ImageSize`, `BrushWorldRadius`, `CompletionThreshold`, `Range`, brown fallback,
-and `FlipU`/`FlipV` (flip if the cleaned spot appears mirrored from where you aim).
+`ToolId`, the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`,
+`PlotCount`/`PlotAttribute`, `DirtAsset`, `ImageSize`, `BrushWorldRadius`,
+`CompletionThreshold`, `Range`, brown fallback, and `FlipU`/`FlipV` (flip if the
+cleaned spot appears mirrored from where you aim).
 
 ### Tool
 - The **Pressure Washer** `Tool` lives in **`StarterPack`** (authored in Studio, so it

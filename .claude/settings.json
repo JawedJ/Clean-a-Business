@@ -31,7 +31,8 @@
       "mcp__robloxstudio__get_playtest_output",
       "mcp__robloxstudio__start_playtest",
       "mcp__robloxstudio__stop_playtest",
-      "mcp__robloxstudio__execute_luau"
+      "mcp__robloxstudio__execute_luau",
+      "mcp__robloxstudio__get_file_tree"
     ]
   }
 }

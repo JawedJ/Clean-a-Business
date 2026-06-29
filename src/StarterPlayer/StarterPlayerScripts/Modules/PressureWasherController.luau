@@ -7,7 +7,6 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local CollectionService = game:GetService("CollectionService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(game.ReplicatedStorage.SharedModules.CleaningConfig)
@@ -15,7 +14,6 @@ local CleanableSurface = require(script.Parent.CleanableSurface)
 
 type Surface = CleanableSurface.CleanableSurface
 
-local SURFACE_TAG = Config.SurfaceTag
 local TOOL_ID = Config.ToolId
 local RANGE = Config.Range
 
@@ -103,19 +101,20 @@ local function onHeartbeat()
 	end
 
 	local part = result.Instance
-	if not part or not part:IsA("BasePart") or not CollectionService:HasTag(part, SURFACE_TAG) then
+	if not part or not part:IsA("BasePart") then
 		resetStroke()
 		return
 	end
 
-	-- Front face only: its world normal is the part's LookVector.
-	if result.Normal:Dot(part.CFrame.LookVector) < 0.99 then
-		resetStroke()
-		return
-	end
-
+	-- Only walls on the local player's plot have a surface registered here.
 	local surface = gs(part)
 	if not surface or surface.cleaned then
+		resetStroke()
+		return
+	end
+
+	-- Left face only: its world normal is the part's negated RightVector.
+	if result.Normal:Dot(-part.CFrame.RightVector) < 0.99 then
 		resetStroke()
 		return
 	end

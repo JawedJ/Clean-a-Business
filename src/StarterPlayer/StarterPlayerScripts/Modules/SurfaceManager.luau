@@ -1,41 +1,45 @@
 --!strict
 
--- Owns the lifetime of every CleanableSurface on the client: builds one for each
--- tagged part (and any added later), tears them down when untagged, and reports
--- completion to the server. The controller looks surfaces up here via getSurface.
+-- Owns the lifetime of every CleanableSurface on the client. Cleanable walls are
+-- the BaseParts under the local player's assigned plot:
+--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls
+-- It builds one CleanableSurface per wall (and any added later), tears them down
+-- when removed, and reports completion to the server. The controller looks
+-- surfaces up here via getSurface.
 
-local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local SurfaceResolver = require(ReplicatedStorage.SharedModules.SurfaceResolver)
 local CleanableSurface = require(script.Parent.CleanableSurface)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 
 local CleanSurface = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanSurface") :: RemoteEvent
 
-local SURFACE_TAG = Config.SurfaceTag
+local localPlayer = Players.LocalPlayer
 
 local SurfaceManager = {}
 
 local surfaces: { [BasePart]: CleanableSurface.CleanableSurface } = {}
 
--- True if this part was already cleaned in a previous session (per saved data).
-local function isAlreadyCleaned(part: BasePart): boolean
-	local businessId = part:GetAttribute(Config.BusinessIdAttribute)
-	local surfaceId = part:GetAttribute(Config.SurfaceIdAttribute)
-	if type(businessId) ~= "string" or type(surfaceId) ~= "string" then
-		return false
-	end
-	local cleanedParts = DataService:get({ "BusinessList", businessId, "CleanedParts" })
-	return cleanedParts ~= nil and cleanedParts[surfaceId] == true
+-- True if this wall was already cleaned in a previous session (per saved data).
+local function isAlreadyCleaned(identity: SurfaceResolver.SurfaceIdentity): boolean
+	local cleanedParts = DataService:get({ "BusinessList", identity.businessId, "CleanedParts" })
+	return cleanedParts ~= nil and cleanedParts[identity.surfaceId] == true
 end
 
 local function addSurface(inst: Instance)
 	if not inst:IsA("BasePart") or surfaces[inst] then
 		return
 	end
-	-- Already cleaned in saved data: leave the part bare, never build the overlay.
-	if isAlreadyCleaned(inst) then
+	local identity = SurfaceResolver.resolve(inst)
+	if not identity then
+		return
+	end
+	-- Already cleaned in saved data: leave the wall bare, never build the overlay.
+	if isAlreadyCleaned(identity) then
 		return
 	end
 	local surface = CleanableSurface.new(inst)
@@ -60,12 +64,44 @@ function SurfaceManager.getSurface(part: BasePart): CleanableSurface.CleanableSu
 	return surfaces[part]
 end
 
-function SurfaceManager.init()
-	for _, inst in CollectionService:GetTagged(SURFACE_TAG) do
+-- Build/track every wall inside one CleanableWalls folder.
+local function watchWalls(wallsFolder: Instance)
+	for _, inst in wallsFolder:GetChildren() do
 		addSurface(inst)
 	end
-	CollectionService:GetInstanceAddedSignal(SURFACE_TAG):Connect(addSurface)
-	CollectionService:GetInstanceRemovedSignal(SURFACE_TAG):Connect(removeSurface)
+	wallsFolder.ChildAdded:Connect(addSurface)
+	wallsFolder.ChildRemoved:Connect(removeSurface)
+end
+
+-- Find the CleanableWalls folder for one business and start watching it. Uses
+-- WaitForChild since a business spawned at runtime replicates as a subtree and
+-- ChildAdded can fire before its descendants arrive.
+local function watchBusiness(businessFolder: Instance)
+	local cleanables = businessFolder:WaitForChild(Config.CleanablesFolderName, 10)
+	local walls = cleanables and cleanables:WaitForChild(Config.WallsFolderName, 10)
+	if walls then
+		watchWalls(walls)
+	end
+end
+
+-- Block until the server has assigned this player a plot, then return it.
+local function getAssignedPlot(): Instance
+	local plotName = localPlayer:GetAttribute(Config.PlotAttribute)
+	while type(plotName) ~= "string" do
+		localPlayer:GetAttributeChangedSignal(Config.PlotAttribute):Wait()
+		plotName = localPlayer:GetAttribute(Config.PlotAttribute)
+	end
+	return Workspace:WaitForChild(plotName)
+end
+
+function SurfaceManager.init()
+	local plot = getAssignedPlot()
+	local businesses = plot:WaitForChild(Config.BusinessesFolderName)
+	for _, businessFolder in businesses:GetChildren() do
+		watchBusiness(businessFolder)
+	end
+	-- Businesses unlocked/added to the plot later become cleanable too.
+	businesses.ChildAdded:Connect(watchBusiness)
 end
 
 return SurfaceManager

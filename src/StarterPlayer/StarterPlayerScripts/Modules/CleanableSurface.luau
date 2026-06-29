@@ -1,6 +1,6 @@
 --!nonstrict
 
--- One dirt overlay for one cleanable BasePart's FRONT face.
+-- One dirt overlay for one cleanable BasePart's LEFT face.
 --
 -- Performance contract (this is the whole reason past attempts went choppy):
 --   * The pixel data lives in ONE persistent buffer, allocated once at construct.
@@ -120,7 +120,7 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 	end
 
 	local decal = Instance.new("Decal")
-	decal.Face = Enum.NormalId.Front
+	decal.Face = Enum.NormalId.Left
 	decal.TextureContent = Content.fromObject(image)
 	decal.Parent = part
 
@@ -130,7 +130,8 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		decal = decal,
 		pixels = pixels,
 		-- Circle in world space -> ellipse in pixel space on non-square parts.
-		rx = Config.BrushWorldRadius / part.Size.X * IMAGE_SIZE,
+		-- Left face spans local Z (depth, u) and local Y (height, v).
+		rx = Config.BrushWorldRadius / part.Size.Z * IMAGE_SIZE,
 		ry = Config.BrushWorldRadius / part.Size.Y * IMAGE_SIZE,
 		dirtyTotal = math.max(dirtyTotal, 1),
 		cleanedCount = 0,
@@ -139,10 +140,10 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 	}, CleanableSurface)
 end
 
--- World point -> pixel coordinates on the front face.
+-- World point -> pixel coordinates on the left face (spans local Z and Y).
 local function worldToPixel(self: CleanableSurface, worldPos: Vector3): (number, number)
 	local lp = self.part.CFrame:PointToObjectSpace(worldPos)
-	local u = lp.X / self.part.Size.X + 0.5
+	local u = lp.Z / self.part.Size.Z + 0.5
 	local v = 0.5 - lp.Y / self.part.Size.Y
 	if Config.FlipU then
 		u = 1 - u
