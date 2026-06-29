@@ -7,7 +7,8 @@
 --
 -- The client sends a single "I clicked this stain" request; it does NOT decide
 -- when the stain is cleaned. The server validates the request, then runs the
--- UseTime timer itself (UseTime read from the broom's Item in ToolConfig). When
+-- UseTime timer itself (UseTime read from the player's broom in their DataService
+-- Inventory, so upgrades apply; the ToolConfig default is only a fallback). When
 -- its own timer elapses it re-validates and deletes the model, saving it under
 -- BusinessList[businessId].CleanedStains[surfaceId] via DataService. The client's
 -- progress bar is purely cosmetic feedback.
@@ -20,14 +21,18 @@ local Players = game:GetService("Players")
 
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
-local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local PlotService = require(script.Parent.PlotService)
 
 local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanDecal") :: RemoteEvent
 
-local broomItem = ToolConfig[Config.BroomToolId]
-local USE_TIME = (broomItem and broomItem.UseTime) or Config.BroomUseTime
+local TOOL_ID = ToolConfig.startingBroom.UniqueID
+
+-- This player's current broom UseTime (seconds), read fresh so tool upgrades take
+-- effect immediately, falling back to the static ToolConfig default.
+local function getUseTime(player: Player): number
+	return DataService:get(player, { "Inventory", TOOL_ID, "UseTime" }) or ToolConfig[TOOL_ID].UseTime
+end
 
 local DecalCleaningService = {}
 
@@ -43,7 +48,7 @@ local function hasBroomEquipped(player: Player): boolean
 		return false
 	end
 	for _, child in character:GetChildren() do
-		if child:IsA("Tool") and child:GetAttribute("ToolId") == Config.BroomToolId then
+		if child:IsA("Tool") and child:GetAttribute("ToolId") == TOOL_ID then
 			return true
 		end
 	end
@@ -90,7 +95,7 @@ function DecalCleaningService.init()
 		activeClean[player] = true
 
 		-- The SERVER waits out the UseTime; the client cannot shortcut it.
-		task.delay(USE_TIME, function()
+		task.delay(getUseTime(player), function()
 			activeClean[player] = nil
 
 			-- Re-validate at completion: the stain (or the player's claim to it) may

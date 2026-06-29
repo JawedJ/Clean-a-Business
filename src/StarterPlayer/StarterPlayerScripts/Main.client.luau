@@ -17,5 +17,3 @@ PressureWasherController.init(SurfaceManager.getSurface)
 BroomController.init()
 Crosshair.init()
 
-
-print(DataService:get())

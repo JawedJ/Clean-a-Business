@@ -4,14 +4,11 @@
 -- Required by both the client (surface overlay + controller) and the server
 -- (tool giving + surface spawning) so the tag/id strings never drift apart.
 
+-- Tool identity (the "ToolId" attribute on each Tool) and per-tool stats
+-- (Range, UseTime, Power) are NOT here -- they live in ToolConfig as defaults and,
+-- at runtime, in each player's DataService Inventory so they can change with
+-- upgrades. This module holds only mechanic-wide constants.
 local CleaningConfig = {
-	-- Attribute value identifying the pressure washer Tool.
-	ToolId = "pressureWasher",
-
-	-- Attribute value identifying the broom Tool (StarterPack). The broom cleans
-	-- whole stain Models rather than painting a surface.
-	BroomToolId = "startingBroom",
-
 	-- Cleanable walls live in the workspace under each plot:
 	--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>
 	-- The business folder's name is the BusinessId and the part's name is the
@@ -29,13 +26,6 @@ local CleaningConfig = {
 	DecalsFolderName = "CleanableDecals",
 	HitboxName = "Hitbox",
 	SurfaceIdAttribute = "surfaceId",
-
-	-- Fallback broom UseTime (seconds to remove a stain) if the broom's Item in
-	-- ToolConfig has no UseTime set.
-	BroomUseTime = 2,
-
-	-- Max distance (studs) a broom click can reach a stain's Hitbox.
-	BroomRange = 30,
 
 	-- Plots are direct children of Workspace named Plot1..Plot(PlotCount). Each
 	-- joining player is assigned one and may only clean walls within it. The
@@ -66,14 +56,19 @@ local CleaningConfig = {
 	-- at lower cleaning resolution (e.g. 256 is 4x less pixel work than 512).
 	ImageSize = 512,
 
-	-- Brush radius in studs (world space). Converted to pixels per surface.
+	-- Fallback brush radius in studs (world space), used only if a cleaning tool's
+	-- per-player Radius isn't available. The live value comes from the player's
+	-- DataService Inventory (ToolConfig holds the default), like Range and UseTime.
 	BrushWorldRadius = 1.0,
 
-	-- Fraction of the dirt that must be erased before a surface counts as clean.
-	CompletionThreshold = 0.98,
+	-- Max world distance (studs) between two consecutive cleaning hits for the
+	-- stroke to bridge the gap. Keeps fast strokes hole-free (including across the
+	-- seam between two adjacent parts) without smearing an unrelated wall when the
+	-- aim genuinely jumps far.
+	MaxBridgeWorldDistance = 16.0,
 
-	-- Max cleaning distance (studs).
-	Range = 70,
+	-- Fraction of the dirt that must be erased before a surface counts as clean.
+	CompletionThreshold = 0.99,
 
 	-- Brown fallback, used ONLY if DirtAsset fails to load.
 	FallbackColor = Color3.fromRGB(102, 61, 24),

@@ -10,6 +10,7 @@ export type Item = {
 	Range: number?, -- max cleaning distance (studs)
 	Power: number?,
 	UseTime: number?,
+	Radius: number?,
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -57,24 +58,25 @@ local DataTemplate = {
 
 	Inventory = {
 		["startingBroom"] = {
-			Name = "Broom",
-			Equipped = false,
-			Unlocked = true,
-			Cost = 0,
-			UniqueID = "startingBroom",
-			UseTime = 2,
+		Name = "Broom",
+		Equipped = false,
+		Unlocked = true,
+		Cost = 0,
+		UniqueID = "startingBroom",
+		Power = 1,
+		UseTime = 3,
+		Range = 70,
 		},
 
 		["pressureWasher"] = {
-			Name = "Pressure Washer",
-			Equipped = false,
-			Unlocked = true,
-			Cost = 0,
-			UniqueID = "pressureWasher",
-			Range = 60,
-			MaxAmmo = 100,
-			AmmoPerStep = 0.6,
-			RegenPerSec = 30,
+		Name = "Pressure Washer",
+		Equipped = false,
+		Unlocked = true,
+		Cost = 0,
+		UniqueID = "pressureWasher",
+		Range = 70,
+		Power = 1,
+		Radius = 1.0,
 		},
 
 	} :: { [string]: Item },

@@ -126,8 +126,6 @@ export type CleanableSurface = typeof(setmetatable(
 		image: EditableImage,
 		decal: Decal,
 		pixels: buffer,
-		rx: number,
-		ry: number,
 		dirtyTotal: number,
 		cleanedCount: number,
 		cleaned: boolean,
@@ -157,10 +155,6 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		image = image,
 		decal = decal,
 		pixels = pixels,
-		-- Circle in world space -> ellipse in pixel space on non-square parts.
-		-- Left face spans local Z (depth, u) and local Y (height, v).
-		rx = Config.BrushWorldRadius / part.Size.Z * IMAGE_SIZE,
-		ry = Config.BrushWorldRadius / part.Size.Y * IMAGE_SIZE,
 		dirtyTotal = dirtyTotal,
 		cleanedCount = 0,
 		cleaned = false,
@@ -182,9 +176,9 @@ local function worldToPixel(self: CleanableSurface, worldPos: Vector3): (number,
 	return u * IMAGE_SIZE, v * IMAGE_SIZE
 end
 
--- Erases one circular stamp centered at pixel (cxf, cyf), in place.
-local function stamp(self: CleanableSurface, cxf: number, cyf: number)
-	local rx, ry = self.rx, self.ry
+-- Erases one elliptical stamp centered at pixel (cxf, cyf) with pixel radii
+-- (rx, ry), in place.
+local function stamp(self: CleanableSurface, cxf: number, cyf: number, rx: number, ry: number)
 	local pixels = self.pixels
 
 	local x0 = math.max(0, math.floor(cxf - rx))
@@ -211,26 +205,39 @@ local function stamp(self: CleanableSurface, cxf: number, cyf: number)
 	self.cleanedCount += count
 end
 
--- Cleans at `worldPos`. If `fromWorldPos` is given, fills the gap between the
--- previous point and this one so fast strokes leave no holes.
-function CleanableSurface.clean(self: CleanableSurface, worldPos: Vector3, fromWorldPos: Vector3?)
+-- Cleans at `worldPos` with brush radius `worldRadius` (studs). If `fromWorldPos`
+-- is given, fills the gap between the previous point and this one so fast strokes
+-- leave no holes.
+function CleanableSurface.clean(
+	self: CleanableSurface,
+	worldPos: Vector3,
+	fromWorldPos: Vector3?,
+	worldRadius: number?
+)
 	if self.cleaned then
 		return
 	end
+
+	-- Circle in world space -> ellipse in pixel space on non-square parts.
+	-- Left face spans local Z (depth, u) and local Y (height, v). Computed per
+	-- call so the radius can change with tool upgrades.
+	local r = worldRadius or Config.BrushWorldRadius
+	local rx = r / self.part.Size.Z * IMAGE_SIZE
+	local ry = r / self.part.Size.Y * IMAGE_SIZE
 
 	local cx, cy = worldToPixel(self, worldPos)
 	if fromWorldPos then
 		local fx, fy = worldToPixel(self, fromWorldPos)
 		local dx, dy = cx - fx, cy - fy
 		local dist = math.sqrt(dx * dx + dy * dy)
-		local minR = math.min(self.rx, self.ry)
+		local minR = math.min(rx, ry)
 		local steps = math.clamp(math.ceil(dist / (minR * 0.5)), 1, 256)
 		for i = 1, steps do
 			local t = i / steps
-			stamp(self, fx + dx * t, fy + dy * t)
+			stamp(self, fx + dx * t, fy + dy * t, rx, ry)
 		end
 	else
-		stamp(self, cx, cy)
+		stamp(self, cx, cy, rx, ry)
 	end
 
 	-- Single full upload. Constant cost, zero allocation.

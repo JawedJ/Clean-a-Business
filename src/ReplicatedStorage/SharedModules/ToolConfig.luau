@@ -14,8 +14,9 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Unlocked = true,
 		Cost = 0,
 		UniqueID = "startingBroom",
-		Power = 1,
-		UseTime = 3, -- seconds of cleaning before a stain is removed
+		Power = 1.0,
+		UseTime = 3.0, -- seconds of cleaning before a stain is removed
+		Range = 70,
 	},
 
 	pressureWasher = {
@@ -24,9 +25,9 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Unlocked = true,
 		Cost = 0,
 		UniqueID = "pressureWasher",
-		Range = 60,
-		Power = 1
-
+		Range = 70,
+		Power = 1.0,
+		Radius = 1.0,
 	},
 }
 

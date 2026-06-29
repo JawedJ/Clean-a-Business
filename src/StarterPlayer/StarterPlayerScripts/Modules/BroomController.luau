@@ -15,17 +15,24 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
+local DataService = require(ReplicatedStorage.Packages.DataService).client
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
 
 local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanDecal") :: RemoteEvent
 
-local TOOL_ID = Config.BroomToolId
-local RANGE = Config.BroomRange
+local TOOL_ID = ToolConfig.startingBroom.UniqueID
 
--- Duration of the cosmetic progress bar. Read from the same source the server uses
--- (the broom Item's UseTime) so the bar mirrors the server's authoritative timer.
-local broomItem = ToolConfig[TOOL_ID]
-local USE_TIME = (broomItem and broomItem.UseTime) or Config.BroomUseTime
+-- Live broom stats for this player, read fresh so tool upgrades take effect
+-- immediately, falling back to the static ToolConfig default.
+local function getRange(): number
+	return DataService:get({ "Inventory", TOOL_ID, "Range" }) or ToolConfig[TOOL_ID].Range
+end
+
+-- Duration of the cosmetic progress bar. Read from the same per-player source the
+-- server uses (the broom Item's UseTime) so the bar mirrors the server's timer.
+local function getUseTime(): number
+	return DataService:get({ "Inventory", TOOL_ID, "UseTime" }) or ToolConfig[TOOL_ID].UseTime
+end
 
 local localPlayer = Players.LocalPlayer
 
@@ -48,7 +55,7 @@ local function aim(): RaycastResult?
 	local mouse = UserInputService:GetMouseLocation()
 	local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
 	rayParams.FilterDescendantsInstances = { localPlayer.Character :: Instance }
-	return Workspace:Raycast(ray.Origin, ray.Direction * RANGE, rayParams)
+	return Workspace:Raycast(ray.Origin, ray.Direction * getRange(), rayParams)
 end
 
 -- Floating progress bar above a stain. Returns the gui and its fill frame.
@@ -67,11 +74,19 @@ local function makeProgressBar(adornee: BasePart): (BillboardGui, Frame)
 	bg.BorderSizePixel = 0
 	bg.Parent = gui
 
+	local bgCorner = Instance.new("UICorner")
+	bgCorner.CornerRadius = UDim.new(0, 6)
+	bgCorner.Parent = bg
+
 	local fill = Instance.new("Frame")
 	fill.Size = UDim2.fromScale(0, 1)
 	fill.BackgroundColor3 = Color3.fromRGB(90, 200, 90)
 	fill.BorderSizePixel = 0
 	fill.Parent = bg
+
+	local fillCorner = Instance.new("UICorner")
+	fillCorner.CornerRadius = UDim.new(0, 6)
+	fillCorner.Parent = fill
 
 	gui.Parent = adornee
 	return gui, fill
@@ -90,9 +105,12 @@ local function startClean(model: Model, hitbox: BasePart)
 
 	local gui, fill = makeProgressBar(hitbox)
 
+	-- Snapshot the timer for this one clean so the bar's full duration is stable.
+	local useTime = getUseTime()
+
 	task.spawn(function()
 		local elapsed = 0
-		while elapsed < USE_TIME do
+		while elapsed < useTime do
 			local dt = RunService.Heartbeat:Wait()
 			-- The server deletes the model on completion; if it's already gone (or the
 			-- plot reset), stop early.
@@ -100,7 +118,7 @@ local function startClean(model: Model, hitbox: BasePart)
 				break
 			end
 			elapsed += dt
-			fill.Size = UDim2.fromScale(math.clamp(elapsed / USE_TIME, 0, 1), 1)
+			fill.Size = UDim2.fromScale(math.clamp(elapsed / useTime, 0, 1), 1)
 		end
 
 		gui:Destroy()
