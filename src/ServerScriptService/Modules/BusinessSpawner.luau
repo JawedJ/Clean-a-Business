@@ -17,9 +17,29 @@ local BusinessTemplates = ReplicatedStorage:WaitForChild(Config.BusinessesFolder
 
 local BusinessSpawner = {}
 
+-- Remove stain models the player has already cleaned from a freshly cloned
+-- business, so cleaned stains never reappear. Walls aren't pruned here -- their
+-- cleaned state is handled client-side (the overlay simply isn't rebuilt).
+local function pruneCleanedStains(clone: Instance, cleanedStains: { [string]: boolean }?)
+	if not cleanedStains then
+		return
+	end
+	local cleanables = clone:FindFirstChild(Config.CleanablesFolderName)
+	local decals = cleanables and cleanables:FindFirstChild(Config.DecalsFolderName)
+	if not decals then
+		return
+	end
+	for _, model in decals:GetChildren() do
+		local surfaceId = model:GetAttribute(Config.SurfaceIdAttribute)
+		if type(surfaceId) == "string" and cleanedStains[surfaceId] then
+			model:Destroy()
+		end
+	end
+end
+
 -- Clone one business template onto its spawn within the plot. No-op if it has
 -- already been spawned, or if the template / spawn part is missing.
-local function spawnBusiness(plot: Instance, businessId: string)
+local function spawnBusiness(plot: Instance, businessId: string, cleanedStains: { [string]: boolean }?)
 	local businesses = plot:FindFirstChild(Config.BusinessesFolderName)
 	if not businesses then
 		warn(string.format("[BusinessSpawner] Plot %s has no %s folder.", plot.Name, Config.BusinessesFolderName))
@@ -44,6 +64,9 @@ local function spawnBusiness(plot: Instance, businessId: string)
 	end
 
 	local clone = template:Clone()
+
+	-- Drop any stains this player already cleaned before the clone is parented in.
+	pruneCleanedStains(clone, cleanedStains)
 
 	-- Translate the clone so its BasePart lands on the spawn point, keeping the
 	-- template's authored orientation (a pure translation never rotates anything).
@@ -89,7 +112,7 @@ function BusinessSpawner.populate(player: Player, plot: Instance)
 	for businessId, business in businessList do
 		-- "Owned" = present in the player's list and unlocked.
 		if type(business) == "table" and business.Unlocked == true then
-			spawnBusiness(plot, businessId)
+			spawnBusiness(plot, businessId, business.CleanedStains)
 		end
 	end
 end

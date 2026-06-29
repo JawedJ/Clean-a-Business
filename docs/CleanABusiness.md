@@ -27,6 +27,25 @@ the **pressure washer cleaning loop**.
 
 ## Cleaning system (implemented)
 
+### Verification policy (server-authoritative)
+**No gameplay verification happens on the client.** Clients send *intent* (a click, a
+target) and show *cosmetic* feedback; the **server validates everything and owns all
+timing and completion**. Concretely:
+- The broom's **UseTime timer runs on the server** (`DecalCleaningService`), not the
+  client. The client only sends "I clicked this stain" and animates a progress bar; it
+  cannot shortcut the timer or assert completion. The server also checks ownership,
+  plot, hierarchy, broom-equipped, and one-clean-at-a-time.
+- **The one exception is the wall EditableImage pixel-erasing**, which is inherently
+  client-side (the overlay is built and erased entirely on the client and never
+  replicated — see Replication model). Because of that, completion of a *wall* is still
+  client-asserted; the server validates everything it *can* (resolve, plot, ownership)
+  and guards the saved flag (below), but it cannot witness the pixels.
+- **Cleaned state is MONOTONIC.** The saved completion boolean
+  (`CleanedParts[id]` / `CleanedStains[id]`) can only ever be driven to `true` by the
+  server, and once `true` the server ignores further reports for that id. A client can
+  **never** set a surface/stain back to `false` (un-clean) by replaying, forging, or
+  spamming a remote — the server intervenes and refuses any non-`true` transition.
+
 ### Surfaces
 - A cleanable surface is any `BasePart` placed in a business's `CleanableWalls`
   folder, at this exact hierarchy:
@@ -107,10 +126,14 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   client reads `CleanedParts` and skips overlays for already-cleaned surfaces.
 - **Per-player only.** Each player has their own cleaned state; players do **not** see
   each other's in-progress or completed cleaning yet (see Planned).
-- ⚠️ **Known exploit gap:** completion is currently client-asserted. The server only
-  validates that the part/business exist, not that cleaning actually happened. Fine
-  while nothing is rewarded; must be hardened (rate-limit, timing, proximity/ownership)
-  before cleaning grants Cash/XP.
+- **Monotonic guard:** the server refuses to process a `CleanSurface` report for a wall
+  already saved as cleaned, so the flag can only go `false → true`, never back (see
+  Verification policy).
+- ⚠️ **Known exploit gap (walls only):** because wall pixel-erasing is client-side, *wall*
+  completion is still client-asserted — the server validates the part/business/plot and
+  guards the saved flag, but can't witness the actual erasing. Fine while nothing is
+  rewarded; if walls ever grant Cash/XP, add rate-limit/timing/proximity checks. (The
+  **broom is not affected** — its timer and completion are fully server-authoritative.)
 
 
 ### `CleaningConfig` (shared)
@@ -120,10 +143,29 @@ Single source of truth for cleaning tunables, consumed by client and server:
 `CompletionThreshold`, `Range`, brown fallback, and `FlipU`/`FlipV` (flip if the
 cleaned spot appears mirrored from where you aim).
 
+### Stain cleaning (broom, implemented)
+- A cleanable **stain** is a `Model` in a business's `CleanableDecals` folder, at:
+  `Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableDecals.<model>`.
+  - The model has a child `BasePart` named **`Hitbox`** (what the player clicks) and a
+    **`surfaceId`** attribute whose value is the stain's id (unique within the business).
+  - `DecalResolver` (SharedModules) walks this hierarchy + reads the attribute to derive
+    `{ plot, businessId, surfaceId, model }`; anything else is ignored.
+- **Flow:** `BroomController` (client) raycasts on click, and on a valid Hitbox fires
+  `CleanDecal` and shows a cosmetic billboard progress bar. `DecalCleaningService`
+  (server) validates (plot/ownership/equipped/one-at-a-time), then **runs the UseTime
+  timer itself**, re-validates, deletes the model, and saves
+  `CleanedStains[surfaceId] = true`. **UseTime** comes from the broom Item in
+  `ToolConfig` (falls back to `CleaningConfig.BroomUseTime`); both sides read the same
+  source so the bar mirrors the server timer.
+- **Persistence:** on spawn, `BusinessSpawner` prunes stain models whose `surfaceId` is
+  already in the player's `CleanedStains`, so cleaned stains never reappear. (Unlike
+  walls, a cleaned stain is fully removed — there is no overlay to skip.)
+
 ### Tool
-- The **Pressure Washer** `Tool` lives in **`StarterPack`** (authored in Studio, so it
-  auto-gives to every player). It has a `Handle` and a `ToolId = "pressureWasher"`
-  attribute. There is no server-side tool-giving code.
+- The **Pressure Washer** and **Broom** `Tool`s live in **`StarterPack`** (authored in
+  Studio, so they auto-give to every player). Each has a `Handle` and a `ToolId`
+  attribute (`"pressureWasher"` / `"startingBroom"`) used to bind its controller. There
+  is no server-side tool-giving code.
 
 ## Implemented files
 
@@ -133,28 +175,34 @@ ReplicatedStorage/SharedModules/
   ToolConfig.luau       tool definitions catalog
   BusinessConfig.luau   business definitions catalog
   CleaningConfig.luau   cleaning tunables (shared by client + server)
+  SurfaceResolver.luau  wall part -> identity (walls)
+  DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
 ReplicatedStorage/Remotes/
-  CleanSurface          RemoteEvent (client → server completion report)
+  CleanSurface          RemoteEvent (client → server wall completion report)
+  CleanDecal            RemoteEvent (client → server stain-click intent)
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + CleaningService
-  Modules/CleaningService.luau   validates + saves cleaned surfaces
-  Modules/InventoryManager.luau  present but NOT yet wired into Main
+  Main.server.luau      inits DataService (useMock) + CleaningService + DecalCleaningService
+  Modules/CleaningService.luau       validates + saves cleaned walls (monotonic guard)
+  Modules/DecalCleaningService.luau  server-authoritative broom timer + stain delete/save
+  Modules/BusinessSpawner.luau       clones owned businesses; prunes already-cleaned stains
+  Modules/PlotService.luau           plot assignment
+  Modules/InventoryManager.luau      present but NOT yet wired into Main
 
 StarterPlayer/StarterPlayerScripts/
-  Main.client.luau                 inits DataService client + SurfaceManager + PressureWasherController
+  Main.client.luau                 inits DataService client + SurfaceManager + PressureWasherController + BroomController
   Modules/SurfaceManager.luau      owns surface lifetime + persistence checks + remote
   Modules/CleanableSurface.luau    dirt-overlay OOP class
   Modules/PressureWasherController.luau   tool input + raycast + cleaning
+  Modules/BroomController.luau     broom input + raycast + cosmetic progress bar (no verification)
 ```
 
-Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `Workspace.CleanableWalls`.
+Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `StarterPack.Broom`,
+`Workspace` plots (cleanable walls + stains live inside the business templates in
+`ReplicatedStorage.Businesses`).
 
 ## Not yet implemented / planned
 
-- **Broom** tool — only a data/config entry exists; no behavior. Intended to clear
-  **stain decals** (tracked in `Business.CleanedStains`) discretely on tool use with
-  server-side proximity validation.
 - **Rewards & progression** — completing a business awarding Cash/XP, unlock flow,
   plot growth. `InventoryManager` exists but isn't initialized or used yet.
 - **StreamingEnabled** handling — the tag-added signal already builds surfaces on

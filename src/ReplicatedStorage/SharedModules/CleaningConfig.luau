@@ -8,6 +8,10 @@ local CleaningConfig = {
 	-- Attribute value identifying the pressure washer Tool.
 	ToolId = "pressureWasher",
 
+	-- Attribute value identifying the broom Tool (StarterPack). The broom cleans
+	-- whole stain Models rather than painting a surface.
+	BroomToolId = "startingBroom",
+
 	-- Cleanable walls live in the workspace under each plot:
 	--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>
 	-- The business folder's name is the BusinessId and the part's name is the
@@ -16,6 +20,22 @@ local CleaningConfig = {
 	BusinessesFolderName = "Businesses",
 	CleanablesFolderName = "Cleanables",
 	WallsFolderName = "CleanableWalls",
+
+	-- Cleanable stains (broom targets) live alongside the walls under each plot:
+	--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableDecals.<model>
+	-- Each <model> has a child BasePart named HitboxName the player clicks, and a
+	-- SurfaceIdAttribute attribute whose value is the stain's id, used to key saved
+	-- cleaned state (BusinessList[BusinessId].CleanedStains[SurfaceId] = true).
+	DecalsFolderName = "CleanableDecals",
+	HitboxName = "Hitbox",
+	SurfaceIdAttribute = "surfaceId",
+
+	-- Fallback broom UseTime (seconds to remove a stain) if the broom's Item in
+	-- ToolConfig has no UseTime set.
+	BroomUseTime = 2,
+
+	-- Max distance (studs) a broom click can reach a stain's Hitbox.
+	BroomRange = 30,
 
 	-- Plots are direct children of Workspace named Plot1..Plot(PlotCount). Each
 	-- joining player is assigned one and may only clean walls within it. The

@@ -41,6 +41,15 @@ function CleaningService.init()
 			return
 		end
 
+		-- Server intervention: cleaned state is MONOTONIC. The wall pixel-erasing is
+		-- client-driven (the one thing we can't verify server-side), but the saved
+		-- boolean is the server's. This remote can only ever set it to `true`, and once
+		-- a surface is cleaned we ignore further reports for it -- so a client can never
+		-- drive a surface back to `false` (un-clean) by replaying or forging this event.
+		if DataService:get(player, { "BusinessList", identity.businessId, "CleanedParts", identity.surfaceId }) == true then
+			return
+		end
+
 		DataService:set(player, { "BusinessList", identity.businessId, "CleanedParts", identity.surfaceId }, true)
 	end)
 end

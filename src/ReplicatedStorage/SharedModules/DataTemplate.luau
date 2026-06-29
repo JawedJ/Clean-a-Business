@@ -8,7 +8,8 @@ export type Item = {
 	UniqueID: string,
 
 	Range: number?, -- max cleaning distance (studs)
-	Power: number?
+	Power: number?,
+	UseTime: number?,
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -60,7 +61,8 @@ local DataTemplate = {
 			Equipped = false,
 			Unlocked = true,
 			Cost = 0,
-			UniqueID = "startingBroom"
+			UniqueID = "startingBroom",
+			UseTime = 2,
 		},
 
 		["pressureWasher"] = {
