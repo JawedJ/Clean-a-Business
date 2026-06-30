@@ -17,6 +17,7 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
+local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 
 local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanDecal") :: RemoteEvent
 
@@ -42,6 +43,10 @@ local equippedTool: Tool? = nil
 local boundTools: { [Tool]: boolean } = {}
 -- Only one stain can be cleaned at a time; clicks are ignored until it finishes.
 local busy = false
+
+-- Looping brush sound played for the duration of a clean. Built in init so its
+-- clone is preloaded during the startup window.
+local brushSound: SoundManager.SustainedSound? = nil
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -108,6 +113,10 @@ local function startClean(model: Model, hitbox: BasePart)
 	-- Snapshot the timer for this one clean so the bar's full duration is stable.
 	local useTime = getUseTime()
 
+	if brushSound then
+		brushSound.start()
+	end
+
 	task.spawn(function()
 		local elapsed = 0
 		while elapsed < useTime do
@@ -121,6 +130,9 @@ local function startClean(model: Model, hitbox: BasePart)
 			fill.Size = UDim2.fromScale(math.clamp(elapsed / useTime, 0, 1), 1)
 		end
 
+		if brushSound then
+			brushSound.stop()
+		end
 		gui:Destroy()
 		busy = false
 	end)
@@ -173,6 +185,8 @@ local function watch(root: Instance)
 end
 
 function BroomController.init()
+	brushSound = SoundManager.createSustained("BrushAudio")
+
 	watch(localPlayer)
 	localPlayer.CharacterAdded:Connect(watch)
 	if localPlayer.Character then

@@ -23,10 +23,15 @@ local DataService = require(ReplicatedStorage.Packages.DataService).server
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
 local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local PlotService = require(script.Parent.PlotService)
+local ProgressionService = require(script.Parent.ProgressionService)
 
 local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanDecal") :: RemoteEvent
 
 local TOOL_ID = ToolConfig.startingBroom.UniqueID
+
+-- Reward paid once per stain fully cleaned.
+local DECAL_XP = 40
+local DECAL_CASH = 40
 
 -- This player's current broom UseTime (seconds), read fresh so tool upgrades take
 -- effect immediately, falling back to the static ToolConfig default.
@@ -113,6 +118,8 @@ function DecalCleaningService.init()
 				true
 			)
 			identity.model:Destroy()
+
+			ProgressionService.reward(player, DECAL_XP, DECAL_CASH)
 		end)
 	end)
 

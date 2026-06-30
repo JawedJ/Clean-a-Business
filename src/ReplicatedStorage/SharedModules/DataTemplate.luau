@@ -64,7 +64,7 @@ local DataTemplate = {
 		Cost = 0,
 		UniqueID = "startingBroom",
 		Power = 1,
-		UseTime = 3,
+		UseTime = 2.5,
 		Range = 70,
 		},
 

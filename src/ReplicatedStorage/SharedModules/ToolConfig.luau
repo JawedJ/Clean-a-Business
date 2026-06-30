@@ -15,7 +15,7 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Cost = 0,
 		UniqueID = "startingBroom",
 		Power = 1.0,
-		UseTime = 3.0, -- seconds of cleaning before a stain is removed
+		UseTime = 2.5, -- seconds of cleaning before a stain is removed
 		Range = 70,
 	},
 

@@ -9,6 +9,8 @@ local SurfaceManager = require(Modules:WaitForChild("SurfaceManager"))
 local PressureWasherController = require(Modules:WaitForChild("PressureWasherController"))
 local BroomController = require(Modules:WaitForChild("BroomController"))
 local Crosshair = require(Modules:WaitForChild("Crosshair"))
+local RewardPopupController = require(Modules:WaitForChild("RewardPopupController"))
+local LevelUiController = require(Modules:WaitForChild("LevelUiController"))
 
 
 DataService:init()
@@ -16,4 +18,6 @@ SurfaceManager.init()
 PressureWasherController.init(SurfaceManager.getSurface)
 BroomController.init()
 Crosshair.init()
+RewardPopupController.init()
+LevelUiController.init()
 

@@ -8,18 +8,25 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
-local SoundService = game:GetService("SoundService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(game.ReplicatedStorage.SharedModules.CleaningConfig)
 local ToolConfig = require(game.ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(game.ReplicatedStorage.Packages.DataService).client
+local SoundManager = require(game.ReplicatedStorage.SharedModules.SoundManager)
 local CleanableSurface = require(script.Parent.CleanableSurface)
 
 type Surface = CleanableSurface.CleanableSurface
 
+local CleanProgress = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanProgress") :: RemoteEvent
+
 local TOOL_ID = ToolConfig.pressureWasher.UniqueID
 local MAX_BRIDGE_DIST = Config.MaxBridgeWorldDistance
+
+-- How often (seconds) we tell the server we're actively cleaning. Kept below the
+-- server's reward cooldown so a fresh report is always waiting when it expires;
+-- the server is the authority on the actual once-per-second payout.
+local PROGRESS_REPORT_INTERVAL = 0.5
 
 -- Live cleaning range (studs) for this player, read fresh so tool upgrades take
 -- effect immediately. Falls back to the static ToolConfig default if the player's
@@ -39,9 +46,9 @@ local SOUND_SECTION_END = 2.5
 
 local localPlayer = Players.LocalPlayer
 
--- 2D firing sound (cloned from ReplicatedStorage.Audios.PressureAudio), looped over
--- the [START, END] slice by resetting its TimePosition each frame while playing.
-local fireSound: Sound? = nil
+-- 2D firing sound: a sustained, slice-looped handle owned by SoundManager. Built
+-- in init so its clone is preloaded during the startup window.
+local fireSound: SoundManager.SustainedSound? = nil
 
 local PressureWasherController = {}
 
@@ -58,57 +65,26 @@ local lastSurface: Surface? = nil
 local lastWorldPos: Vector3? = nil
 local missedLast = true
 
+-- os.clock() of the last CleanProgress report, for client-side throttling.
+local lastProgressReport = 0
+
 local function resetStroke()
 	lastSurface = nil
 	lastWorldPos = nil
 	missedLast = true
 end
 
--- Clone the firing sound once (2D, looped). No-op if the asset is missing.
-local function setupSound()
-	if fireSound then
-		return
-	end
-	local audios = ReplicatedStorage:FindFirstChild("Audios")
-	local template = audios and audios:FindFirstChild("PressureAudio")
-	if template and template:IsA("Sound") then
-		local s = template:Clone()
-		s.Looped = true -- safety net; the slice is enforced per-frame below
-		s.Parent = SoundService
-		-- Decode the audio now (during the startup window) so the first Play() mid-game
-		-- doesn't trigger a one-off decode job spike.
-		task.spawn(function()
-			pcall(function()
-				game:GetService("ContentProvider"):PreloadAsync({ s })
-			end)
-		end)
-		fireSound = s
-	end
-end
-
 local function startSound()
-	local s = fireSound
-	if s and not s.IsPlaying then
-		s.TimePosition = SOUND_SECTION_START
-		s:Play()
+	if fireSound then
+		fireSound.start()
 	end
 end
 
 local function stopSound()
-	local s = fireSound
-	if s and s.IsPlaying then
-		s:Stop()
+	if fireSound then
+		fireSound.stop()
 	end
 end
-
--- Keep playback inside the [START, END] slice while firing.
-local function maintainSound()
-	local s = fireSound
-	if s and s.IsPlaying and (s.TimePosition >= SOUND_SECTION_END or s.TimePosition < SOUND_SECTION_START) then
-		s.TimePosition = SOUND_SECTION_START
-	end
-end
-
 
 local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
@@ -164,7 +140,6 @@ local function onHeartbeat()
 	if not firing then
 		return
 	end
-	maintainSound()
 
 	local gs = getSurface
 	if not gs then
@@ -213,7 +188,19 @@ local function onHeartbeat()
 		lastSurface:clean(result.Position, fromPos, radius)
 	end
 
+	local erasedBefore = surface.cleanedCount
 	surface:clean(result.Position, fromPos, radius)
+
+	-- Only report when dirt actually came off (the player is genuinely modifying the
+	-- image, not aiming at already-clean pixels), throttled to keep traffic low. The
+	-- server re-validates and enforces the real once-per-second reward.
+	if surface.cleanedCount > erasedBefore then
+		local now = os.clock()
+		if now - lastProgressReport >= PROGRESS_REPORT_INTERVAL then
+			lastProgressReport = now
+			CleanProgress:FireServer(part)
+		end
+	end
 
 	lastSurface = surface
 	lastWorldPos = result.Position
@@ -227,7 +214,10 @@ end
 function PressureWasherController.init(surfaceGetter: (BasePart) -> Surface?)
 	getSurface = surfaceGetter
 
-	setupSound()
+	fireSound = SoundManager.createSustained("PressureAudio", {
+		loopStart = SOUND_SECTION_START,
+		loopEnd = SOUND_SECTION_END,
+	})
 
 	watch(localPlayer)
 	localPlayer.CharacterAdded:Connect(watch)
