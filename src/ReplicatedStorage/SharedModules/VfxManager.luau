@@ -50,7 +50,7 @@ function VfxManager.cleanPop(part: BasePart)
 	clone.CastShadow = false
 	clone.Material = Enum.Material.Neon
 	clone.Color = POP_COLOR
-	clone.Transparency = 0.6
+	clone.Transparency = 0.63
 	if clone:IsA("MeshPart") then
 		clone.TextureID = "" -- a mesh texture would tint the neon glow
 	end

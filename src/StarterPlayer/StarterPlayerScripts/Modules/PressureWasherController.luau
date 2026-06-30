@@ -3,6 +3,10 @@
 -- Drives the pressure washer: detects when the tool is equipped + firing,
 -- raycasts from the mouse each frame, and tells the aimed CleanableSurface to
 -- erase. Only the FRONT face of a surface is cleanable.
+--
+-- It also drives the spray VFX: the Handle's ParticleEmitter only emits while the
+-- player is firing, and each frame its attachment is re-aimed so the spray shoots
+-- from the nozzle toward wherever the player is pointing.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -57,6 +61,11 @@ local firing = false
 local equippedTool: Tool? = nil
 local boundTools: { [Tool]: boolean } = {}
 
+-- Spray VFX for the equipped tool: the emitter and the attachment it sits on, so we
+-- can toggle emission with firing and re-aim it each frame. Resolved on equip.
+local sprayEmitter: ParticleEmitter? = nil
+local sprayAttachment: Attachment? = nil
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -86,20 +95,63 @@ local function stopSound()
 	end
 end
 
+-- Find the equipped tool's spray emitter + the attachment it lives on, and start it
+-- disabled so there's no VFX until the player actually fires.
+local function resolveSpray(tool: Tool)
+	local handle = tool:FindFirstChild("Handle")
+	local emitter = handle and handle:FindFirstChildWhichIsA("ParticleEmitter", true)
+	sprayEmitter = emitter :: ParticleEmitter?
+	local parent = emitter and emitter.Parent
+	sprayAttachment = if parent and parent:IsA("Attachment") then parent else nil
+	if sprayEmitter then
+		sprayEmitter.Enabled = false
+	end
+end
+
+local function startSpray()
+	if sprayEmitter then
+		sprayEmitter.Enabled = true
+	end
+end
+
+local function stopSpray()
+	if sprayEmitter then
+		sprayEmitter.Enabled = false
+	end
+end
+
+-- Re-aim the spray: point the emitter's attachment from the nozzle toward `target`
+-- so particles (EmissionDirection = Front => the attachment's look axis) shoot that
+-- way. Keeps the attachment's position; only its orientation changes.
+local function aimSpray(target: Vector3)
+	local att = sprayAttachment
+	if not att or not att.Parent then
+		return
+	end
+	local origin = att.WorldPosition
+	if (target - origin).Magnitude < 0.05 then
+		return
+	end
+	att.WorldCFrame = CFrame.lookAt(origin, target)
+end
+
 local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
+		resolveSpray(tool)
 	end)
 	tool.Activated:Connect(function()
 		if equippedTool == tool then
 			firing = true
 			startSound()
+			startSpray()
 		end
 	end)
 	tool.Deactivated:Connect(function()
 		firing = false
 		resetStroke()
 		stopSound()
+		stopSpray()
 	end)
 	tool.Unequipped:Connect(function()
 		if equippedTool == tool then
@@ -107,6 +159,9 @@ local function bindTool(tool: Tool)
 			firing = false
 			resetStroke()
 			stopSound()
+			stopSpray()
+			sprayEmitter = nil
+			sprayAttachment = nil
 		end
 	end)
 end
@@ -125,15 +180,17 @@ local function watch(root: Instance)
 	end
 end
 
-local function aim(): RaycastResult?
+-- Raycasts from the mouse. Returns the hit (if any) and the camera ray, so callers
+-- can fall back to a point along the ray when nothing was hit.
+local function aim(): (RaycastResult?, Ray?)
 	local cam = Workspace.CurrentCamera
 	if not cam then
-		return nil
+		return nil, nil
 	end
 	local mouse = UserInputService:GetMouseLocation()
 	local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
 	rayParams.FilterDescendantsInstances = { localPlayer.Character :: Instance }
-	return Workspace:Raycast(ray.Origin, ray.Direction * getRange(), rayParams)
+	return Workspace:Raycast(ray.Origin, ray.Direction * getRange(), rayParams), ray
 end
 
 local function onHeartbeat()
@@ -141,12 +198,20 @@ local function onHeartbeat()
 		return
 	end
 
+	local result, ray = aim()
+
+	-- Aim the spray wherever the player points -- at the hit if there is one, else a
+	-- point out along the ray -- regardless of whether it landed on a cleanable wall.
+	if ray then
+		local target = if result then result.Position else ray.Origin + ray.Direction * getRange()
+		aimSpray(target)
+	end
+
 	local gs = getSurface
 	if not gs then
 		return
 	end
 
-	local result = aim()
 	if not result then
 		resetStroke()
 		return
