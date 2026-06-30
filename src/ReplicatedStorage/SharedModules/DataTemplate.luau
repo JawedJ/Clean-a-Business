@@ -19,16 +19,14 @@ export type Level = {
 	XP: number,
 }
 
+-- Per-player business record. We no longer persist cleaned state (jobs are
+-- per-session and reset every time they're accepted), so this only tracks whether
+-- the player has Unlocked the business -- which is what gates accepting its job.
 export type Business = {
-	BaseRate: number,
+	BaseReward: number,
 	Unlocked: boolean,
-	Cleaned: boolean,
 	Name: string,
 	UniqueID: string,
-	CleanedParts: { [string]: boolean }?, -- the key is the parts identifier, and the booelan indicates if the corrosponding part is cleaned or not.
-	CleanedStains: { [string]: boolean }?,
-
-
 }
 
 
@@ -44,13 +42,10 @@ local DataTemplate = {
 
 	BusinessList = {
 		["mcDonalds"] = {
-			BaseRate = 100,
+			BaseReward = 100,
 			Unlocked = true,
-			Cleaned = false,
 			Name = "McDonalds",
 			UniqueID = "mcDonalds",
-			CleanedParts = {},
-			CleanedStains = {},
 		},
 
 
@@ -76,7 +71,7 @@ local DataTemplate = {
 		UniqueID = "pressureWasher",
 		Range = 70,
 		Power = 1,
-		Radius = 1.0,
+		Radius = 0.8,
 		},
 
 	} :: { [string]: Item },

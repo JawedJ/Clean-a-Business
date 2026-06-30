@@ -1,13 +1,13 @@
 --!strict
 
--- Resolves a clicked stain Hitbox part to the identity used for saving its cleaned
--- state. Cleanable stains live at:
---   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableDecals.<model>
+-- Resolves a clicked stain Hitbox part to its (businessId, surfaceId) identity.
+-- Cleanable stains live in the shared business buildings at:
+--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableDecals.<model>
 -- where <model> has a child BasePart named HitboxName and a SurfaceIdAttribute
 -- attribute. The businessId is the business folder's name and the surfaceId is the
 -- model's attribute value. Returns nil for anything that is not a stain hitbox
 -- sitting in that exact hierarchy. Shared so the client (controller) and server
--- (delete validation) agree on what counts as a cleanable stain.
+-- (clean validation) agree on what counts as a cleanable stain.
 
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,7 +15,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 
 export type DecalIdentity = {
-	plot: Instance,
 	businessId: string,
 	surfaceId: string,
 	model: Model,
@@ -61,18 +60,13 @@ function DecalResolver.resolve(part: Instance): DecalIdentity?
 	if not businessFolder then
 		return nil
 	end
+	-- The Businesses folder must be a direct child of Workspace (the shared buildings).
 	local businessesFolder = named(businessFolder.Parent, Config.BusinessesFolderName)
-	if not businessesFolder then
-		return nil
-	end
-	-- The plot is whatever holds Businesses, and it must be a top-level plot.
-	local plot = businessesFolder.Parent
-	if not plot or plot.Parent ~= Workspace then
+	if not businessesFolder or businessesFolder.Parent ~= Workspace then
 		return nil
 	end
 
 	return {
-		plot = plot,
 		businessId = businessFolder.Name,
 		surfaceId = surfaceId,
 		model = model,

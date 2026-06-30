@@ -21,8 +21,8 @@ local VfxManager = {}
 
 -- "Clean pop": a neon-yellow duplicate of a just-cleaned part that briefly swells
 -- past the original then settles back, reading as a bright outline flash.
-local POP_COLOR = Color3.fromRGB(255, 255, 0)
-local POP_PEAK_SCALE = 1.05 -- size at the peak of the swell, relative to real size
+local POP_COLOR = Color3.fromRGB(223, 223, 16)
+local POP_PEAK_SCALE = 1.06 -- size at the peak of the swell, relative to real size
 local POP_SETTLE_SCALE = 1.01 -- size it settles to after the swell
 local POP_GROW_TIME = 0.28 -- seconds: normal -> peak
 local POP_PEAK_HOLD = 0.045 -- seconds held at the peak before shrinking

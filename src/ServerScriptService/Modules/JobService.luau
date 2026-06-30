@@ -1,0 +1,120 @@
+--!strict
+
+-- The job board MANAGER. Owns the per-player active JobServer instances and the AcceptJob
+-- flow: validate the player has Unlocked the business, end any job they're already on,
+-- spin up a fresh JobServer, publish the businessId on the ActiveJob player attribute (so
+-- their client loads the wall overlays + restores the stains), and teleport them onto the
+-- building's TeleportPart. One job at a time.
+--
+-- The shared buildings -- including their Cleanables -- are authored in the Workspace, so
+-- nothing is spawned here; accepting a job is a fresh, per-session clean. When a job
+-- finishes, its JobServer pays the completion reward and calls back here to end it, which
+-- clears the ActiveJob attribute (ending the state on the client). Pressing the button
+-- again starts a brand-new job and reloads everything -- that's the redo.
+--
+-- The cleaning services authorize cleans through getActiveJob (a player may only clean
+-- the business they currently hold) and report cleans through getJob.
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local DataService = require(ReplicatedStorage.Packages.DataService).server
+local JobServer = require(script.Parent.JobServer)
+
+local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
+
+local JobService = {}
+
+-- The JobServer each player is currently on the clock for, or nil.
+local jobs: { [Player]: JobServer.JobServer } = {}
+
+local function businessesFolder(): Instance?
+	return Workspace:FindFirstChild(Config.BusinessesFolderName)
+end
+
+local function buildingFor(businessId: string): Instance?
+	local folder = businessesFolder()
+	return folder and folder:FindFirstChild(businessId)
+end
+
+-- Drop the character onto a building's TeleportPart (upright, slightly above it).
+local function teleportToJob(character: Model, building: Instance)
+	local teleportPart = building:FindFirstChild(Config.TeleportPartName)
+	if not teleportPart or not teleportPart:IsA("BasePart") then
+		warn(string.format("[JobService] Building %s has no %q part.", building.Name, Config.TeleportPartName))
+		return
+	end
+	character:WaitForChild("HumanoidRootPart")
+	character:PivotTo(CFrame.new(teleportPart.Position + Config.TeleportOffset))
+end
+
+local function isUnlocked(player: Player, businessId: string): boolean
+	return DataService:get(player, { "BusinessList", businessId, "Unlocked" }) == true
+end
+
+-- End a player's current job: drop the JobServer and clear the ActiveJob attribute (which
+-- tears the job state down on their client). Safe to call with no active job.
+function JobService.endJob(player: Player)
+	local job = jobs[player]
+	if not job then
+		return
+	end
+	job:destroy()
+	jobs[player] = nil
+	player:SetAttribute(Config.ActiveJobAttribute, nil)
+end
+
+-- The businessId the player is currently on the clock for, or nil. Used by the cleaning
+-- services to authorize a clean against the job the player actually holds.
+function JobService.getActiveJob(player: Player): string?
+	local job = jobs[player]
+	if job then
+		return job.businessId
+	end
+	return nil
+end
+
+-- The player's active JobServer, or nil. The cleaning services report cleans into it.
+function JobService.getJob(player: Player): JobServer.JobServer?
+	return jobs[player]
+end
+
+local function accept(player: Player, businessId: any)
+	if type(businessId) ~= "string" then
+		return
+	end
+	if not isUnlocked(player, businessId) then
+		return -- not unlocked: ignore (button shouldn't have been offered)
+	end
+	local building = buildingFor(businessId)
+	if not building then
+		warn(string.format("[JobService] No building %q under Workspace.%s.", businessId, Config.BusinessesFolderName))
+		return
+	end
+
+	-- One at a time: drop whatever they were on first. Re-accepting the same business is
+	-- exactly the "redo" path -- a fresh JobServer with progress reset to zero.
+	JobService.endJob(player)
+
+	jobs[player] = JobServer.new(player, businessId, building, function(_job)
+		JobService.endJob(player)
+	end)
+	player:SetAttribute(Config.ActiveJobAttribute, businessId)
+
+	local character = player.Character
+	if character then
+		teleportToJob(character, building)
+	end
+end
+
+function JobService.init()
+	AcceptJob.OnServerEvent:Connect(accept)
+
+	Players.PlayerRemoving:Connect(function(player)
+		JobService.endJob(player)
+	end)
+end
+
+return JobService

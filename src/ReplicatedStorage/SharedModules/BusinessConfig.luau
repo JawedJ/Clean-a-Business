@@ -1,31 +1,26 @@
 --!strict
 
 -- Static catalog of every business in the game.
--- This holds business DEFINITIONS only. Per-player progress (Unlocked, Cleaned,
--- CleanedParts, CleanedStains) lives in DataTemplate.BusinessList and is written
--- through DataService. Adding a new business = add one entry here.
+-- This holds business DEFINITIONS only. The per-player Unlocked flag (which gates
+-- accepting a business's job) lives in DataTemplate.BusinessList and is written
+-- through DataService. Cleaned state is no longer tracked -- jobs are per-session.
+-- Adding a new business = add one entry here.
 
 local DataTemplate = require(game.ReplicatedStorage.SharedModules.DataTemplate)
 
 local BusinessConfig: { [string]: DataTemplate.Business } = {
 	mcDonalds = {
-		BaseRate = 100,
+		BaseReward = 100,
 		Unlocked = true,
-		Cleaned = false,
 		Name = "McDonalds",
 		UniqueID = "mcDonalds",
-		CleanedParts = {},
-		CleanedStains = {},
 	},
 
 	starbucks = {
-		BaseRate = 500,
+		BaseReward = 1000,
 		Unlocked = false,
-		Cleaned = false,
 		Name = "Starbucks",
 		UniqueID = "starbucks",
-		CleanedParts = {},
-		CleanedStains = {},
 	},
 }
 

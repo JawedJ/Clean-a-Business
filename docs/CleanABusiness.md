@@ -9,9 +9,11 @@ Simulator-style Roblox game. Players clean businesses with tools (broom, pressur
 washer) and continuously unlock more content — tools, businesses, upgrades, plot
 expansions — as they progress.
 
-- **8 players per server** (target), each with their own plot.
-- Each plot **grows** as the owner completes more businesses.
-- Players clean **only their own plot**.
+- **8 players per server** (target), each with their own **plot** (a personal
+  home/spawn base, assigned on join).
+- Businesses are **shared buildings** in the world, not owned. Players take **jobs**
+  from a job board: accepting a job teleports them to that business and lets them
+  clean it. Cleaning is **per-session** — nothing about cleaned state is saved.
 - Server is authoritative; clients read replicated data and send validated requests.
 
 **Design imperative:** the set of unlockables (tools, businesses, upgrades) grows
@@ -30,26 +32,34 @@ the **pressure washer cleaning loop**.
 ### Verification policy (server-authoritative)
 **No gameplay verification happens on the client.** Clients send *intent* (a click, a
 target) and show *cosmetic* feedback; the **server validates everything and owns all
-timing and completion**. Concretely:
+timing and completion**. The gate on every clean is the player's **active job** —
+`JobService.getActiveJob(player)` must equal the `businessId` of the surface/stain they
+report, so a player can only ever clean the one business they've accepted. Concretely:
 - The broom's **UseTime timer runs on the server** (`DecalCleaningService`), not the
   client. The client only sends "I clicked this stain" and animates a progress bar; it
-  cannot shortcut the timer or assert completion. The server also checks ownership,
-  plot, hierarchy, broom-equipped, and one-clean-at-a-time.
+  cannot shortcut the timer or assert completion. The server also checks active job,
+  hierarchy, broom-equipped, one-clean-at-a-time, and a per-session **already-cleaned
+  set** so a stain can't pay out twice for the same player.
+- Stains are **shared server instances**, so the server does **not** destroy a cleaned
+  stain (that would remove it for everyone). It rewards the player and tells **their**
+  client (`DecalCleaned` remote) to destroy the model locally; other players still see
+  and can clean it independently.
 - **The one exception is the wall EditableImage pixel-erasing**, which is inherently
   client-side (the overlay is built and erased entirely on the client and never
-  replicated — see Replication model). Because of that, completion of a *wall* is still
-  client-asserted; the server validates everything it *can* (resolve, plot, ownership)
-  and guards the saved flag (below), but it cannot witness the pixels.
-- **Cleaned state is MONOTONIC.** The saved completion boolean
-  (`CleanedParts[id]` / `CleanedStains[id]`) can only ever be driven to `true` by the
-  server, and once `true` the server ignores further reports for that id. A client can
-  **never** set a surface/stain back to `false` (un-clean) by replaying, forging, or
-  spamming a remote — the server intervenes and refuses any non-`true` transition.
+  replicated — see Replication model). Walls grant only the per-second **wash reward**
+  (`CleanProgress`), which the server re-validates against the active job and throttles
+  per a cooldown — so it can't be farmed off a job the player doesn't hold.
+- **Completion is server-authoritative.** The player's `JobServer` counts the building's
+  cleanables and only counts cleans the cleaning services have already validated (deduped),
+  so the job completes — and pays its `BaseReward` bonus — exactly once, when every wall and
+  stain is genuinely done.
+- **Nothing about cleaning is saved.** Jobs are per-session; the only persisted business
+  data is the `Unlocked` flag that gates accepting a job.
 
 ### Surfaces
 - A cleanable surface is any `BasePart` placed in a business's `CleanableWalls`
   folder, at this exact hierarchy:
-  `Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>`.
+  `Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWalls.<part>`.
   - `businessId` is the **business folder's name** (e.g. `"mcDonalds"`).
   - `surfaceId` is the **wall part's name** (e.g. `"CleanableWall1"`), unique within
     the business.
@@ -58,24 +68,45 @@ timing and completion**. Concretely:
 - The surface's part shows its normal "clean" look. A **dirt overlay** is layered on
   the part's **LEFT face only** as a `Decal` whose `TextureContent` references a
   client-built `EditableImage`. Cleaning erases overlay pixels to reveal the part.
-- Surfaces are authored **in the Studio place**, not in code (Workspace isn't
-  Rojo-mounted). The workspace holds 8 plots (`Plot1`..`Plot8`); each joining player
-  is assigned one by `PlotService` and may only clean the walls within it.
+- Businesses are authored **in the Studio place**, not in code (Workspace isn't
+  Rojo-mounted) — a single shared `Workspace.Businesses` folder holds one building per
+  `businessId`. The buildings are **shared by everyone**; the overlays layered on their
+  walls are per-client.
 
-### Plots & business spawning
-- Each plot is a Folder under Workspace holding two Folders — `Businesses` (empty at
-  start) and `BusinessSpawns` (invisible parts named `<businessId>Spawn` marking
-  where each business sits) — plus a `spawnPart` the owner spawns on.
-- `PlotService` (server) assigns each joining player a free plot, publishes its name
-  via the `Plot` player attribute, teleports the player's character onto the plot's
-  `spawnPart` (on assignment and every respawn), and frees it on leave.
-- `BusinessSpawner` (server) then reads the player's owned businesses (entries in
-  `BusinessList` with `Unlocked == true`) and, for each, clones the template Model
-  from `ReplicatedStorage.Businesses.<businessId>` into the plot's `Businesses` folder
-  and translates it so the template's `BasePart` lands on the matching
-  `<businessId>Spawn` part (orientation kept as authored).
-- The client's `SurfaceManager` watches its plot's `Businesses` folder, so walls in a
-  spawned business become cleanable as soon as the Model replicates in.
+### Plots & the job board
+- **Plots** are the player's home base only. Each plot is a Folder under Workspace with
+  a `spawnPart`. `PlotService` (server) assigns each joining player a free plot,
+  publishes its name via the `Plot` player attribute, spawns the character on the
+  `spawnPart` (on assignment and **every** respawn), and frees it on leave. Plots no
+  longer hold businesses.
+- **Jobs** are how cleaning happens, modelled as a class on each side — one instance per
+  active job. The job board (UI, TBD) fires the `AcceptJob` remote with a `businessId`:
+  - `JobService` (server manager) checks the player has `Unlocked` that business, ends any
+    job they're already on, creates a fresh **`JobServer`**, publishes the `businessId` on
+    the **`ActiveJob`** player attribute, and teleports the character onto the building's
+    **`TeleportPart`**. One job at a time. Exposes `getActiveJob`/`getJob` for the cleaning
+    services to authorize + report cleans.
+  - **`JobServer`** (class) is the authority on progress: it counts the business's
+    cleanables from the shared building, records validated cleans (`markWallCleaned` /
+    `markDecalCleaned`, deduped), and exposes `getCompletion`/`isComplete`. When every wall
+    and stain is done it pays the `BaseReward` **completion bonus** (Cash only, no XP) and
+    calls back to `JobService` to end the job (clearing `ActiveJob`, which ends the state on
+    the client).
+  - **`JobClient`** (class), spun up by `JobController` when `ActiveJob` is set, builds the
+    per-client wall **EditableImage overlays** (via the `SurfaceManager` engine) and tracks
+    local completion for UI.
+  - **Stain visibility** is owned by **`DecalVisibility`** (client), driven by
+    `JobController` off the same `ActiveJob` attribute. Stains are shared server instances,
+    so this **hides every stain by default** (reparented off-world) and shows a business's
+    stains **only while it's the active job** — a player never sees another business's (or
+    an un-accepted business's) stains.
+- **Completion ends the job; re-accepting reloads it (redo).** Because nothing is saved,
+  accepting the same business again creates a brand-new `JobServer` (progress reset) and a
+  new `JobClient` that rebuilds the overlays, and `DecalVisibility` **un-hides** every stain
+  (including ones cleaned last run) — a fresh clean.
+- The shared buildings and their `Cleanables` (`CleanableWalls` + `CleanableDecals`) are
+  authored in the Workspace and already replicated, so accepting a job spawns nothing
+  server-side. The only per-job "loading" is the client's overlays + stain restore.
 
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
@@ -106,60 +137,51 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   it hits a cleanable part **on its left face** (`Normal·(-RightVector) > 0.99`), tells that
   surface to clean. Tracks the last hit so consecutive frames bridge into one stroke.
 
-### `SurfaceManager` (client)
-- Builds/destroys `CleanableSurface` instances for the walls in the local player's plot
-  (handles walls/businesses that spawn in later via `ChildAdded`).
-- **Budgeted building:** walls are queued (after cheap resolve/already-cleaned checks)
-  and a long-lived drainer builds them under a per-frame time budget (`FRAME_BUDGET`,
-  ~2ms), so a business spawning a burst of walls never stalls a frame. `removeSurface`
-  cancels a still-queued wall.
-- On build, checks saved data — if the wall is **already cleaned** in a prior session,
-  it **skips the overlay entirely** (part renders bare, no EditableImage created).
-- Exposes `getSurface(part)` for the controller, and fires the `CleanSurface` remote on
-  completion.
+### `SurfaceManager` (client) — wall-overlay engine
+- A driven engine, not a decision-maker: `JobClient` calls `buildWalls(wallsFolder,
+  onCleaned)` to start tracking the current job's walls and `clear()` to tear them down.
+  It builds/destroys one `CleanableSurface` per wall (handling walls that stream/replicate
+  in via `ChildAdded`).
+- **Budgeted building:** walls are queued (after a cheap resolve check) and a long-lived
+  drainer builds them under a per-frame time budget (`FRAME_BUDGET`, ~2ms), so a job with
+  many walls never stalls a frame. `removeSurface`/`clear` cancel still-queued walls.
+- Exposes `getSurface(part)` for `PressureWasherController`. On completion it plays the pop
+  VFX + sound and invokes the `onCleaned` callback (which `JobClient` uses to fire
+  `WallCleaned` and bump local progress).
 
-### Persistence (implemented)
-- Saved per player at `BusinessList[BusinessId].CleanedParts[SurfaceId] = true`.
-- Flow: client completes a surface → fires `CleanSurface` remote → server validates
-  (`SurfaceResolver` resolves the wall, the wall is on the player's `PlotService`-assigned
-  plot, business exists in the player's data) → `DataService:set(...)`. On rejoin, the
-  client reads `CleanedParts` and skips overlays for already-cleaned surfaces.
-- **Per-player only.** Each player has their own cleaned state; players do **not** see
-  each other's in-progress or completed cleaning yet (see Planned).
-- **Monotonic guard:** the server refuses to process a `CleanSurface` report for a wall
-  already saved as cleaned, so the flag can only go `false → true`, never back (see
-  Verification policy).
-- ⚠️ **Known exploit gap (walls only):** because wall pixel-erasing is client-side, *wall*
-  completion is still client-asserted — the server validates the part/business/plot and
-  guards the saved flag, but can't witness the actual erasing. Fine while nothing is
-  rewarded; if walls ever grant Cash/XP, add rate-limit/timing/proximity checks. (The
-  **broom is not affected** — its timer and completion are fully server-authoritative.)
-
+### Persistence
+**Cleaning is not persisted.** Jobs are per-session: accepting a job is always a fresh
+clean, and nothing about cleaned walls/stains is written to DataService. The only
+business data saved per player is the **`Unlocked`** flag (which gates accepting a job).
 
 ### `CleaningConfig` (shared)
 Single source of truth for cleaning tunables, consumed by client and server:
-`ToolId`, the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`,
-`PlotCount`/`PlotAttribute`, `DirtAsset`, `ImageSize`, `BrushWorldRadius`,
-`CompletionThreshold`, `Range`, brown fallback, and `FlipU`/`FlipV` (flip if the
-cleaned spot appears mirrored from where you aim).
+the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`/
+`DecalsFolderName`, `HitboxName`/`SurfaceIdAttribute`, `PlotCount`/`PlotAttribute`/
+`PlotSpawnPartName`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
+`DirtAsset`, `ImageSize`, `BrushWorldRadius`, `MaxBridgeWorldDistance`,
+`CompletionThreshold`, brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
+appears mirrored from where you aim).
 
 ### Stain cleaning (broom, implemented)
 - A cleanable **stain** is a `Model` in a business's `CleanableDecals` folder, at:
-  `Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableDecals.<model>`.
+  `Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableDecals.<model>`.
   - The model has a child `BasePart` named **`Hitbox`** (what the player clicks) and a
     **`surfaceId`** attribute whose value is the stain's id (unique within the business).
   - `DecalResolver` (SharedModules) walks this hierarchy + reads the attribute to derive
-    `{ plot, businessId, surfaceId, model }`; anything else is ignored.
-- **Flow:** `BroomController` (client) raycasts on click, and on a valid Hitbox fires
-  `CleanDecal` and shows a cosmetic billboard progress bar. `DecalCleaningService`
-  (server) validates (plot/ownership/equipped/one-at-a-time), then **runs the UseTime
-  timer itself**, re-validates, deletes the model, and saves
-  `CleanedStains[surfaceId] = true`. **UseTime** comes from the broom Item in
-  `ToolConfig` (falls back to `CleaningConfig.BroomUseTime`); both sides read the same
-  source so the bar mirrors the server timer.
-- **Persistence:** on spawn, `BusinessSpawner` prunes stain models whose `surfaceId` is
-  already in the player's `CleanedStains`, so cleaned stains never reappear. (Unlike
-  walls, a cleaned stain is fully removed — there is no overlay to skip.)
+    `{ businessId, surfaceId, model }`; anything else is ignored.
+- **Flow:** `BroomController` (client) raycasts on click, and on a valid Hitbox (for the
+  business whose job it holds) fires `CleanDecal` and shows a cosmetic billboard progress
+  bar. `DecalCleaningService` (server) validates (active job / equipped / one-at-a-time /
+  not-already-cleaned-on-this-job), then **runs the UseTime timer itself**, re-validates,
+  rewards the player, records the stain in the player's **`JobServer`** (which may complete
+  the job), and fires `DecalCleaned` back to **that** client. The stain model is **shared
+  and left intact server-side**; the cleaning player's client **hides** its copy via
+  `DecalVisibility` (which already keeps stains hidden unless you're on the job), and
+  re-accepting restores it for the redo. **UseTime** comes from the broom Item in
+  `ToolConfig`; both sides read the same source so the bar mirrors the server timer.
+- **Cleaned-stain tracking lives in the `JobServer`**, so it resets on each accept — the
+  player can redo the job and earn the rewards again.
 
 ### Tool
 - The **Pressure Washer** and **Broom** `Tool`s live in **`StarterPack`** (authored in
@@ -178,28 +200,40 @@ ReplicatedStorage/SharedModules/
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
 ReplicatedStorage/Remotes/
-  CleanSurface          RemoteEvent (client → server wall completion report)
-  CleanDecal            RemoteEvent (client → server stain-click intent)
+  AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
+  CleanProgress         RemoteEvent (client → server: actively washing a wall; wash reward)
+  WallCleaned           RemoteEvent (client → server: a wall is fully erased; job progress)
+  CleanDecal            RemoteEvent (client → server: stain-click intent)
+  DecalCleaned          RemoteEvent (server → client: hide your local copy of a cleaned stain)
+  RewardPopup           RemoteEvent (server → client: show floating +XP/+Cash)
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + CleaningService + DecalCleaningService
-  Modules/CleaningService.luau       validates + saves cleaned walls (monotonic guard)
-  Modules/DecalCleaningService.luau  server-authoritative broom timer + stain delete/save
-  Modules/BusinessSpawner.luau       clones owned businesses; prunes already-cleaned stains
-  Modules/PlotService.luau           plot assignment
+  Main.server.luau      inits DataService (useMock) + Plot/Job/Cleaning/DecalCleaning services
+  Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob, teleport, endJob
+  Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion reward
+  Modules/CleaningService.luau       wall wash reward + WallCleaned→job, gated by active job (no saving)
+  Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; per-client hide via DecalCleaned
+  Modules/PlotService.luau           plot (home base) assignment + spawn
+  Modules/ProgressionService.luau    awards Cash/XP + reward popups
   Modules/InventoryManager.luau      present but NOT yet wired into Main
 
 StarterPlayer/StarterPlayerScripts/
-  Main.client.luau                 inits DataService client + SurfaceManager + PressureWasherController + BroomController
-  Modules/SurfaceManager.luau      owns surface lifetime + persistence checks + remote
+  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI
+  Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide
+  Modules/JobClient.luau           one active job (class): loads overlays, restores stains, local completion %
+  Modules/SurfaceManager.luau      wall-overlay engine, driven by JobClient (buildWalls/clear)
+  Modules/DecalVisibility.luau     stain visibility: hidden unless on the job; per-client clean + redo
   Modules/CleanableSurface.luau    dirt-overlay OOP class
   Modules/PressureWasherController.luau   tool input + raycast + cleaning
-  Modules/BroomController.luau     broom input + raycast + cosmetic progress bar (no verification)
+  Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
+  Modules/TempJobButton.luau       THROWAWAY: on-screen button that fires AcceptJob("mcDonalds")
 ```
 
-Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `StarterPack.Broom`,
-`Workspace` plots (cleanable walls + stains live inside the business templates in
-`ReplicatedStorage.Businesses`).
+Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `StarterPack.Broom`, and the
+shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a `Cleanables`
+folder (`CleanableWalls` + `CleanableDecals`) authored right in the building. The real
+job board UI is TBD; the throwaway `TempJobButton` client module fires `AcceptJob` for
+`mcDonalds` in the meantime.
 
 ## Not yet implemented / planned
 
@@ -218,18 +252,19 @@ even where the feature itself isn't implemented yet.
 
 ## Gameplay loop (target)
 
-1. Player spawns on their own plot with a starting business and starting tools.
-2. Player equips a tool and cleans surfaces / stains in the active business.
-3. Completing a business awards Cash + XP and unlocks new content (next business,
-   tools, upgrades, plot expansion).
-4. Player spends Cash / reaches Levels to unlock the next tier of content.
+1. Player spawns on their own plot (home base) with starting tools.
+2. Player accepts a job from the job board → teleported to that shared business.
+3. Player equips a tool and cleans the business's surfaces / stains, earning Cash + XP
+   per clean (per-session — nothing is saved).
+4. Player spends Cash / reaches Levels to **unlock** more businesses (and tools,
+   upgrades), which makes their jobs available on the board.
 5. Repeat against a steadily expanding catalog of businesses and tools.
 
 ## Replication model (target)
 
 - **Pixel erasing stays client-only, visual, never saved or replicated.**
-- Leaving mid-surface **loses in-progress** erasing (nothing persists until completion).
-- Only the **completion boolean** is saved/replicated — never pixel data. 
+- Cleaning is **per-session**: leaving (or switching jobs) loses all cleaning progress.
+  Nothing about cleaned walls/stains is saved — only the business `Unlocked` flag is.
 
 ## Data / Persistence — DataService
 
@@ -249,9 +284,9 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
 - `Cash: number`
 - `Level: { CurrentLevel: number, XP: number }` — XP-to-next-level via a formula (TBD).
 - `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
-  `BaseRate`, `Unlocked`, `Cleaned`, `Name`, `UniqueID`,
-  `CleanedParts: {[string]: boolean}?` (per-surface completion for the pressure washer),
-  `CleanedStains: {[string]: boolean}?` (per-stain completion for the broom).
+  `BaseReward`, `Unlocked`, `Name`, `UniqueID`. **`Unlocked`** is the only field that
+  gates gameplay — it decides whether the player may accept that business's job. Cleaned
+  state is **not** stored (jobs are per-session).
 - `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
   `Unlocked`, `Cost`, `UniqueID`, optional `Range?` (max cleaning distance, studs) and
   optional `Power?`. **`Power`** is a tool tier that will gate **which floor/surface
@@ -275,11 +310,9 @@ writes via DataService's path API.
 ## StreamingEnabled (target)
 
 - Cleaning code **must not assume surfaces are loaded** — wait for instances and handle
-  `nil`. (The tag-added signal already covers stream-in.)
-- Players clean only their **own nearby plot**, so the active business is reliably
-  streamed in.
-- **Saved completion data replicates regardless of streaming**, so surfaces render to
-  the correct state on load.
+  `nil`. (`SurfaceManager`'s `ChildAdded` watch + budgeted queue already cover stream-in.)
+- A player only cleans the **shared business of their active job**, which they were just
+  teleported into, so it's reliably streamed in.
 
 ## Architecture — entry points & service modules
 

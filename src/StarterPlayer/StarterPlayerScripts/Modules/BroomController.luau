@@ -148,6 +148,12 @@ local function onClick()
 	if not identity then
 		return
 	end
+	-- Stains are shared and visible to everyone, but you can only clean the business
+	-- whose job you currently hold. Skip (no remote, no cosmetic bar) otherwise -- the
+	-- server would reject it anyway, and the bar would just mislead.
+	if localPlayer:GetAttribute(Config.ActiveJobAttribute) ~= identity.businessId then
+		return
+	end
 	local hitbox = identity.model:FindFirstChild(Config.HitboxName)
 	if hitbox and hitbox:IsA("BasePart") then
 		startClean(identity.model, hitbox)

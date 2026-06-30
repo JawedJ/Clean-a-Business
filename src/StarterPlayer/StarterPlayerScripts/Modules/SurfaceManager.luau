@@ -1,35 +1,30 @@
 --!strict
 
--- Owns the lifetime of every CleanableSurface on the client. Cleanable walls are
--- the BaseParts under the local player's assigned plot:
---   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls
--- It builds one CleanableSurface per wall (and any added later), tears them down
--- when removed, and reports completion to the server. The controller looks
--- surfaces up here via getSurface.
+-- The wall-overlay ENGINE. Builds and tears down one CleanableSurface (dirt overlay) per
+-- cleanable wall, and reports completion. It is driven by JobClient -- it no longer
+-- decides which business is active: JobClient calls `buildWalls` with the current job's
+-- CleanableWalls folder (and a callback for finished walls) and `clear` when the job ends.
+-- One job's walls are tracked at a time.
 --
--- Building an overlay is main-thread work (EditableImage create + upload), so
--- when a business spawns its walls are not built all at once: they're queued and
--- drained under a small per-frame time budget, spreading the cost across frames
--- so a burst of walls never stalls a frame.
+-- Cleanable walls are the BaseParts in:
+--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWalls
+-- The overlay is a per-client EditableImage layered on the shared wall, so other players'
+-- cleaning never affects this client's overlay. Nothing is saved -- jobs are per-session.
+--
+-- Building an overlay is main-thread work (EditableImage create + upload), so walls are
+-- queued and drained under a small per-frame time budget, spreading the cost across
+-- frames so a burst of walls never stalls a frame.
 
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local SurfaceResolver = require(ReplicatedStorage.SharedModules.SurfaceResolver)
 local CleanableSurface = require(script.Parent.CleanableSurface)
 local VfxManager = require(ReplicatedStorage.SharedModules.VfxManager)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
-local DataService = require(ReplicatedStorage.Packages.DataService).client
 
 -- Sound played when the local player finishes cleaning a wall.
 local COMPLETION_SOUND = "PressureCompletionAudio"
-
-local CleanSurface = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanSurface") :: RemoteEvent
-
-local localPlayer = Players.LocalPlayer
 
 -- Seconds of overlay-building allowed per frame before yielding to the next one.
 local FRAME_BUDGET = 0.002
@@ -40,11 +35,10 @@ local surfaces: { [BasePart]: CleanableSurface.CleanableSurface } = {}
 local buildQueue: { BasePart } = {}
 local queued: { [BasePart]: boolean } = {}
 
--- True if this wall was already cleaned in a previous session (per saved data).
-local function isAlreadyCleaned(identity: SurfaceResolver.SurfaceIdentity): boolean
-	local cleanedParts = DataService:get({ "BusinessList", identity.businessId, "CleanedParts" })
-	return cleanedParts ~= nil and cleanedParts[identity.surfaceId] == true
-end
+-- Connections watching the current job's CleanableWalls folder, dropped on `clear`.
+local watchConns: { RBXScriptConnection } = {}
+-- Called with the wall part when one is fully cleaned (set by buildWalls per job).
+local onWallCleaned: ((BasePart) -> ())? = nil
 
 -- Actually create the overlay for a wall (the expensive, main-thread part).
 local function buildSurface(part: BasePart)
@@ -52,26 +46,26 @@ local function buildSurface(part: BasePart)
 		return
 	end
 	-- Re-resolve at build time: the part may have moved/left the queue meanwhile.
-	local identity = SurfaceResolver.resolve(part)
-	if not identity or isAlreadyCleaned(identity) then
+	if not SurfaceResolver.resolve(part) then
 		return
 	end
 	local surface = CleanableSurface.new(part)
 	surface.onCleaned = function()
-		CleanSurface:FireServer(part)
 		VfxManager.cleanPop(part)
 		SoundManager.playOneShot(COMPLETION_SOUND)
+		if onWallCleaned then
+			onWallCleaned(part)
+		end
 	end
 	surfaces[part] = surface
 end
 
--- Queue a wall for building, after cheap checks so we never queue non-walls.
+-- Queue a wall for building, after a cheap check so we never queue non-walls.
 local function addSurface(inst: Instance)
 	if not inst:IsA("BasePart") or surfaces[inst] or queued[inst] then
 		return
 	end
-	local identity = SurfaceResolver.resolve(inst)
-	if not identity or isAlreadyCleaned(identity) then
+	if not SurfaceResolver.resolve(inst) then
 		return
 	end
 	queued[inst] = true
@@ -99,7 +93,7 @@ local function processQueue()
 			local startClock = os.clock()
 			repeat
 				local part = table.remove(buildQueue)
-				-- queued[part] is cleared by removeSurface if the wall went away.
+				-- queued[part] is cleared by removeSurface/clear if the wall went away.
 				if part and queued[part] then
 					queued[part] = nil
 					buildSurface(part)
@@ -114,46 +108,37 @@ function SurfaceManager.getSurface(part: BasePart): CleanableSurface.CleanableSu
 	return surfaces[part]
 end
 
--- Build/track every wall inside one CleanableWalls folder.
-local function watchWalls(wallsFolder: Instance)
+-- Tear down the current job's overlays: stop watching the walls folder, destroy every
+-- overlay, drop anything still queued, and forget the completion callback.
+function SurfaceManager.clear()
+	for _, conn in watchConns do
+		conn:Disconnect()
+	end
+	table.clear(watchConns)
+	onWallCleaned = nil
+
+	for part, surface in surfaces do
+		surface:destroy()
+		surfaces[part] = nil
+	end
+	table.clear(buildQueue)
+	table.clear(queued)
+end
+
+-- Build overlays for every wall in `wallsFolder` (and any added later), reporting each
+-- finished wall to `cleanedCallback`. Replaces whatever was being tracked before.
+function SurfaceManager.buildWalls(wallsFolder: Instance, cleanedCallback: (BasePart) -> ())
+	SurfaceManager.clear()
+	onWallCleaned = cleanedCallback
 	for _, inst in wallsFolder:GetChildren() do
 		addSurface(inst)
 	end
-	wallsFolder.ChildAdded:Connect(addSurface)
-	wallsFolder.ChildRemoved:Connect(removeSurface)
-end
-
--- Find the CleanableWalls folder for one business and start watching it. Uses
--- WaitForChild since a business spawned at runtime replicates as a subtree and
--- ChildAdded can fire before its descendants arrive.
-local function watchBusiness(businessFolder: Instance)
-	local cleanables = businessFolder:WaitForChild(Config.CleanablesFolderName, 10)
-	local walls = cleanables and cleanables:WaitForChild(Config.WallsFolderName, 10)
-	if walls then
-		watchWalls(walls)
-	end
-end
-
--- Block until the server has assigned this player a plot, then return it.
-local function getAssignedPlot(): Instance
-	local plotName = localPlayer:GetAttribute(Config.PlotAttribute)
-	while type(plotName) ~= "string" do
-		localPlayer:GetAttributeChangedSignal(Config.PlotAttribute):Wait()
-		plotName = localPlayer:GetAttribute(Config.PlotAttribute)
-	end
-	return Workspace:WaitForChild(plotName)
+	table.insert(watchConns, wallsFolder.ChildAdded:Connect(addSurface))
+	table.insert(watchConns, wallsFolder.ChildRemoved:Connect(removeSurface))
 end
 
 function SurfaceManager.init()
 	task.spawn(processQueue)
-
-	local plot = getAssignedPlot()
-	local businesses = plot:WaitForChild(Config.BusinessesFolderName)
-	for _, businessFolder in businesses:GetChildren() do
-		watchBusiness(businessFolder)
-	end
-	-- Businesses unlocked/added to the plot later become cleanable too.
-	businesses.ChildAdded:Connect(watchBusiness)
 end
 
 return SurfaceManager

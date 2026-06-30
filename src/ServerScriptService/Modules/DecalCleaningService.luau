@@ -1,20 +1,21 @@
 --!strict
 
--- Server side of stain (broom) cleaning, and the AUTHORITY over it. Cleanable
--- stains live in the Studio place under each plot:
---   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableDecals.<model>
--- The Broom tool (StarterPack) likewise lives in the place, not in code.
+-- Server side of stain (broom) cleaning, and the AUTHORITY over it. Cleanable stains live
+-- in the shared business buildings:
+--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableDecals.<model>
+-- The Broom tool (StarterPack) lives in the place, not in code.
 --
--- The client sends a single "I clicked this stain" request; it does NOT decide
--- when the stain is cleaned. The server validates the request, then runs the
--- UseTime timer itself (UseTime read from the player's broom in their DataService
--- Inventory, so upgrades apply; the ToolConfig default is only a fallback). When
--- its own timer elapses it re-validates and deletes the model, saving it under
--- BusinessList[businessId].CleanedStains[surfaceId] via DataService. The client's
--- progress bar is purely cosmetic feedback.
+-- The client sends a single "I clicked this stain" request; it does NOT decide when the
+-- stain is cleaned. The server validates the request (the player holds this business's
+-- job, has the broom equipped, and hasn't already cleaned this stain on this job), then
+-- runs the UseTime timer itself. When its own timer elapses it re-validates, pays the
+-- per-stain reward, records the stain in the player's JobServer (which may complete the
+-- job), and -- because the stains are SHARED across every player -- it does NOT destroy
+-- the model. Instead it tells the cleaning player's client (DecalCleaned remote) to hide
+-- that model locally, so the stain vanishes for them while everyone else still sees it.
 --
--- (Unlike the EditableImage wall cleaning -- which is inherently client-driven
--- pixel work -- there is nothing client-only here, so none of it is trusted.)
+-- Which stains a player has cleaned lives in their JobServer, so it resets every time the
+-- job is (re)accepted -- letting them redo the job for the reward again.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -22,10 +23,12 @@ local Players = game:GetService("Players")
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
 local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
-local PlotService = require(script.Parent.PlotService)
+local JobService = require(script.Parent.JobService)
 local ProgressionService = require(script.Parent.ProgressionService)
 
-local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanDecal") :: RemoteEvent
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local CleanDecal = Remotes:WaitForChild("CleanDecal") :: RemoteEvent
+local DecalCleaned = Remotes:WaitForChild("DecalCleaned") :: RemoteEvent
 
 local TOOL_ID = ToolConfig.startingBroom.UniqueID
 
@@ -33,20 +36,20 @@ local TOOL_ID = ToolConfig.startingBroom.UniqueID
 local DECAL_XP = 40
 local DECAL_CASH = 40
 
--- This player's current broom UseTime (seconds), read fresh so tool upgrades take
--- effect immediately, falling back to the static ToolConfig default.
+-- This player's current broom UseTime (seconds), read fresh so tool upgrades take effect
+-- immediately, falling back to the static ToolConfig default.
 local function getUseTime(player: Player): number
 	return DataService:get(player, { "Inventory", TOOL_ID, "UseTime" }) or ToolConfig[TOOL_ID].UseTime
 end
 
 local DecalCleaningService = {}
 
--- A player may only clean one stain at a time; they must wait the full UseTime
--- before the broom is usable again. Tracked server-side, never trusted from the client.
+-- A player may only clean one stain at a time; they must wait the full UseTime before the
+-- broom is usable again. Tracked server-side, never trusted from the client.
 local activeClean: { [Player]: boolean } = {}
 
--- True if the player currently has the broom equipped (its Tool is parented under
--- their character while equipped).
+-- True if the player currently has the broom equipped (its Tool is parented under their
+-- character while equipped).
 local function hasBroomEquipped(player: Player): boolean
 	local character = player.Character
 	if not character then
@@ -60,18 +63,19 @@ local function hasBroomEquipped(player: Player): boolean
 	return false
 end
 
--- Validate that this player may clean this stain right now. Returns the identity.
+-- Validate that this player may clean this stain right now: it's a real stain, it belongs
+-- to the business whose job they currently hold, and they haven't already cleaned it on
+-- this job. Returns the identity.
 local function validate(player: Player, target: Instance): DecalResolver.DecalIdentity?
 	local identity = DecalResolver.resolve(target)
 	if not identity then
 		return nil
 	end
-	-- The stain must be on the plot this player was assigned.
-	if identity.plot ~= PlotService.getPlot(player) then
+	if JobService.getActiveJob(player) ~= identity.businessId then
 		return nil
 	end
-	-- ...and belong to a business the player actually has.
-	if not DataService:get(player, { "BusinessList", identity.businessId }) then
+	local job = JobService.getJob(player)
+	if not job or job:isDecalCleaned(identity.surfaceId) then
 		return nil
 	end
 	return identity
@@ -103,23 +107,22 @@ function DecalCleaningService.init()
 		task.delay(getUseTime(player), function()
 			activeClean[player] = nil
 
-			-- Re-validate at completion: the stain (or the player's claim to it) may
-			-- have changed during the wait.
+			-- Re-validate at completion: the player's job (or their claim to this stain)
+			-- may have changed during the wait.
 			if identity.model.Parent == nil then
 				return
 			end
-			if not validate(player, identity.model) then
+			local job = JobService.getJob(player)
+			if not job or not validate(player, identity.model) then
 				return
 			end
 
-			DataService:set(
-				player,
-				{ "BusinessList", identity.businessId, "CleanedStains", identity.surfaceId },
-				true
-			)
-			identity.model:Destroy()
-
+			-- Reward them, tell THEIR client to hide its copy of the shared model, and
+			-- record the stain in the job (which may complete it). The server model is
+			-- left intact so other players can still clean it independently.
 			ProgressionService.reward(player, DECAL_XP, DECAL_CASH)
+			DecalCleaned:FireClient(player, identity.model)
+			job:markDecalCleaned(identity.surfaceId)
 		end)
 	end)
 

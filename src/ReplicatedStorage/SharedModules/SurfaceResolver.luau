@@ -1,11 +1,11 @@
 --!strict
 
--- Resolves a cleanable wall BasePart to the identity used for saving its cleaned
--- state. Walls live at:
---   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>
+-- Resolves a cleanable wall BasePart to its (businessId, surfaceId) identity. Walls
+-- live in the shared business buildings at:
+--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWalls.<part>
 -- so the businessId is the business folder's name and the surfaceId is the wall
 -- part's name. Returns nil for anything that is not a wall sitting in that exact
--- hierarchy. Shared so the client (overlay) and server (save validation) agree on
+-- hierarchy. Shared so the client (overlay) and server (reward validation) agree on
 -- what counts as a cleanable wall.
 
 local Workspace = game:GetService("Workspace")
@@ -14,7 +14,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 
 export type SurfaceIdentity = {
-	plot: Instance,
 	businessId: string,
 	surfaceId: string,
 }
@@ -42,18 +41,13 @@ function SurfaceResolver.resolve(part: BasePart): SurfaceIdentity?
 	if not businessFolder then
 		return nil
 	end
+	-- The Businesses folder must be a direct child of Workspace (the shared buildings).
 	local businessesFolder = named(businessFolder.Parent, Config.BusinessesFolderName)
-	if not businessesFolder then
-		return nil
-	end
-	-- The plot is whatever holds Businesses, and it must be a top-level plot.
-	local plot = businessesFolder.Parent
-	if not plot or plot.Parent ~= Workspace then
+	if not businessesFolder or businessesFolder.Parent ~= Workspace then
 		return nil
 	end
 
 	return {
-		plot = plot,
 		businessId = businessFolder.Name,
 		surfaceId = part.Name,
 	}

@@ -1,16 +1,16 @@
 --!strict
 
 -- Assigns each player one of the workspace plots (Plot1..Plot(PlotCount)) on join
--- and frees it on leave. The owner is told which plot is theirs through a player
--- attribute so the client only makes that plot's walls cleanable. Other systems
--- call getPlot to authorize actions against a player's own plot.
+-- as their personal home/spawn base, and frees it on leave. The owner is told which
+-- plot is theirs through a player attribute, and their character spawns there on
+-- join and respawn. Plots no longer hold businesses -- cleaning happens at the
+-- shared business buildings, gated by the player's accepted job (see JobService).
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
-local BusinessSpawner = require(script.Parent.BusinessSpawner)
 
 local PlotService = {}
 
@@ -53,10 +53,6 @@ local function assign(player: Player)
 	plotByPlayer[player] = plot
 	player:SetAttribute(Config.PlotAttribute, plot.Name)
 
-	-- Fill the plot with the player's owned businesses. Spawned in its own thread
-	-- since it yields for data to load; the plot is already assigned by now.
-	task.spawn(BusinessSpawner.populate, player, plot)
-
 	-- Spawn the character on the plot now and on every future respawn.
 	characterConns[player] = player.CharacterAdded:Connect(function(character)
 		spawnCharacterAt(character, plot)
@@ -77,8 +73,6 @@ local function release(player: Player)
 	if plot then
 		ownerByPlot[plot] = nil
 		plotByPlayer[player] = nil
-		-- Empty the plot so the next player to take it starts fresh.
-		BusinessSpawner.clear(plot)
 	end
 end
 

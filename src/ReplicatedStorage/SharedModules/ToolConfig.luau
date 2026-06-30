@@ -27,7 +27,7 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		UniqueID = "pressureWasher",
 		Range = 70,
 		Power = 1.0,
-		Radius = 1.0,
+		Radius = 0.8,
 	},
 }
 

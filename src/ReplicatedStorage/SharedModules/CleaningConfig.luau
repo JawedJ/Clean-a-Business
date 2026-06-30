@@ -9,45 +9,51 @@
 -- at runtime, in each player's DataService Inventory so they can change with
 -- upgrades. This module holds only mechanic-wide constants.
 local CleaningConfig = {
-	-- Cleanable walls live in the workspace under each plot:
-	--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableWalls.<part>
+	-- Businesses are SHARED, pre-placed buildings under one Workspace folder, one per
+	-- businessId (NOT cloned per plot -- every player cleans the same building):
+	--   Workspace.<BusinessesFolderName>.<businessId>
+	-- Each building holds a TeleportPart (where accepting the job drops the player) and
+	-- a Cleanables folder authored directly in the building. The Cleanables geometry is
+	-- shared/replicated; only the per-client wall overlays are built at job time.
+	--
+	-- Cleanable walls live at:
+	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWalls.<part>
 	-- The business folder's name is the BusinessId and the part's name is the
-	-- SurfaceId used to key saved cleaned state
-	-- (BusinessList[BusinessId].CleanedParts[SurfaceId] = true).
+	-- SurfaceId. Cleaned state is NOT saved -- jobs are per-session.
 	BusinessesFolderName = "Businesses",
 	CleanablesFolderName = "Cleanables",
 	WallsFolderName = "CleanableWalls",
 
-	-- Cleanable stains (broom targets) live alongside the walls under each plot:
-	--   Workspace.<Plot>.Businesses.<businessId>.Cleanables.CleanableDecals.<model>
+	-- Cleanable stains (broom targets) live alongside the walls:
+	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableDecals.<model>
 	-- Each <model> has a child BasePart named HitboxName the player clicks, and a
-	-- SurfaceIdAttribute attribute whose value is the stain's id, used to key saved
-	-- cleaned state (BusinessList[BusinessId].CleanedStains[SurfaceId] = true).
+	-- SurfaceIdAttribute attribute whose value is the stain's id (used server-side to
+	-- track which stains a player has already cleaned this session).
 	DecalsFolderName = "CleanableDecals",
 	HitboxName = "Hitbox",
 	SurfaceIdAttribute = "surfaceId",
 
-	-- Plots are direct children of Workspace named Plot1..Plot(PlotCount). Each
-	-- joining player is assigned one and may only clean walls within it. The
-	-- assigned plot's name is published to the owner via this player attribute.
+	-- Plots are still a thing: each joining player is assigned a personal plot (their
+	-- home/spawn base) named Plot1..Plot(PlotCount), published to the owner via this
+	-- attribute. Plots no longer hold businesses -- cleaning happens at the shared
+	-- buildings above, gated by the player's accepted job rather than plot ownership.
 	PlotCount = 8,
 	PlotAttribute = "Plot",
 
-	-- Part inside each plot folder the owner's character is teleported onto when
-	-- they're assigned the plot and whenever they respawn.
+	-- Part inside each plot folder the owner's character spawns on when assigned the
+	-- plot and on every respawn (unless they currently hold a job, see ActiveJob).
 	PlotSpawnPartName = "spawnPart",
 
-	-- Business templates (Models named after their businessId) live in
-	-- ReplicatedStorage.<BusinessesFolderName>. On assignment, each owned business
-	-- is cloned into the plot's Businesses folder and pivoted onto its spawn part,
-	-- which lives in the plot's SpawnsFolderName folder and is named
-	-- <businessId> .. SpawnSuffix (e.g. "mcDonaldsSpawn").
-	SpawnsFolderName = "BusinessSpawns",
-	SpawnSuffix = "Spawn",
+	-- The player's currently accepted job (a businessId) is published to their own
+	-- client through this attribute. The client builds wall overlays for whichever
+	-- business it names and tears them down when it changes. Cleared (nil) = no job.
+	ActiveJobAttribute = "ActiveJob",
 
-	-- Reference part inside each business template. The business is translated so
-	-- this part lands exactly on its spawn point (orientation kept as authored).
-	BusinessBasePartName = "BasePart",
+	-- Part inside each shared business building the player is teleported onto when
+	-- they accept that business's job. (Respawns always go back to the player's plot,
+	-- never the job.) Lifted by TeleportOffset so the character drops in upright.
+	TeleportPartName = "TeleportPart",
+	TeleportOffset = Vector3.new(0, 5, 0),
 
 	-- The dirt overlay texture. If it fails to load we fall back to a flat brown.
 	DirtAsset = "rbxassetid://103492282492264",
@@ -59,7 +65,7 @@ local CleaningConfig = {
 	-- Fallback brush radius in studs (world space), used only if a cleaning tool's
 	-- per-player Radius isn't available. The live value comes from the player's
 	-- DataService Inventory (ToolConfig holds the default), like Range and UseTime.
-	BrushWorldRadius = 1.0,
+	BrushWorldRadius = 0.8,
 
 	-- Max world distance (studs) between two consecutive cleaning hits for the
 	-- stroke to bridge the gap. Keeps fast strokes hole-free (including across the
