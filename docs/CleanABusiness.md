@@ -226,14 +226,13 @@ StarterPlayer/StarterPlayerScripts/
   Modules/CleanableSurface.luau    dirt-overlay OOP class
   Modules/PressureWasherController.luau   tool input + raycast + cleaning
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
-  Modules/TempJobButton.luau       THROWAWAY: on-screen button that fires AcceptJob("mcDonalds")
 ```
 
 Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `StarterPack.Broom`, and the
 shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a `Cleanables`
-folder (`CleanableWalls` + `CleanableDecals`) authored right in the building. The real
-job board UI is TBD; the throwaway `TempJobButton` client module fires `AcceptJob` for
-`mcDonalds` in the meantime.
+folder (`CleanableWalls` + `CleanableDecals`) authored right in the building. The job
+board UI is TBD; whatever builds it just needs to fire the `AcceptJob` remote with a
+`businessId`.
 
 ## Not yet implemented / planned
 
