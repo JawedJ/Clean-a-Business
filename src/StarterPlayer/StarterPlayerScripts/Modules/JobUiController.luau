@@ -21,10 +21,12 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
+local PanelAnimator = require(ReplicatedStorage.SharedModules.PanelAnimator)
 
 local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
 
@@ -43,6 +45,9 @@ local JobUiController = {}
 -- Current top-level UI elements, refreshed each time the ScreenGui is (re)bound.
 local jobButton: ImageButton? = nil
 local jobFrame: Frame? = nil
+-- Drives the board's open/close (slide + expand) animation; rebuilt per bind alongside
+-- jobFrame since the ScreenGui is re-cloned each respawn.
+local jobPanel: PanelAnimator.PanelAnimator? = nil
 
 -- One refresher per TaskDesign row, rebuilt on each bind; re-evaluates its lock state.
 local taskRefreshers: { () -> () } = {}
@@ -75,8 +80,9 @@ local function applyActiveJobState()
 		button.Visible = not active
 	end
 	local frame = jobFrame
-	if active and frame and frame.Parent then
-		frame.Visible = false
+	local panel = jobPanel
+	if active and frame and frame.Parent and panel then
+		panel:hideInstant()
 	end
 end
 
@@ -85,13 +91,15 @@ end
 -- is bound; returns true when it actually toggled, so the key path can play its click.
 local function toggleBoard(): boolean
 	local frame = jobFrame
-	if not frame or not frame.Parent or hasActiveJob() then
+	local panel = jobPanel
+	if not frame or not frame.Parent or not panel or panel:isAnimating() or hasActiveJob() then
 		return false
 	end
-	local opening = not frame.Visible
-	frame.Visible = opening
-	if opening then
+	if frame.Visible then
+		panel:close()
+	else
 		refreshTasks() -- pick up any unlocks since it was last shown
+		panel:open()
 	end
 	return true
 end
@@ -139,12 +147,15 @@ local function bind(screenGui: Instance)
 
 	jobButton = button
 	jobFrame = frame
+	jobPanel = PanelAnimator.new(frame)
 	frame.Visible = false
 
 	button.Activated:Connect(toggleBoard)
 
 	exitButton.Activated:Connect(function()
-		frame.Visible = false
+		if jobPanel then
+			jobPanel:close()
+		end
 	end)
 
 	taskRefreshers = {}

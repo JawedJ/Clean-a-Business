@@ -18,6 +18,8 @@ local CLICK_SOUND = "UIClick"
 local HOVER_SOUND = "UIHover"
 -- Skip past the hover sound's quiet lead-in so it reads instantly on hover.
 local HOVER_START = 0.140
+-- Only this button plays the hover sound; every button still plays the click.
+local HOVER_BUTTON_NAME = "JobButton"
 
 local UiSoundController = {}
 
@@ -25,9 +27,11 @@ local function wireButton(button: GuiButton)
 	button.Activated:Connect(function()
 		SoundManager.playOneShot(CLICK_SOUND)
 	end)
-	button.MouseEnter:Connect(function()
-		SoundManager.playOneShot(HOVER_SOUND, { startTime = HOVER_START })
-	end)
+	if button.Name == HOVER_BUTTON_NAME then
+		button.MouseEnter:Connect(function()
+			SoundManager.playOneShot(HOVER_SOUND, { startTime = HOVER_START })
+		end)
+	end
 end
 
 function UiSoundController.init()
