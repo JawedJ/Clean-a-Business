@@ -15,6 +15,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
 
 local JobServer = {}
@@ -108,6 +109,13 @@ function JobServer.complete(self: JobServer)
 		return
 	end
 	self.completed = true
+
+	-- Tally this completion in the player's business record. The record is guaranteed to
+	-- exist -- a job can't start (let alone complete) unless the business was Unlocked --
+	-- but default the count anyway so a missing field can't error the write.
+	DataService:update(self.player, { "BusinessList", self.businessId, "Completions" }, function(current: number?)
+		return (current or 0) + 1
+	end)
 
 	-- Completion pays the business's BaseReward as Cash only -- no XP (XP comes from the
 	-- per-clean rewards) and no floating popup (awardCash, not reward, so nothing is fired

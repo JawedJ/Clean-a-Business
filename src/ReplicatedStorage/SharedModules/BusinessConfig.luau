@@ -14,6 +14,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		Unlocked = true,
 		Name = "McDonalds",
 		UniqueID = "mcDonalds",
+		Completions = 0,
 	},
 
 	starbucks = {
@@ -21,6 +22,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		Unlocked = false,
 		Name = "Starbucks",
 		UniqueID = "starbucks",
+		Completions = 0,
 	},
 }
 

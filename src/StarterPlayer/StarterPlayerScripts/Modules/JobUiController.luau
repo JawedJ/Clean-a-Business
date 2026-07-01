@@ -20,9 +20,11 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
+local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 
 local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
 
@@ -30,6 +32,11 @@ local localPlayer = Players.LocalPlayer
 
 local SCREEN_GUI_NAME = "ScreenGui"
 local BUSINESS_ID_ATTRIBUTE = "BusinessId"
+-- Keyboard shortcut that toggles the board, same as clicking the JobButton.
+local TOGGLE_KEY = Enum.KeyCode.B
+-- UI click sound played for the keyboard shortcut (the JobButton gets it automatically
+-- from UiSoundController's per-GuiButton wiring; the key press doesn't).
+local CLICK_SOUND = "UIClick"
 
 local JobUiController = {}
 
@@ -71,6 +78,22 @@ local function applyActiveJobState()
 	if active and frame and frame.Parent then
 		frame.Visible = false
 	end
+end
+
+-- Toggle the board open/closed. Shared by the JobButton and the TOGGLE_KEY shortcut.
+-- No-op (returns false) while on a job (the whole UI is hidden then) or before anything
+-- is bound; returns true when it actually toggled, so the key path can play its click.
+local function toggleBoard(): boolean
+	local frame = jobFrame
+	if not frame or not frame.Parent or hasActiveJob() then
+		return false
+	end
+	local opening = not frame.Visible
+	frame.Visible = opening
+	if opening then
+		refreshTasks() -- pick up any unlocks since it was last shown
+	end
+	return true
 end
 
 -- Wire one TaskDesign row and return its refresher, or nil if it isn't a real row
@@ -118,16 +141,7 @@ local function bind(screenGui: Instance)
 	jobFrame = frame
 	frame.Visible = false
 
-	button.Activated:Connect(function()
-		if hasActiveJob() then
-			return
-		end
-		local opening = not frame.Visible
-		frame.Visible = opening
-		if opening then
-			refreshTasks() -- pick up any unlocks since it was last shown
-		end
-	end)
+	button.Activated:Connect(toggleBoard)
 
 	exitButton.Activated:Connect(function()
 		frame.Visible = false
@@ -150,6 +164,14 @@ function JobUiController.init()
 	-- Persistent subscriptions; each reads whichever elements/rows are currently bound.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(applyActiveJobState)
 	DataService:getChangedSignal({ "BusinessList" }):Connect(refreshTasks)
+
+	-- TOGGLE_KEY opens/closes the board just like the JobButton. Ignore it when the
+	-- keystroke was already consumed by the game (e.g. typing in a TextBox).
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if not gameProcessed and input.KeyCode == TOGGLE_KEY and toggleBoard() then
+			SoundManager.playOneShot(CLICK_SOUND)
+		end
+	end)
 
 	local function onChild(child: Instance)
 		if child.Name == SCREEN_GUI_NAME then

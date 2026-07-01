@@ -27,6 +27,7 @@ export type Business = {
 	Unlocked: boolean,
 	Name: string,
 	UniqueID: string,
+	Completions: number,
 }
 
 
@@ -46,6 +47,7 @@ local DataTemplate = {
 			Unlocked = true,
 			Name = "McDonalds",
 			UniqueID = "mcDonalds",
+			Completions = 0
 		},
 
 

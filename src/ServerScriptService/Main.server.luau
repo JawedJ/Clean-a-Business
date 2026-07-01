@@ -7,7 +7,6 @@ local DecalCleaningService = require(game.ServerScriptService.Modules.DecalClean
 
 DataService:init({
 	template = DataTemplate,
-	useMock = true,
 })
 
 
