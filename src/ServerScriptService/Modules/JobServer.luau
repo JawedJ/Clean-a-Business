@@ -117,13 +117,13 @@ function JobServer.complete(self: JobServer)
 		return (current or 0) + 1
 	end)
 
-	-- Completion pays the business's BaseReward as Cash only -- no XP (XP comes from the
-	-- per-clean rewards) and no floating popup (awardCash, not reward, so nothing is fired
-	-- to the client).
+	-- Completion pays the business's BaseReward (Cash) and XpReward (XP) as a lump bonus on
+	-- top of the per-clean rewards. Paid silently via awardCash/awardXp (not reward), so no
+	-- floating popup is fired to the client -- the balances/XP bar just tick up.
 	local def = BusinessConfig[self.businessId]
-	local bonus = if def then def.BaseReward else 0
-	if bonus > 0 then
-		ProgressionService.awardCash(self.player, bonus)
+	if def then
+		ProgressionService.awardCash(self.player, def.BaseReward)
+		ProgressionService.awardXp(self.player, def.XpReward)
 	end
 
 	self.onComplete(self)

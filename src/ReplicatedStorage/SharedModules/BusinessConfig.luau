@@ -10,11 +10,12 @@ local DataTemplate = require(game.ReplicatedStorage.SharedModules.DataTemplate)
 
 local BusinessConfig: { [string]: DataTemplate.Business } = {
 	mcDonalds = {
-		BaseReward = 100,
+		BaseReward = 2500,
 		Unlocked = true,
 		Name = "McDonalds",
 		UniqueID = "mcDonalds",
 		Completions = 0,
+		XpReward = 250,
 	},
 
 	starbucks = {
@@ -23,6 +24,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		Name = "Starbucks",
 		UniqueID = "starbucks",
 		Completions = 0,
+		XpReward = 500,
 	},
 }
 

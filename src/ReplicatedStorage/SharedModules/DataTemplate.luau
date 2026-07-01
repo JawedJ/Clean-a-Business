@@ -28,6 +28,7 @@ export type Business = {
 	Name: string,
 	UniqueID: string,
 	Completions: number,
+	XpReward: number,
 }
 
 
@@ -43,11 +44,12 @@ local DataTemplate = {
 
 	BusinessList = {
 		["mcDonalds"] = {
-			BaseReward = 100,
+			BaseReward = 2500,
 			Unlocked = true,
 			Name = "McDonalds",
 			UniqueID = "mcDonalds",
-			Completions = 0
+			Completions = 0,
+			XpReward = 250
 		},
 
 

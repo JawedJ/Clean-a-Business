@@ -26,7 +26,7 @@ local TweenService = game:GetService("TweenService")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
-local PanelAnimator = require(ReplicatedStorage.SharedModules.PanelAnimator)
+local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
 
 local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
 
@@ -47,7 +47,7 @@ local jobButton: ImageButton? = nil
 local jobFrame: Frame? = nil
 -- Drives the board's open/close (slide + expand) animation; rebuilt per bind alongside
 -- jobFrame since the ScreenGui is re-cloned each respawn.
-local jobPanel: PanelAnimator.PanelAnimator? = nil
+local jobPanel: UiAnimations.Panel? = nil
 
 -- One refresher per TaskDesign row, rebuilt on each bind; re-evaluates its lock state.
 local taskRefreshers: { () -> () } = {}
@@ -147,10 +147,11 @@ local function bind(screenGui: Instance)
 
 	jobButton = button
 	jobFrame = frame
-	jobPanel = PanelAnimator.new(frame)
+	jobPanel = UiAnimations.Panel.new(frame)
 	frame.Visible = false
 
 	button.Activated:Connect(toggleBoard)
+	UiAnimations.hoverGrow(button)
 
 	exitButton.Activated:Connect(function()
 		if jobPanel then
