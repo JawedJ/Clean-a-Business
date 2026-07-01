@@ -81,6 +81,16 @@ function PlotService.getPlot(player: Player): Instance?
 	return plotByPlayer[player]
 end
 
+-- Teleport a player's current character back onto their plot's spawn part. No-op if
+-- they have no plot or no living character. Used when a job finishes to send them home.
+function PlotService.sendToPlotSpawn(player: Player)
+	local plot = plotByPlayer[player]
+	local character = player.Character
+	if plot and character then
+		spawnCharacterAt(character, plot)
+	end
+end
+
 function PlotService.init()
 	for _, player in Players:GetPlayers() do
 		assign(player)

@@ -42,9 +42,11 @@ export type SustainedConfig = {
 	preload: boolean?,
 }
 
--- Options for playOneShot. duration (seconds) cuts playback short, stopping and
--- destroying the clone after that long; omit it to play the whole sound.
+-- Options for playOneShot. startTime (seconds) begins playback partway into the source
+-- instead of at 0. duration (seconds) cuts playback short, stopping and destroying the
+-- clone after that long; omit both to play the whole sound from the start.
 export type OneShotConfig = {
+	startTime: number?,
 	duration: number?,
 }
 
@@ -85,6 +87,12 @@ function SoundManager.playOneShot(soundName: string, config: OneShotConfig?)
 	end)
 	Debris:AddItem(sound, MAX_LIFETIME) -- safety net if Ended never fires
 	sound:Play()
+
+	-- Skip into the source if asked (set after Play so it isn't reset on playback start).
+	local startTime = config and config.startTime
+	if startTime then
+		sound.TimePosition = startTime
+	end
 
 	-- Cut playback short if asked: Stop() doesn't fire Ended, so destroy here too.
 	local duration = config and config.duration

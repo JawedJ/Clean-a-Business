@@ -22,6 +22,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local JobServer = require(script.Parent.JobServer)
+local PlotService = require(script.Parent.PlotService)
 
 local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
 
@@ -98,8 +99,17 @@ local function accept(player: Player, businessId: any)
 	-- exactly the "redo" path -- a fresh JobServer with progress reset to zero.
 	JobService.endJob(player)
 
+	-- This callback runs only on genuine completion (JobServer.complete), not on a
+	-- job switch or leave -- so it's the right place to send the player home. Hold a
+	-- beat so the finish reads (reward, camera restore) before yanking them back, and
+	-- skip the teleport if they've since started another job.
 	jobs[player] = JobServer.new(player, businessId, building, function(_job)
 		JobService.endJob(player)
+		task.delay(1, function()
+			if JobService.getActiveJob(player) == nil then
+				PlotService.sendToPlotSpawn(player)
+			end
+		end)
 	end)
 	player:SetAttribute(Config.ActiveJobAttribute, businessId)
 

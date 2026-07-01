@@ -13,6 +13,9 @@ local BroomController = require(Modules:WaitForChild("BroomController"))
 local Crosshair = require(Modules:WaitForChild("Crosshair"))
 local RewardPopupController = require(Modules:WaitForChild("RewardPopupController"))
 local LevelUiController = require(Modules:WaitForChild("LevelUiController"))
+local JobUiController = require(Modules:WaitForChild("JobUiController"))
+local JobCameraController = require(Modules:WaitForChild("JobCameraController"))
+local UiSoundController = require(Modules:WaitForChild("UiSoundController"))
 
 
 DataService:init()
@@ -26,4 +29,7 @@ BroomController.init()
 Crosshair.init()
 RewardPopupController.init()
 LevelUiController.init()
+JobUiController.init()
+JobCameraController.init()
+UiSoundController.init()
 
