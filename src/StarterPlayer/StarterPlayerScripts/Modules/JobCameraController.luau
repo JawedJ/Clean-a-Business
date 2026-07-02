@@ -4,16 +4,18 @@
 -- back when the job ends. Driven by the same ActiveJob attribute as the rest of the job
 -- client: job start = attribute set, job finish/switch = attribute cleared.
 --
--- On start we remember the player's zoom bounds and how far they were zoomed out, then
--- pin the camera to first person (min = max = FIRST_PERSON_ZOOM) so they can't zoom out.
--- On finish we snap back to the remembered zoom and reopen the original bounds, leaving
--- the camera exactly where it was and free to zoom again.
+-- Off a job we hold CameraMinZoomDistance at IDLE_MIN_ZOOM (third person only). On a job
+-- we pin min = max = FIRST_PERSON_ZOOM so they can't zoom out. On finish we simply RAISE
+-- the min back to IDLE_MIN_ZOOM and leave it there -- the camera clamps its zoom up to the
+-- new min on the next render and stays. The earlier approach snapped a distance for a frame
+-- then dropped the min back to first-person range, which raced the camera's own clamp and
+-- left the player stuck full-screen; never lowering the min below IDLE_MIN_ZOOM off a job
+-- makes that impossible.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 
@@ -23,6 +25,11 @@ local localPlayer = Players.LocalPlayer
 -- forces first person with no room to zoom out.
 local FIRST_PERSON_ZOOM = 0.5
 
+-- Min zoom (studs) held whenever the player is NOT on a job. Keeps them in third person off
+-- the clock, and -- because we never drop the min below this off a job -- the camera can
+-- always clamp itself out of first person, so a finished job can't leave them stuck.
+local IDLE_MIN_ZOOM = 10
+
 -- Tap this to toggle the mouse free while first-person-locked on a job (and again to
 -- re-lock it). Only active during a job, since that's the only time we force first person.
 local FREE_MOUSE_KEY = Enum.KeyCode.V
@@ -30,20 +37,15 @@ local FREE_MOUSE_BIND = "JobFreeMouse"
 
 local JobCameraController = {}
 
--- Camera state saved when a job starts, restored when it ends. nil = not locked.
-local saved: { min: number, max: number, zoom: number }? = nil
+-- The player's normal max zoom, captured once before we ever touch the bounds, so we can
+-- restore it when a job ends (a job pins max = FIRST_PERSON_ZOOM to force first person).
+local savedMax = 128
+
+-- Whether we're currently pinned to first person for a job.
+local locked = false
 
 -- Whether the player has freed their mouse (via FREE_MOUSE_KEY) during the current job.
 local mouseFreed = false
-
--- Current third-person zoom distance (camera-to-focus), used to restore it later.
-local function currentZoom(): number
-	local camera = Workspace.CurrentCamera
-	if not camera then
-		return localPlayer.CameraMaxZoomDistance
-	end
-	return (camera.CFrame.Position - camera.Focus.Position).Magnitude
-end
 
 -- Free (or re-lock) the cursor while in first person. First person forces MouseBehavior
 -- to LockCenter every frame via the camera, so to keep it free we re-assert Default each
@@ -62,48 +64,33 @@ local function setMouseFreed(freed: boolean)
 	else
 		RunService:UnbindFromRenderStep(FREE_MOUSE_BIND)
 		-- Re-locking mid-job: hide the cursor again so the crosshair reads. When the job
-		-- is ending (`saved` already cleared), leave it for Crosshair's third-person swap.
-		if saved then
+		-- is ending (`locked` already cleared), leave it for Crosshair's third-person swap.
+		if locked then
 			UserInputService.MouseIconEnabled = false
 		end
 	end
 end
 
 local function lock()
-	if saved then
-		return -- already locked
+	if locked then
+		return -- already on a job
 	end
-	saved = {
-		min = localPlayer.CameraMinZoomDistance,
-		max = localPlayer.CameraMaxZoomDistance,
-		zoom = currentZoom(),
-	}
+	locked = true
 	-- Equal min/max leaves no room to zoom out, forcing (and holding) first person.
 	localPlayer.CameraMinZoomDistance = FIRST_PERSON_ZOOM
 	localPlayer.CameraMaxZoomDistance = FIRST_PERSON_ZOOM
 end
 
 local function unlock()
-	local state = saved
-	if not state then
-		return
-	end
-	saved = nil
+	locked = false
 	-- Job's over: stop holding the cursor free (third person frees it anyway).
 	setMouseFreed(false)
-	-- Snap back to the remembered zoom by pinning min = max = it for one frame, then
-	-- reopen the original bounds -- otherwise the camera stays stuck at first person
-	-- until the player scrolls out themselves.
-	local restoreZoom = math.clamp(state.zoom, state.min, state.max)
-	localPlayer.CameraMinZoomDistance = restoreZoom
-	localPlayer.CameraMaxZoomDistance = restoreZoom
-	RunService.Heartbeat:Wait()
-	-- Guard against a new job starting during that one-frame wait (which re-locks).
-	if saved then
-		return
-	end
-	localPlayer.CameraMinZoomDistance = state.min
-	localPlayer.CameraMaxZoomDistance = state.max
+	-- Back to third person: reopen the max, then raise the min above first-person range and
+	-- LEAVE it there. Set max first so min <= max stays valid coming out of the job's 0.5
+	-- pin. The camera clamps its zoom up to IDLE_MIN_ZOOM on the next render; because we
+	-- never lower the min again off a job, it can't slip back into first person.
+	localPlayer.CameraMaxZoomDistance = savedMax
+	localPlayer.CameraMinZoomDistance = IDLE_MIN_ZOOM
 end
 
 local function sync()
@@ -115,14 +102,17 @@ local function sync()
 end
 
 function JobCameraController.init()
+	-- Capture the normal max once, before the first job can pin it, so unlock restores it.
+	savedMax = localPlayer.CameraMaxZoomDistance
+
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(sync)
 
-	-- Toggle the mouse free/locked with FREE_MOUSE_KEY, but only while on a job (`saved`).
+	-- Toggle the mouse free/locked with FREE_MOUSE_KEY, but only while on a job (`locked`).
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		if gameProcessed or input.KeyCode ~= FREE_MOUSE_KEY then
 			return
 		end
-		if saved then
+		if locked then
 			setMouseFreed(not mouseFreed)
 		end
 	end)

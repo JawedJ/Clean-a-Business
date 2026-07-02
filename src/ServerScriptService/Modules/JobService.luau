@@ -103,15 +103,18 @@ local function accept(player: Player, businessId: any)
 	JobService.endJob(player)
 
 	-- This callback runs only on genuine completion (JobServer.complete), not on a
-	-- job switch or leave -- so it's the right place to send the player home. Hold a
-	-- beat so the finish reads (reward, camera restore) before yanking them back, and
-	-- skip the teleport if they've since started another job.
-	jobs[player] = JobServer.new(player, businessId, building, function(_job)
-		JobService.endJob(player)
+	-- job switch or leave. Hold the completed state a beat -- the job stays active for
+	-- that second, so the client keeps showing the finished 100% frame and first-person
+	-- camera -- then END the job (which clears ActiveJob, restoring the camera/zoom) and
+	-- send them home. Bail if they've since started another job (this one's no longer the
+	-- active one), so we don't end/teleport out of a fresh job.
+	jobs[player] = JobServer.new(player, businessId, building, function(job)
 		task.delay(1, function()
-			if JobService.getActiveJob(player) == nil then
-				PlotService.sendToPlotSpawn(player)
+			if jobs[player] ~= job then
+				return
 			end
+			JobService.endJob(player)
+			PlotService.sendToPlotSpawn(player)
 		end)
 	end)
 	player:SetAttribute(Config.ActiveJobAttribute, businessId)

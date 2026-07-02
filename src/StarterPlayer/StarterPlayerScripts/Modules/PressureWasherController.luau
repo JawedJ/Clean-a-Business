@@ -69,6 +69,44 @@ local sprayAttachment: Attachment? = nil
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
+-- Instances the pressure washer ray always ignores: the local character plus every
+-- business's CleanableDecals folder. Excluding the stain folders lets the ray pass
+-- THROUGH cleanable stain hitboxes to the wall overlay behind them -- those stains are
+-- broom targets, not washer targets, and would otherwise block the wash. Rebuilt when
+-- the character respawns or a new stain folder streams in; assigned to rayParams then
+-- (the engine copies the array on assign, so a rebuild must reassign).
+local stainFolders: { Instance } = {}
+local rayExclude: { Instance } = {}
+
+local function rebuildRayExclude()
+	table.clear(rayExclude)
+	if localPlayer.Character then
+		table.insert(rayExclude, localPlayer.Character)
+	end
+	for _, folder in stainFolders do
+		table.insert(rayExclude, folder)
+	end
+	rayParams.FilterDescendantsInstances = rayExclude
+end
+
+-- Collect every business's CleanableDecals folder (and any that stream in later) into
+-- the ray exclude list. Mirrors DecalVisibility's Businesses-folder scan.
+local function watchStainFolders()
+	task.spawn(function()
+		local businesses = Workspace:WaitForChild(Config.BusinessesFolderName)
+		local function consider(desc: Instance)
+			if desc.Name == Config.DecalsFolderName and not table.find(stainFolders, desc) then
+				table.insert(stainFolders, desc)
+				rebuildRayExclude()
+			end
+		end
+		for _, desc in businesses:GetDescendants() do
+			consider(desc)
+		end
+		businesses.DescendantAdded:Connect(consider)
+	end)
+end
+
 -- Stroke state, so we can bridge between consecutive cleaning frames.
 local lastSurface: Surface? = nil
 local lastWorldPos: Vector3? = nil
@@ -189,7 +227,6 @@ local function aim(): (RaycastResult?, Ray?)
 	end
 	local mouse = UserInputService:GetMouseLocation()
 	local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-	rayParams.FilterDescendantsInstances = { localPlayer.Character :: Instance }
 	return Workspace:Raycast(ray.Origin, ray.Direction * getRange(), rayParams), ray
 end
 
@@ -289,6 +326,11 @@ function PressureWasherController.init(surfaceGetter: (BasePart) -> Surface?)
 	if localPlayer.Character then
 		watch(localPlayer.Character)
 	end
+
+	-- Keep the ray exclude list current with the character and the streamed-in stain folders.
+	localPlayer.CharacterAdded:Connect(rebuildRayExclude)
+	watchStainFolders()
+	rebuildRayExclude()
 
 	RunService.Heartbeat:Connect(onHeartbeat)
 end
