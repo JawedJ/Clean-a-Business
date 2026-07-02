@@ -32,6 +32,12 @@ export type JobServer = typeof(setmetatable(
 		cleanedDecals: { [string]: boolean },
 		cleanedWallCount: number,
 		cleanedDecalCount: number,
+		-- Client-reported wall completion in whole-wall units (e.g. 2.5 of 5 walls). Walls
+		-- are erased entirely client-side, so their PARTIAL progress can't be server-verified
+		-- -- we trust the client's report (throttled ~1/s, and refreshed when they finish
+		-- early) purely for the prorated finish-early reward. The authoritative FULL
+		-- completion still comes from cleanedWallCount (deduped WallCleaned events).
+		reportedWallAmount: number,
 		completed: boolean,
 	},
 	JobServer
@@ -69,6 +75,7 @@ function JobServer.new(
 	self.cleanedDecals = {}
 	self.cleanedWallCount = 0
 	self.cleanedDecalCount = 0
+	self.reportedWallAmount = 0
 	self.completed = false
 	return self
 end
@@ -81,7 +88,8 @@ function JobServer.isDecalCleaned(self: JobServer, surfaceId: string): boolean
 	return self.cleanedDecals[surfaceId] == true
 end
 
--- Total cleanables, and how many are done (for completion % / UI).
+-- Total cleanables, and how many are fully done server-side (deduped WallCleaned +
+-- validated stains) -- the authoritative count the full-completion trigger uses.
 function JobServer.getTotal(self: JobServer): number
 	return self.totalWalls + self.totalDecals
 end
@@ -90,13 +98,26 @@ function JobServer.getCleaned(self: JobServer): number
 	return self.cleanedWallCount + self.cleanedDecalCount
 end
 
--- 0..1 fraction of the job cleaned (0 if the business has no cleanables).
+-- Record the client's latest wall completion (whole-wall units). Client-trusted -- clamp
+-- to [0, totalWalls] so a garbage value can't blow the reward past 100% of the walls; the
+-- lower bound against server-verified walls is applied in getCompletion (cleanedWallCount
+-- moves independently). Only affects the prorated finish-early reward, never full completion.
+function JobServer.reportWallProgress(self: JobServer, amount: number)
+	self.reportedWallAmount = math.clamp(amount, 0, self.totalWalls)
+end
+
+-- 0..1 fraction of the job cleaned, used for the prorated finish-early reward (0 if the
+-- business has no cleanables). Stains are server-authoritative (cleanedDecalCount); walls
+-- use the client's live report, floored at the server-verified full-wall count so it can
+-- never pay LESS than what we've confirmed. Full completion does NOT use this -- see
+-- _checkComplete, which gates on the authoritative counts only.
 function JobServer.getCompletion(self: JobServer): number
 	local total = self:getTotal()
 	if total == 0 then
 		return 0
 	end
-	return self:getCleaned() / total
+	local walls = math.clamp(self.reportedWallAmount, self.cleanedWallCount, self.totalWalls)
+	return (walls + self.cleanedDecalCount) / total
 end
 
 function JobServer.isComplete(self: JobServer): boolean

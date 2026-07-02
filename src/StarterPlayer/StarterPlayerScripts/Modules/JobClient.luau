@@ -18,7 +18,15 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local SurfaceManager = require(script.Parent.SurfaceManager)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 
-local WallCleaned = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("WallCleaned") :: RemoteEvent
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local WallCleaned = Remotes:WaitForChild("WallCleaned") :: RemoteEvent
+-- Reports our live wall completion (whole-wall units) to the server, which trusts it for
+-- the prorated finish-early reward (walls are erased client-side, so their partial progress
+-- isn't server-verifiable). Sent on a timer -- see the reporter loop in new().
+local WallCompletion = Remotes:WaitForChild("WallCompletion") :: RemoteEvent
+
+-- How often (seconds) we push wall completion to the server while it's changing.
+local WALL_REPORT_INTERVAL = 1
 
 local JobClient = {}
 JobClient.__index = JobClient
@@ -59,8 +67,31 @@ function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobCl
 	task.spawn(function()
 		self:_load()
 	end)
+	task.spawn(function()
+		self:_reportWallProgress()
+	end)
 
 	return self
+end
+
+-- Push our wall completion to the server about once a second while alive, but only when it
+-- changed since the last send, so a job sitting idle costs no traffic. The server trusts
+-- this figure for the prorated finish-early reward (see WallCompletion). Finishing early
+-- also sends a fresh value with the FinishEarly event, so the payout matches the % shown
+-- even if the last timer tick was up to a second ago.
+function JobClient._reportWallProgress(self: JobClient)
+	local lastSent = -1
+	while self.alive do
+		task.wait(WALL_REPORT_INTERVAL)
+		if not self.alive then
+			break
+		end
+		local amount = self:getWallAmount()
+		if amount ~= lastSent then
+			lastSent = amount
+			WallCompletion:FireServer(amount)
+		end
+	end
 end
 
 -- Resolve the building's cleanables (they may stream/replicate in) and start the job.
@@ -131,6 +162,13 @@ function JobClient.onDecalCleaned(self: JobClient, _model: Model)
 	self:_notifyProgress()
 end
 
+-- Live wall completion in whole-wall units (a half-washed wall counts as 0.5). This is what
+-- we report to the server for the finish-early reward, kept in the same units the server
+-- combines with its stain count.
+function JobClient.getWallAmount(self: JobClient): number
+	return SurfaceManager.getCleanedWallAmount()
+end
+
 -- 0..1 fraction of this job cleaned locally (for UI). Walls contribute their live clean
 -- amount (a half-washed wall counts as half), so this moves smoothly mid-wall rather than
 -- stepping only when a whole wall finishes.
@@ -139,7 +177,7 @@ function JobClient.getCompletion(self: JobClient): number
 	if total == 0 then
 		return 0
 	end
-	return (SurfaceManager.getCleanedWallAmount() + self.cleanedDecals) / total
+	return (self:getWallAmount() + self.cleanedDecals) / total
 end
 
 function JobClient.destroy(self: JobClient)

@@ -24,6 +24,8 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local JobController = require(script.Parent.JobController)
 
@@ -39,6 +41,9 @@ local FINISH_KEY = Enum.KeyCode.H
 local CLICK_SOUND = "UIClick"
 -- Quick slide of the fill bar toward its new value on each clean.
 local FILL_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- The bar + % update every stroke (smooth), but the reward readout only refreshes this
+-- often (seconds) so the dollar figure ticks calmly rather than flickering every frame.
+local REWARD_UPDATE_INTERVAL = 1
 
 local JobCompletionController = {}
 
@@ -46,15 +51,27 @@ local JobCompletionController = {}
 local frame: Frame? = nil
 local fill: Frame? = nil
 local percentageLabel: TextLabel? = nil
+local currentRewardLabel: TextLabel? = nil
 
 -- The fill tween in flight, so a newer clean can supersede it.
 local fillTween: Tween? = nil
+-- os.clock() of the last CurrentReward refresh, for its once-a-second throttle.
+local lastRewardUpdate = 0
 
 local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
 end
 
--- Paint the bar + label to `fraction` (0..1). `animate` tweens the fill (a clean) vs.
+-- The Cash bonus (BaseReward) of the business currently on the clock, 0 if none. This is
+-- what a full completion pays; finishing early pays this scaled by the completion fraction,
+-- so it's the base for the live "current reward" readout.
+local function activeBaseReward(): number
+	local businessId = localPlayer:GetAttribute(Config.ActiveJobAttribute)
+	local def = if type(businessId) == "string" then BusinessConfig[businessId] else nil
+	return if def then def.BaseReward else 0
+end
+
+-- Paint the bar + labels to `fraction` (0..1). `animate` tweens the fill (a clean) vs.
 -- snapping it (initial show). Guards the post-respawn gap before anything is bound.
 local function render(fraction: number, animate: boolean)
 	fraction = math.clamp(fraction, 0, 1)
@@ -75,6 +92,18 @@ local function render(fraction: number, animate: boolean)
 	end
 	if percentageLabel then
 		percentageLabel.Text = string.format("%d%%", math.floor(fraction * 100))
+	end
+	-- The Cash you'd bank by finishing right now: the completion bonus scaled by progress,
+	-- matching the server's prorated finish-early payout (both floor it). Throttled to once a
+	-- second on live updates so it ticks calmly; an initial (non-animated) render paints it
+	-- immediately so it's never stale when the frame opens.
+	if currentRewardLabel then
+		local now = os.clock()
+		if not animate or now - lastRewardUpdate >= REWARD_UPDATE_INTERVAL then
+			lastRewardUpdate = now
+			local reward = math.floor(activeBaseReward() * fraction)
+			currentRewardLabel.Text = string.format("CURRENT REWARD: $%s", NumberFormat.abbreviate(reward))
+		end
 	end
 end
 
@@ -99,13 +128,16 @@ local function applyActiveJobState()
 end
 
 -- Ask the server to end the current job early (prorated reward). No-op if not on a job.
--- Returns whether it fired (so the key path can play its click). The server clears
--- ActiveJob on success, which hides this frame via applyActiveJobState.
+-- Returns whether it fired (so the key path can play its click). Sends our current wall
+-- completion so the server's payout matches the % the player was shown (walls are
+-- client-trusted; see JobClient). The server clears ActiveJob on success, which hides this
+-- frame via applyActiveJobState.
 local function requestFinishEarly(): boolean
 	if not hasActiveJob() then
 		return false
 	end
-	FinishEarly:FireServer()
+	local job = JobController.getJob()
+	FinishEarly:FireServer(if job then job:getWallAmount() else 0)
 	return true
 end
 
@@ -117,6 +149,7 @@ local function bind(screenGui: Instance)
 	frame = root
 	fill = bar:WaitForChild("Fillable") :: Frame
 	percentageLabel = bar:WaitForChild("PercentageLabel") :: TextLabel
+	currentRewardLabel = bar:WaitForChild("CurrentReward") :: TextLabel
 
 	finishButton.Activated:Connect(requestFinishEarly)
 

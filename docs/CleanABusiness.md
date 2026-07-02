@@ -52,10 +52,16 @@ report, so a player can only ever clean the one business they've accepted. Concr
 - **Completion is server-authoritative.** The player's `JobServer` counts the building's
   cleanables and only counts cleans the cleaning services have already validated (deduped),
   so the job completes — and pays its `BaseReward` (Cash) + `XpReward` (XP) bonus — exactly
-  once, when every wall and stain is genuinely done. **Finishing early** (`FinishEarly`
-  remote) pays a **prorated** share of that bonus from the server's own completion fraction
-  (never a client-sent number, so the payout can't be inflated) and does **not** count as a
-  completion.
+  once, when every wall and stain is genuinely done.
+- **Finishing early is a deliberate client/server hybrid.** The prorated finish-early payout
+  needs the *partial* completion %, but wall pixel-erasing is client-only (unverifiable), so
+  walls are **client-reported**: the client pushes its wall completion (`WallCompletion`
+  remote, ~1/s while changing, plus a fresh value with `FinishEarly`) and the server trusts
+  it, clamped to `[server-verified full walls, totalWalls]`. Stains stay server-authoritative
+  (`cleanedDecalCount`). So finish-early reward = `(reportedWalls + cleanedStains) / total ×
+  bonus`, and it does **not** count as a completion. This is intentionally exploitable on the
+  wall fraction — accepted so the payout can track the live % shown to the player. **Full**
+  completion is unaffected: it still gates on the authoritative deduped counts only.
 - **Nothing about cleaning is saved.** Jobs are per-session; the only persisted business
   data is the `Unlocked` flag that gates accepting a job.
 
@@ -97,7 +103,8 @@ report, so a player can only ever clean the one business they've accepted. Concr
     (XP) **completion bonus**, then calls back to `JobService` to end the job (clearing
     `ActiveJob`, which ends the state on the client). `finishEarly` instead pays a **prorated**
     share of that bonus for the fraction cleaned and ends the job **without** counting a
-    completion.
+    completion — its wall fraction comes from `reportWallProgress` (client-reported, clamped),
+    its stain count from the authoritative server total (see the hybrid note above).
   - **`JobClient`** (class), spun up by `JobController` when `ActiveJob` is set, builds the
     per-client wall **EditableImage overlays** (via the `SurfaceManager` engine) and tracks
     local completion for the UI. Completion is **smooth** — it sums each wall's live erased
@@ -105,9 +112,11 @@ report, so a player can only ever clean the one business they've accepted. Concr
     pushed to listeners via `JobController.onProgressChanged` on every stroke.
   - **`JobCompletionController`** (client) drives the completion HUD
     (`ScreenGui.JobCompletion`): a progress bar + `PercentageLabel` that fill from
-    `JobClient`'s live completion, and a **FinishEarly** button (mirrored by the **H** key)
-    that fires the `FinishEarly` remote. Shown only while a job is active (off `ActiveJob`) —
-    the counterpart to the board, which hides during a job.
+    `JobClient`'s live completion, a `CurrentReward` label showing the Cash you'd bank by
+    finishing now (`BaseReward × completion`, floored to match the server payout), and a
+    **FinishEarly** button (mirrored by the **H** key) that fires the `FinishEarly` remote.
+    Shown only while a job is active (off `ActiveJob`) — the counterpart to the board, which
+    hides during a job.
   - **Stain visibility** is owned by **`DecalVisibility`** (client), driven by
     `JobController` off the same `ActiveJob` attribute. Stains are shared server instances,
     so this **hides every stain by default** (reparented off-world) and shows a business's
@@ -217,7 +226,8 @@ ReplicatedStorage/SharedModules/
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
-  FinishEarly           RemoteEvent (client → server: end the active job now for a prorated reward)
+  FinishEarly           RemoteEvent (client → server: end the active job now for a prorated reward; carries wall %)
+  WallCompletion        RemoteEvent (client → server: live wall completion, ~1/s; trusted for finish-early reward)
   CleanProgress         RemoteEvent (client → server: actively washing a wall; wash reward)
   WallCleaned           RemoteEvent (client → server: a wall is fully erased; job progress)
   CleanDecal            RemoteEvent (client → server: stain-click intent)

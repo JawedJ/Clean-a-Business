@@ -27,6 +27,7 @@ local PlotService = require(script.Parent.PlotService)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local AcceptJob = Remotes:WaitForChild("AcceptJob") :: RemoteEvent
 local FinishEarly = Remotes:WaitForChild("FinishEarly") :: RemoteEvent
+local WallCompletion = Remotes:WaitForChild("WallCompletion") :: RemoteEvent
 
 local JobService = {}
 
@@ -121,18 +122,34 @@ local function accept(player: Player, businessId: any)
 	end
 end
 
--- Player asked to stop their job early: pay the prorated reward and end it. Ignored if
--- they aren't on a job (nothing to finish).
-local function finishEarly(player: Player)
+-- Client's periodic wall-completion report (whole-wall units): trusted for the prorated
+-- finish-early reward only (walls are erased client-side, so partial progress can't be
+-- server-verified). Ignored if they aren't on a job or the value isn't a number.
+local function reportWallCompletion(player: Player, amount: any)
 	local job = jobs[player]
-	if job then
-		job:finishEarly()
+	if job and type(amount) == "number" then
+		job:reportWallProgress(amount)
 	end
+end
+
+-- Player asked to stop their job early: fold in the wall completion they report at press
+-- time (so the payout matches the % they were shown), pay the prorated reward, and end the
+-- job. Ignored if they aren't on a job (nothing to finish).
+local function finishEarly(player: Player, wallAmount: any)
+	local job = jobs[player]
+	if not job then
+		return
+	end
+	if type(wallAmount) == "number" then
+		job:reportWallProgress(wallAmount)
+	end
+	job:finishEarly()
 end
 
 function JobService.init()
 	AcceptJob.OnServerEvent:Connect(accept)
 	FinishEarly.OnServerEvent:Connect(finishEarly)
+	WallCompletion.OnServerEvent:Connect(reportWallCompletion)
 
 	Players.PlayerRemoving:Connect(function(player)
 		JobService.endJob(player)
