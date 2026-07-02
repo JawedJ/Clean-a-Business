@@ -39,6 +39,9 @@ local queued: { [BasePart]: boolean } = {}
 local watchConns: { RBXScriptConnection } = {}
 -- Called with the wall part when one is fully cleaned (set by buildWalls per job).
 local onWallCleaned: ((BasePart) -> ())? = nil
+-- Called (no args) whenever any wall's clean amount changes, so the completion UI can track
+-- the wash live -- read the aggregate back via getCleanedWallAmount. Set by buildWalls.
+local onWallProgress: (() -> ())? = nil
 
 -- Actually create the overlay for a wall (the expensive, main-thread part).
 local function buildSurface(part: BasePart)
@@ -55,6 +58,11 @@ local function buildSurface(part: BasePart)
 		SoundManager.playOneShot(COMPLETION_SOUND)
 		if onWallCleaned then
 			onWallCleaned(part)
+		end
+	end
+	surface.onProgress = function()
+		if onWallProgress then
+			onWallProgress()
 		end
 	end
 	surfaces[part] = surface
@@ -108,6 +116,21 @@ function SurfaceManager.getSurface(part: BasePart): CleanableSurface.CleanableSu
 	return surfaces[part]
 end
 
+-- Total wall progress of the current job, in whole-wall units (a half-cleaned wall counts
+-- 0.5, a finished one 1). Sums the built surfaces' fractions; walls not yet built count 0.
+-- Divide by the job's wall count (JobClient) for a 0..1 completion that moves mid-wall.
+function SurfaceManager.getCleanedWallAmount(): number
+	local amount = 0
+	for _, surface in surfaces do
+		if surface.cleaned then
+			amount += 1
+		else
+			amount += math.clamp(surface.cleanedCount / surface.dirtyTotal, 0, 1)
+		end
+	end
+	return amount
+end
+
 -- Tear down the current job's overlays: stop watching the walls folder, destroy every
 -- overlay, drop anything still queued, and forget the completion callback.
 function SurfaceManager.clear()
@@ -116,6 +139,7 @@ function SurfaceManager.clear()
 	end
 	table.clear(watchConns)
 	onWallCleaned = nil
+	onWallProgress = nil
 
 	for part, surface in surfaces do
 		surface:destroy()
@@ -126,10 +150,16 @@ function SurfaceManager.clear()
 end
 
 -- Build overlays for every wall in `wallsFolder` (and any added later), reporting each
--- finished wall to `cleanedCallback`. Replaces whatever was being tracked before.
-function SurfaceManager.buildWalls(wallsFolder: Instance, cleanedCallback: (BasePart) -> ())
+-- finished wall to `cleanedCallback` and every change in clean amount to `progressCallback`
+-- (read the aggregate via getCleanedWallAmount). Replaces whatever was being tracked before.
+function SurfaceManager.buildWalls(
+	wallsFolder: Instance,
+	cleanedCallback: (BasePart) -> (),
+	progressCallback: (() -> ())?
+)
 	SurfaceManager.clear()
 	onWallCleaned = cleanedCallback
+	onWallProgress = progressCallback
 	for _, inst in wallsFolder:GetChildren() do
 		addSurface(inst)
 	end

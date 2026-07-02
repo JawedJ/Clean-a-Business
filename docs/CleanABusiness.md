@@ -51,8 +51,11 @@ report, so a player can only ever clean the one business they've accepted. Concr
   per a cooldown — so it can't be farmed off a job the player doesn't hold.
 - **Completion is server-authoritative.** The player's `JobServer` counts the building's
   cleanables and only counts cleans the cleaning services have already validated (deduped),
-  so the job completes — and pays its `BaseReward` bonus — exactly once, when every wall and
-  stain is genuinely done.
+  so the job completes — and pays its `BaseReward` (Cash) + `XpReward` (XP) bonus — exactly
+  once, when every wall and stain is genuinely done. **Finishing early** (`FinishEarly`
+  remote) pays a **prorated** share of that bonus from the server's own completion fraction
+  (never a client-sent number, so the payout can't be inflated) and does **not** count as a
+  completion.
 - **Nothing about cleaning is saved.** Jobs are per-session; the only persisted business
   data is the `Unlocked` flag that gates accepting a job.
 
@@ -80,7 +83,8 @@ report, so a player can only ever clean the one business they've accepted. Concr
   `spawnPart` (on assignment and **every** respawn), and frees it on leave. Plots no
   longer hold businesses.
 - **Jobs** are how cleaning happens, modelled as a class on each side — one instance per
-  active job. The job board (UI, TBD) fires the `AcceptJob` remote with a `businessId`:
+  active job. The job board UI (`JobUiController`) fires the `AcceptJob` remote with a
+  `businessId`:
   - `JobService` (server manager) checks the player has `Unlocked` that business, ends any
     job they're already on, creates a fresh **`JobServer`**, publishes the `businessId` on
     the **`ActiveJob`** player attribute, and teleports the character onto the building's
@@ -89,12 +93,21 @@ report, so a player can only ever clean the one business they've accepted. Concr
   - **`JobServer`** (class) is the authority on progress: it counts the business's
     cleanables from the shared building, records validated cleans (`markWallCleaned` /
     `markDecalCleaned`, deduped), and exposes `getCompletion`/`isComplete`. When every wall
-    and stain is done it pays the `BaseReward` **completion bonus** (Cash only, no XP) and
-    calls back to `JobService` to end the job (clearing `ActiveJob`, which ends the state on
-    the client).
+    and stain is done it tallies a `Completions` and pays the `BaseReward` (Cash) + `XpReward`
+    (XP) **completion bonus**, then calls back to `JobService` to end the job (clearing
+    `ActiveJob`, which ends the state on the client). `finishEarly` instead pays a **prorated**
+    share of that bonus for the fraction cleaned and ends the job **without** counting a
+    completion.
   - **`JobClient`** (class), spun up by `JobController` when `ActiveJob` is set, builds the
     per-client wall **EditableImage overlays** (via the `SurfaceManager` engine) and tracks
-    local completion for UI.
+    local completion for the UI. Completion is **smooth** — it sums each wall's live erased
+    fraction (`SurfaceManager.getCleanedWallAmount`), so the bar moves mid-wall — and is
+    pushed to listeners via `JobController.onProgressChanged` on every stroke.
+  - **`JobCompletionController`** (client) drives the completion HUD
+    (`ScreenGui.JobCompletion`): a progress bar + `PercentageLabel` that fill from
+    `JobClient`'s live completion, and a **FinishEarly** button (mirrored by the **H** key)
+    that fires the `FinishEarly` remote. Shown only while a job is active (off `ActiveJob`) —
+    the counterpart to the board, which hides during a job.
   - **Stain visibility** is owned by **`DecalVisibility`** (client), driven by
     `JobController` off the same `ActiveJob` attribute. Stains are shared server instances,
     so this **hides every stain by default** (reparented off-world) and shows a business's
@@ -126,8 +139,10 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   left face, erases a **circular stamp** (a world-space circle → ellipse in pixel
   space on non-square parts), and **interpolates stamps along the segment** from the
   previous point so fast strokes leave no gaps.
-- **Completion:** when erased fraction ≥ `CompletionThreshold` (0.95), the surface
-  marks itself cleaned, destroys the decal, and fires its `onCleaned` callback.
+- **Completion:** when erased fraction ≥ `CompletionThreshold` (0.99), the surface
+  marks itself cleaned, destroys the decal, and fires its `onCleaned` callback. It also
+  fires `onProgress` on any stroke that erased pixels, so the completion bar tracks the
+  wash live rather than only stepping when a whole wall finishes.
 
 ### `PressureWasherController` (client)
 - Detects the tool via the `ToolId` attribute and binds its `Equipped` / `Activated`
@@ -139,15 +154,16 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
 
 ### `SurfaceManager` (client) — wall-overlay engine
 - A driven engine, not a decision-maker: `JobClient` calls `buildWalls(wallsFolder,
-  onCleaned)` to start tracking the current job's walls and `clear()` to tear them down.
-  It builds/destroys one `CleanableSurface` per wall (handling walls that stream/replicate
-  in via `ChildAdded`).
+  onCleaned, onProgress?)` to start tracking the current job's walls and `clear()` to tear
+  them down. It builds/destroys one `CleanableSurface` per wall (handling walls that
+  stream/replicate in via `ChildAdded`).
 - **Budgeted building:** walls are queued (after a cheap resolve check) and a long-lived
   drainer builds them under a per-frame time budget (`FRAME_BUDGET`, ~2ms), so a job with
   many walls never stalls a frame. `removeSurface`/`clear` cancel still-queued walls.
-- Exposes `getSurface(part)` for `PressureWasherController`. On completion it plays the pop
-  VFX + sound and invokes the `onCleaned` callback (which `JobClient` uses to fire
-  `WallCleaned` and bump local progress).
+- Exposes `getSurface(part)` for `PressureWasherController` and `getCleanedWallAmount()`
+  (summed live wall fractions, in whole-wall units) for the completion bar. On completion it
+  plays the pop VFX + sound and invokes the `onCleaned` callback (which `JobClient` uses to
+  fire `WallCleaned`); every dirt-removing stroke invokes `onProgress`, which drives the bar.
 
 ### Persistence
 **Cleaning is not persisted.** Jobs are per-session: accepting a job is always a fresh
@@ -201,6 +217,7 @@ ReplicatedStorage/SharedModules/
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
+  FinishEarly           RemoteEvent (client → server: end the active job now for a prorated reward)
   CleanProgress         RemoteEvent (client → server: actively washing a wall; wash reward)
   WallCleaned           RemoteEvent (client → server: a wall is fully erased; job progress)
   CleanDecal            RemoteEvent (client → server: stain-click intent)
@@ -209,8 +226,8 @@ ReplicatedStorage/Remotes/
 
 ServerScriptService/
   Main.server.luau      inits DataService (useMock) + Plot/Job/Cleaning/DecalCleaning services
-  Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob, teleport, endJob
-  Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion reward
+  Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob
+  Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion + finish-early reward
   Modules/CleaningService.luau       wall wash reward + WallCleaned→job, gated by active job (no saving)
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; per-client hide via DecalCleaned
   Modules/PlotService.luau           plot (home base) assignment + spawn
@@ -219,8 +236,10 @@ ServerScriptService/
 
 StarterPlayer/StarterPlayerScripts/
   Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI
-  Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide
-  Modules/JobClient.luau           one active job (class): loads overlays, restores stains, local completion %
+  Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide, onProgressChanged signal
+  Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %
+  Modules/JobUiController.luau     job board UI: toggle (JobButton/B key), per-business rows, AcceptJob
+  Modules/JobCompletionController.luau  completion HUD: live progress bar + %, FinishEarly button/H key
   Modules/SurfaceManager.luau      wall-overlay engine, driven by JobClient (buildWalls/clear)
   Modules/DecalVisibility.luau     stain visibility: hidden unless on the job; per-client clean + redo
   Modules/CleanableSurface.luau    dirt-overlay OOP class
@@ -230,14 +249,17 @@ StarterPlayer/StarterPlayerScripts/
 
 Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `StarterPack.Broom`, and the
 shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a `Cleanables`
-folder (`CleanableWalls` + `CleanableDecals`) authored right in the building. The job
-board UI is TBD; whatever builds it just needs to fire the `AcceptJob` remote with a
-`businessId`.
+folder (`CleanableWalls` + `CleanableDecals`) authored right in the building. The **HUD
+`ScreenGui`** is also Studio-authored (not Rojo): `JobButton`/`JobFrame` (board),
+`JobCompletion` (progress bar + `FinishEarly`), and `XpBar`. The client controllers bind
+to these instances by name and re-bind on each respawn (the `ScreenGui` is re-cloned).
 
 ## Not yet implemented / planned
 
-- **Rewards & progression** — completing a business awarding Cash/XP, unlock flow,
-  plot growth. `InventoryManager` exists but isn't initialized or used yet.
+- **Progression** — the unlock flow (spend Cash / reach a Level to unlock more
+  businesses & tools) and plot growth. Rewards themselves are wired: per-clean Cash/XP, a
+  completion bonus (`BaseReward` + `XpReward`), and a prorated finish-early payout.
+  `InventoryManager` exists but isn't initialized or used yet.
 - **StreamingEnabled** handling — the tag-added signal already builds surfaces on
   stream-in and applies saved state correctly, but the broader streaming model below is
   a target, not a guarantee.
@@ -283,9 +305,10 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
 - `Cash: number`
 - `Level: { CurrentLevel: number, XP: number }` — XP-to-next-level via a formula (TBD).
 - `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
-  `BaseReward`, `Unlocked`, `Name`, `UniqueID`. **`Unlocked`** is the only field that
-  gates gameplay — it decides whether the player may accept that business's job. Cleaned
-  state is **not** stored (jobs are per-session).
+  `BaseReward`, `XpReward`, `Unlocked`, `Name`, `UniqueID`, `Completions`. **`Unlocked`** is
+  the only field that gates gameplay — it decides whether the player may accept that
+  business's job; `Completions` is a lifetime tally bumped on each full completion. Per-clean
+  *surface* state is **not** stored (jobs are per-session).
 - `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
   `Unlocked`, `Cost`, `UniqueID`, optional `Range?` (max cleaning distance, studs) and
   optional `Power?`. **`Power`** is a tool tier that will gate **which floor/surface

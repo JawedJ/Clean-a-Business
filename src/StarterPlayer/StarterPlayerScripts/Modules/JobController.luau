@@ -24,6 +24,29 @@ local JobController = {}
 
 local current: JobClient.JobClient? = nil
 
+-- Listeners for job progress changes (the completion UI). Each is called with the new
+-- 0..1 completion whenever the active JobClient reports a clean.
+local progressListeners: { (number) -> () } = {}
+
+local function emitProgress(fraction: number)
+	for _, listener in progressListeners do
+		listener(fraction)
+	end
+end
+
+-- Subscribe to the active job's completion (0..1), fired on every clean. Returns a
+-- disconnect function. Persistent across jobs -- the callback simply stops receiving
+-- updates between jobs.
+function JobController.onProgressChanged(callback: (number) -> ()): () -> ()
+	table.insert(progressListeners, callback)
+	return function()
+		local index = table.find(progressListeners, callback)
+		if index then
+			table.remove(progressListeners, index)
+		end
+	end
+end
+
 local function setJob(businessId: string?)
 	if current then
 		current:destroy()
@@ -34,7 +57,7 @@ local function setJob(businessId: string?)
 	-- down, and so it's the single owner of stain visibility.
 	DecalVisibility.setActiveBusiness(businessId)
 	if businessId then
-		current = JobClient.new(businessId)
+		current = JobClient.new(businessId, emitProgress)
 	end
 end
 

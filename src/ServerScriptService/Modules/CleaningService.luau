@@ -28,8 +28,8 @@ local WallCleaned = Remotes:WaitForChild("WallCleaned") :: RemoteEvent
 -- Reward paid for each second of actively erasing dirt from a wall. WASH_COOLDOWN is
 -- the server-enforced minimum gap between payouts, so a client can't earn faster by
 -- sending CleanProgress more often.
-local WASH_XP = 4
-local WASH_CASH = 4
+local WASH_XP = 2
+local WASH_CASH = 2
 local WASH_COOLDOWN = 1 -- seconds
 
 local CleaningService = {}

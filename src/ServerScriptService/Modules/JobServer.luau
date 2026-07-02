@@ -129,6 +129,28 @@ function JobServer.complete(self: JobServer)
 	self.onComplete(self)
 end
 
+-- End the job early at the player's request, paying a prorated share of the completion
+-- reward for the fraction cleaned so far (10% cleaned -> a tenth of BaseReward + XpReward),
+-- then handing back to JobService to end it. Unlike complete() this does NOT tally a
+-- Completions -- the player bailed, so it doesn't count as a finished job. Uses the
+-- server's own getCompletion (the authority) so the payout can't be inflated by the client.
+-- Runs once; a no-op if the job already completed or was already finished early.
+function JobServer.finishEarly(self: JobServer)
+	if self.completed then
+		return
+	end
+	self.completed = true
+
+	local def = BusinessConfig[self.businessId]
+	if def then
+		local fraction = self:getCompletion()
+		ProgressionService.awardCash(self.player, math.floor(def.BaseReward * fraction))
+		ProgressionService.awardXp(self.player, math.floor(def.XpReward * fraction))
+	end
+
+	self.onComplete(self)
+end
+
 -- Finish the job once every wall and stain is done (and there's at least one cleanable).
 function JobServer._checkComplete(self: JobServer)
 	if self.completed or self:getTotal() == 0 then

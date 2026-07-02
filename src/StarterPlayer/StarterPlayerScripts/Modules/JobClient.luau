@@ -29,8 +29,10 @@ export type JobClient = typeof(setmetatable(
 		alive: boolean,
 		totalWalls: number,
 		totalDecals: number,
-		cleanedWalls: number,
 		cleanedDecals: number,
+		-- Called with the new 0..1 completion after every clean (and once totals load), so
+		-- the completion UI can track progress. nil if no one is listening.
+		onProgress: ((number) -> ())?,
 	},
 	JobClient
 ))
@@ -45,14 +47,14 @@ local function countChildren(folder: Instance, className: string): number
 	return n
 end
 
-function JobClient.new(businessId: string): JobClient
+function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobClient
 	local self = setmetatable({}, JobClient) :: JobClient
 	self.businessId = businessId
 	self.alive = true
 	self.totalWalls = 0
 	self.totalDecals = 0
-	self.cleanedWalls = 0
 	self.cleanedDecals = 0
+	self.onProgress = onProgress
 
 	task.spawn(function()
 		self:_load()
@@ -90,15 +92,31 @@ function JobClient._load(self: JobClient)
 		self.totalWalls = countChildren(walls, "BasePart")
 		SurfaceManager.buildWalls(walls, function(part)
 			self:_onWallCleaned(part)
+		end, function()
+			-- Any wall's clean amount changed (mid-wash) -- re-push completion so the bar
+			-- moves smoothly, not just when a whole wall finishes.
+			self:_notifyProgress()
 		end)
+	end
+
+	-- Totals are known now (0 before this); push the starting completion so the UI can
+	-- paint an accurate empty bar rather than waiting for the first clean.
+	self:_notifyProgress()
+end
+
+-- Fire the progress callback with the current completion, if anyone is listening.
+function JobClient._notifyProgress(self: JobClient)
+	if self.onProgress then
+		self.onProgress(self:getCompletion())
 	end
 end
 
+-- A wall finished: report it to the server. Progress is pushed by the per-stroke callback
+-- from SurfaceManager (which fires on the finishing stroke too), so we don't re-notify here.
 function JobClient._onWallCleaned(self: JobClient, part: BasePart)
 	if not self.alive then
 		return
 	end
-	self.cleanedWalls += 1
 	WallCleaned:FireServer(part)
 end
 
@@ -110,15 +128,18 @@ function JobClient.onDecalCleaned(self: JobClient, _model: Model)
 		return
 	end
 	self.cleanedDecals += 1
+	self:_notifyProgress()
 end
 
--- 0..1 fraction of this job cleaned locally (for UI).
+-- 0..1 fraction of this job cleaned locally (for UI). Walls contribute their live clean
+-- amount (a half-washed wall counts as half), so this moves smoothly mid-wall rather than
+-- stepping only when a whole wall finishes.
 function JobClient.getCompletion(self: JobClient): number
 	local total = self.totalWalls + self.totalDecals
 	if total == 0 then
 		return 0
 	end
-	return (self.cleanedWalls + self.cleanedDecals) / total
+	return (SurfaceManager.getCleanedWallAmount() + self.cleanedDecals) / total
 end
 
 function JobClient.destroy(self: JobClient)

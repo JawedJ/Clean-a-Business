@@ -24,7 +24,9 @@ local DataService = require(ReplicatedStorage.Packages.DataService).server
 local JobServer = require(script.Parent.JobServer)
 local PlotService = require(script.Parent.PlotService)
 
-local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local AcceptJob = Remotes:WaitForChild("AcceptJob") :: RemoteEvent
+local FinishEarly = Remotes:WaitForChild("FinishEarly") :: RemoteEvent
 
 local JobService = {}
 
@@ -119,8 +121,18 @@ local function accept(player: Player, businessId: any)
 	end
 end
 
+-- Player asked to stop their job early: pay the prorated reward and end it. Ignored if
+-- they aren't on a job (nothing to finish).
+local function finishEarly(player: Player)
+	local job = jobs[player]
+	if job then
+		job:finishEarly()
+	end
+end
+
 function JobService.init()
 	AcceptJob.OnServerEvent:Connect(accept)
+	FinishEarly.OnServerEvent:Connect(finishEarly)
 
 	Players.PlayerRemoving:Connect(function(player)
 		JobService.endJob(player)

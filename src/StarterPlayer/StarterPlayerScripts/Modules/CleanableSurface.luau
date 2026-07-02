@@ -130,6 +130,7 @@ export type CleanableSurface = typeof(setmetatable(
 		cleanedCount: number,
 		cleaned: boolean,
 		onCleaned: (() -> ())?,
+		onProgress: (() -> ())?,
 	},
 	CleanableSurface
 ))
@@ -159,6 +160,7 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		cleanedCount = 0,
 		cleaned = false,
 		onCleaned = nil,
+		onProgress = nil,
 	}, CleanableSurface)
 end
 
@@ -218,6 +220,8 @@ function CleanableSurface.clean(
 		return
 	end
 
+	local erasedBefore = self.cleanedCount
+
 	-- Circle in world space -> ellipse in pixel space on non-square parts.
 	-- Left face spans local Z (depth, u) and local Y (height, v). Computed per
 	-- call so the radius can change with tool upgrades.
@@ -243,12 +247,23 @@ function CleanableSurface.clean(
 	-- Single full upload. Constant cost, zero allocation.
 	self.image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, self.pixels)
 
+	-- Mark done first so onProgress sees the final state (a finished wall reads as fully
+	-- clean, not stuck at the ~0.99 threshold), then report progress, then completion.
+	local justCleaned = false
 	if self.cleanedCount / self.dirtyTotal >= Config.CompletionThreshold then
 		self.cleaned = true
 		self.decal:Destroy()
-		if self.onCleaned then
-			self.onCleaned()
-		end
+		justCleaned = true
+	end
+
+	-- Only signal when dirt actually came off, so the completion bar tracks the wash live
+	-- but idle aiming at clean pixels costs nothing.
+	if self.cleanedCount > erasedBefore and self.onProgress then
+		self.onProgress()
+	end
+
+	if justCleaned and self.onCleaned then
+		self.onCleaned()
 	end
 end
 
