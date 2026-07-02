@@ -11,6 +11,7 @@ export type Item = {
 	Power: number?,
 	UseTime: number?,
 	Radius: number?,
+	SlotNumber: number?,
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -65,6 +66,7 @@ local DataTemplate = {
 		Power = 1,
 		UseTime = 2.5,
 		Range = 70,
+		SlotNumber = 1,
 		},
 
 		["pressureWasher"] = {
@@ -76,6 +78,7 @@ local DataTemplate = {
 		Range = 70,
 		Power = 1,
 		Radius = 0.8,
+		SlotNumber = 2,
 		},
 
 	} :: { [string]: Item },
