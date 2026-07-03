@@ -17,7 +17,7 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Power = 1.0,
 		UseTime = 2.5, -- seconds of cleaning before a stain is removed
 		Range = 70,
-		SlotNumber = 1,
+		SlotNumber = 2,
 	},
 
 	pressureWasher = {
@@ -29,7 +29,7 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Range = 70,
 		Power = 1.0,
 		Radius = 0.8,
-		SlotNumber = 2,
+		SlotNumber = 1,
 	},
 }
 

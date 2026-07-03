@@ -3,7 +3,7 @@
 -- Server side of pressure-washer (wall) cleaning. Cleanable walls live in the
 -- shared business buildings:
 --   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWalls.<part>
--- The Pressure Washer tool (StarterPack) lives in the place, not in code.
+-- The Pressure Washer Tool lives in ReplicatedStorage.Items; ToolService grants it.
 --
 -- The dirt overlay is an EditableImage built entirely on the client, so the server
 -- never sees pixel data and there's nothing to save (jobs are per-session). Two things

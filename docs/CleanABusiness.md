@@ -209,10 +209,19 @@ appears mirrored from where you aim).
   player can redo the job and earn the rewards again.
 
 ### Tool
-- The **Pressure Washer** and **Broom** `Tool`s live in **`StarterPack`** (authored in
-  Studio, so they auto-give to every player). Each has a `Handle` and a `ToolId`
-  attribute (`"pressureWasher"` / `"startingBroom"`) used to bind its controller. There
-  is no server-side tool-giving code.
+- The **Pressure Washer** and **Broom** `Tool`s live in **`ReplicatedStorage.Items`**
+  (authored in Studio; `StarterPack` is empty). Each has a `Handle` and a `ToolId`
+  attribute (`"pressureWasher"` / `"startingBroom"`) that ties it to its inventory Item
+  (`UniqueID`) and is used to bind its controller.
+- **`ToolService`** (server) grants tools: on each spawn it clones every owned + `Unlocked`
+  inventory item's `Tool` into the player's Backpack (matched by `ToolId`), idempotently,
+  and re-grants when the inventory gains a new item.
+- **`InventoryController`** (client) is the custom hotbar, replacing Roblox's default
+  Backpack UI (which it disables via `SetCoreGuiEnabled`). The HUD `ScreenGui.Inventory`
+  frame holds `ImageButton1..5`; a button is shown only if the player owns an item whose
+  `SlotNumber` matches it. Clicking a button — or pressing that number key — equips that
+  slot's Tool with `Humanoid:EquipTool`. It only ever equips (never `UnequipTools`), so a
+  slot press **never unequips**: the already-equipped slot is a no-op.
 
 ## Implemented files
 
@@ -235,13 +244,14 @@ ReplicatedStorage/Remotes/
   RewardPopup           RemoteEvent (server → client: show floating +XP/+Cash)
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + Plot/Job/Cleaning/DecalCleaning services
+  Main.server.luau      inits DataService (useMock) + Plot/Job/Cleaning/DecalCleaning/Tool services
   Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob
   Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion + finish-early reward
   Modules/CleaningService.luau       wall wash reward + WallCleaned→job, gated by active job (no saving)
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; per-client hide via DecalCleaned
   Modules/PlotService.luau           plot (home base) assignment + spawn
   Modules/ProgressionService.luau    awards Cash/XP + reward popups
+  Modules/ToolService.luau           grants owned+Unlocked items as Backpack Tools (clones from ReplicatedStorage.Items by ToolId), per spawn + on inventory change
   Modules/InventoryManager.luau      present but NOT yet wired into Main
 
 StarterPlayer/StarterPlayerScripts/
@@ -255,14 +265,17 @@ StarterPlayer/StarterPlayerScripts/
   Modules/CleanableSurface.luau    dirt-overlay OOP class
   Modules/PressureWasherController.luau   tool input + raycast + cleaning
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
+  Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
 ```
 
-Studio-authored (not Rojo): `StarterPack.Pressure Washer`, `StarterPack.Broom`, and the
-shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a `Cleanables`
-folder (`CleanableWalls` + `CleanableDecals`) authored right in the building. The **HUD
-`ScreenGui`** is also Studio-authored (not Rojo): `JobButton`/`JobFrame` (board),
-`JobCompletion` (progress bar + `FinishEarly`), and `XpBar`. The client controllers bind
-to these instances by name and re-bind on each respawn (the `ScreenGui` is re-cloned).
+Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
+`ReplicatedStorage.Items.Broom` (each with a `ToolId` attribute; `StarterPack` is empty),
+and the shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a
+`Cleanables` folder (`CleanableWalls` + `CleanableDecals`) authored right in the building.
+The **HUD `ScreenGui`** is also Studio-authored (not Rojo): `JobButton`/`JobFrame` (board),
+`JobCompletion` (progress bar + `FinishEarly`), `XpBar`, and `Inventory` (the custom hotbar:
+`ImageButton1..5`). The client controllers bind to these instances by name and re-bind on
+each respawn (the `ScreenGui` is re-cloned).
 
 ## Not yet implemented / planned
 

@@ -102,19 +102,18 @@ local function accept(player: Player, businessId: any)
 	-- exactly the "redo" path -- a fresh JobServer with progress reset to zero.
 	JobService.endJob(player)
 
-	-- This callback runs only on genuine completion (JobServer.complete), not on a
-	-- job switch or leave. Hold the completed state a beat -- the job stays active for
-	-- that second, so the client keeps showing the finished 100% frame and first-person
-	-- camera -- then END the job (which clears ActiveJob, restoring the camera/zoom) and
-	-- send them home. Bail if they've since started another job (this one's no longer the
-	-- active one), so we don't end/teleport out of a fresh job.
-	jobs[player] = JobServer.new(player, businessId, building, function(job)
+	-- This callback runs only on genuine completion (JobServer.complete), not on a job
+	-- switch or leave. End the job right away -- clearing ActiveJob hides the completion
+	-- frame and stops cleaning -- then hold a beat before sending them home. The client
+	-- keeps them in first person across that beat and zooms out on its own timer (see
+	-- JobCameraController), so the camera pull-back lines up with this teleport. Skip the
+	-- teleport if they've since started another job.
+	jobs[player] = JobServer.new(player, businessId, building, function(_job)
+		JobService.endJob(player)
 		task.delay(1, function()
-			if jobs[player] ~= job then
-				return
+			if JobService.getActiveJob(player) == nil then
+				PlotService.sendToPlotSpawn(player)
 			end
-			JobService.endJob(player)
-			PlotService.sendToPlotSpawn(player)
 		end)
 	end)
 	player:SetAttribute(Config.ActiveJobAttribute, businessId)

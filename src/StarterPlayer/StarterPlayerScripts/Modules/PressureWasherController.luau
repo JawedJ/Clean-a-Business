@@ -50,6 +50,15 @@ local SOUND_SECTION_END = 2.5
 
 local localPlayer = Players.LocalPlayer
 
+-- Touch-only devices (phones/tablets): can't hold-to-fire and drag to look at the same
+-- time, so on mobile the washer fires continuously while it's equipped instead of on
+-- press/release. Console (gamepad) and desktop keep the normal hold-to-fire. Evaluated
+-- once -- input capabilities don't meaningfully change mid-session.
+local IS_MOBILE = UserInputService.TouchEnabled
+	and not UserInputService.KeyboardEnabled
+	and not UserInputService.MouseEnabled
+	and not UserInputService.GamepadEnabled
+
 -- 2D firing sound: a sustained, slice-looped handle owned by SoundManager. Built
 -- in init so its clone is preloaded during the startup window.
 local fireSound: SoundManager.SustainedSound? = nil
@@ -177,8 +186,18 @@ local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
 		resolveSpray(tool)
+		-- Mobile: fire the moment it's equipped and keep firing until unequipped.
+		if IS_MOBILE then
+			firing = true
+			startSound()
+			startSpray()
+		end
 	end)
 	tool.Activated:Connect(function()
+		-- On mobile firing is tied to equip, not to taps -- a tap is a look/aim gesture.
+		if IS_MOBILE then
+			return
+		end
 		if equippedTool == tool then
 			firing = true
 			startSound()
@@ -186,6 +205,10 @@ local function bindTool(tool: Tool)
 		end
 	end)
 	tool.Deactivated:Connect(function()
+		-- On mobile we never stop on release; only Unequipped stops the washer.
+		if IS_MOBILE then
+			return
+		end
 		firing = false
 		resetStroke()
 		stopSound()
@@ -218,15 +241,17 @@ local function watch(root: Instance)
 	end
 end
 
--- Raycasts from the mouse. Returns the hit (if any) and the camera ray, so callers
--- can fall back to a point along the ray when nothing was hit.
+-- Raycasts from the aim point. Returns the hit (if any) and the camera ray, so callers
+-- can fall back to a point along the ray when nothing was hit. On mobile the washer fires
+-- continuously from the crosshair, so we aim from the center of the screen instead of the
+-- touch point (GetMouseLocation returns the last tap, which would clean wherever they poke).
 local function aim(): (RaycastResult?, Ray?)
 	local cam = Workspace.CurrentCamera
 	if not cam then
 		return nil, nil
 	end
-	local mouse = UserInputService:GetMouseLocation()
-	local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
+	local point = if IS_MOBILE then cam.ViewportSize / 2 else UserInputService:GetMouseLocation()
+	local ray = cam:ViewportPointToRay(point.X, point.Y)
 	return Workspace:Raycast(ray.Origin, ray.Direction * getRange(), rayParams), ray
 end
 

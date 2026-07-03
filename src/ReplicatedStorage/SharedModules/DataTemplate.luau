@@ -66,7 +66,7 @@ local DataTemplate = {
 		Power = 1,
 		UseTime = 2.5,
 		Range = 70,
-		SlotNumber = 1,
+		SlotNumber = 2,
 		},
 
 		["pressureWasher"] = {
@@ -78,7 +78,7 @@ local DataTemplate = {
 		Range = 70,
 		Power = 1,
 		Radius = 0.8,
-		SlotNumber = 2,
+		SlotNumber = 1,
 		},
 
 	} :: { [string]: Item },

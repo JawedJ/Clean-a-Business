@@ -3,7 +3,7 @@
 -- Server side of stain (broom) cleaning, and the AUTHORITY over it. Cleanable stains live
 -- in the shared business buildings:
 --   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableDecals.<model>
--- The Broom tool (StarterPack) lives in the place, not in code.
+-- The Broom Tool lives in ReplicatedStorage.Items; ToolService grants it.
 --
 -- The client sends a single "I clicked this stain" request; it does NOT decide when the
 -- stain is cleaned. The server validates the request (the player holds this business's
