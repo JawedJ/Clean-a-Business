@@ -14,7 +14,15 @@
         "$path": "Packages"
       },
       "Remotes": {
-        "$path": "src/ReplicatedStorage/Remotes"
+        "$className": "Folder",
+        "AcceptJob": { "$className": "RemoteEvent" },
+        "CleanDecal": { "$className": "RemoteEvent" },
+        "CleanProgress": { "$className": "RemoteEvent" },
+        "DecalCleaned": { "$className": "RemoteEvent" },
+        "FinishEarly": { "$className": "RemoteEvent" },
+        "RewardPopup": { "$className": "RemoteEvent" },
+        "WallCleaned": { "$className": "RemoteEvent" },
+        "WallCompletion": { "$className": "RemoteEvent" }
       }
     },
 
