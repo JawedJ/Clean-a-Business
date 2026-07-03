@@ -8,7 +8,6 @@ local ToolService = require(game.ServerScriptService.Modules.ToolService)
 
 DataService:init({
 	template = DataTemplate,
-	resetData = true,
 })
 
 

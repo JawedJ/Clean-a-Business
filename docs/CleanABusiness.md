@@ -157,9 +157,15 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
 - Detects the tool via the `ToolId` attribute and binds its `Equipped` / `Activated`
   (hold to fire) / `Deactivated` / `Unequipped` events. **No ammo** — firing is
   unrestricted while held.
-- Each `Heartbeat` while firing: raycasts from the mouse (`ViewportPointToRay`), and if
-  it hits a cleanable part **on its left face** (`Normal·(-RightVector) > 0.99`), tells that
-  surface to clean. Tracks the last hit so consecutive frames bridge into one stroke.
+- **Mobile (touch-only devices):** holding to fire while dragging to look is impossible, so
+  on mobile the washer fires **continuously the whole time it's equipped** (`Activated` /
+  `Deactivated` are ignored; only `Unequipped` stops it). Desktop and console (gamepad) keep
+  the normal hold-to-fire. `IS_MOBILE` = `TouchEnabled and not Keyboard/Mouse/Gamepad`.
+- Each `Heartbeat` while firing: raycasts and, if it hits a cleanable part **on its left
+  face** (`Normal·(-RightVector) > 0.99`), tells that surface to clean. Tracks the last hit
+  so consecutive frames bridge into one stroke. The aim point is the **mouse** on desktop
+  but the **center of the screen** (`ViewportSize/2`, the crosshair) on mobile — since the
+  mobile washer fires from the crosshair, not from wherever the player last tapped.
 
 ### `SurfaceManager` (client) — wall-overlay engine
 - A driven engine, not a decision-maker: `JobClient` calls `buildWalls(wallsFolder,
@@ -222,6 +228,11 @@ appears mirrored from where you aim).
   `SlotNumber` matches it. Clicking a button — or pressing that number key — equips that
   slot's Tool with `Humanoid:EquipTool`. It only ever equips (never `UnequipTools`), so a
   slot press **never unequips**: the already-equipped slot is a no-op.
+- **Tied to the job lifecycle** (off the `ActiveJob` attribute, like the rest of the HUD):
+  the inventory is **hidden unless the player holds a job**. On job **start** the frame
+  appears and **slot 1 is auto-equipped**; on job **end** the frame hides and any held tool
+  is unequipped (`Humanoid:UnequipTools`). Re-binds to the fresh `Inventory` frame on each
+  respawn, like the other HUD controllers.
 
 ## Implemented files
 
@@ -298,8 +309,9 @@ even where the feature itself isn't implemented yet.
 
 1. Player spawns on their own plot (home base) with starting tools.
 2. Player accepts a job from the job board → teleported to that shared business.
-3. Player equips a tool and cleans the business's surfaces / stains, earning Cash + XP
-   per clean (per-session — nothing is saved).
+3. On job start the hotbar appears with slot 1 auto-equipped; the player swaps tools
+   (button / number key) and cleans the business's surfaces / stains, earning Cash + XP
+   per clean (per-session — nothing is saved). The hotbar hides again when the job ends.
 4. Player spends Cash / reaches Levels to **unlock** more businesses (and tools,
    upgrades), which makes their jobs available on the board.
 5. Repeat against a steadily expanding catalog of businesses and tools.
@@ -333,12 +345,13 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   business's job; `Completions` is a lifetime tally bumped on each full completion. Per-clean
   *surface* state is **not** stored (jobs are per-session).
 - `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
-  `Unlocked`, `Cost`, `UniqueID`, optional `Range?` (max cleaning distance, studs) and
-  optional `Power?`. **`Power`** is a tool tier that will gate **which floor/surface
-  types a tool can clean** (a tool cleans a surface only if its `Power` ≥ the surface's
-  required power) — defined in `ToolConfig` now, not yet enforced in cleaning logic.
-  (The pressure-washer entry still carries vestigial ammo fields from before ammo was
-  removed — unused.)
+  `Unlocked`, `Cost`, `UniqueID`, and optional `Range?` (max cleaning distance, studs),
+  `Power?`, `UseTime?` (broom seconds-per-stain), `Radius?` (washer brush radius), and
+  `SlotNumber?`. **`SlotNumber`** places the item in the custom hotbar: it maps to
+  `Inventory.ImageButton{N}` and the matching number key (see `InventoryController`).
+  **`Power`** is a tool tier that will gate **which floor/surface types a tool can clean**
+  (a tool cleans a surface only if its `Power` ≥ the surface's required power) — defined in
+  `ToolConfig` now, not yet enforced in cleaning logic.
 
 **Why string-id maps, not Instance refs:** saved data is JSON-only (no Instances), and
 an Instance is a new object every session anyway. A stable `SurfaceId` string survives
@@ -428,7 +441,9 @@ Packages/            -> ReplicatedStorage.Packages         (Wally deps, incl. Da
 - **All server module scripts live in `ServerScriptService/Modules`**; the only server
   Script outside it is `Main.server.luau`.
 - Shared types/configs go in `SharedModules` (one source of truth for client + server).
-- **Workspace and StarterPack are not Rojo-mounted** — physical instances (cleanable
-  parts, the tool) are authored directly in the Studio place.
+- **Workspace, ReplicatedStorage.Items, and StarterGui are not Rojo-mounted** — physical
+  instances (cleanable parts, the `Tool`s, the HUD `ScreenGui`) are authored directly in the
+  Studio place. `StarterPack` is empty; tools are granted from `ReplicatedStorage.Items` by
+  `ToolService`.
 - Client/server boundaries communicate via `ReplicatedStorage/Remotes`; all state
   mutation requests are server-validated.
