@@ -15,7 +15,7 @@ local LocalPlayer = Players.LocalPlayer
 -- hysteresis band so the camera lagging behind the head during movement can't
 -- briefly flip the state (which would flicker the cursor on and off).
 local ENTER_FIRST_PERSON_DISTANCE = 1.0
-local EXIT_FIRST_PERSON_DISTANCE = 1.4
+local EXIT_FIRST_PERSON_DISTANCE = 2.0
 local DOT_SIZE = 12
 
 local Crosshair = {}

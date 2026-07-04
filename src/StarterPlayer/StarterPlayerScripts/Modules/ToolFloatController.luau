@@ -12,11 +12,13 @@
 --      being welded to the hand and the arm falls back to its normal idle pose.
 --   2. We weld the Handle to the HumanoidRootPart ourselves and drive that weld's C0
 --      every frame so the Handle sits at a fixed offset off the right shoulder.
---   3. Each frame we raycast from the camera through the aim point and orient the Handle
---      to look at the hit, so it physically points where the player is aiming.
+--   3. Each frame we orient the Handle along the camera's look DIRECTION, so it physically
+--      points where the player is aiming. (We use the direction, not a raycast hit point, so
+--      the aim doesn't jump as the crosshair crosses surfaces at different depths.)
 --
 -- Tools are equipped only in first person (which auto-turns the character), so we orient
--- the Handle purely toward the world-space look target and ignore body facing.
+-- the Handle purely toward the look direction and ignore body facing. Yaw and pitch both
+-- follow the aim; only roll (the Z-axis) is locked so the Handle never tilts sideways.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -61,10 +63,6 @@ local HANDLE_PIVOT: { [string]: Vector3 } = {
 }
 local DEFAULT_PIVOT = Vector3.new(0, 0, 2)
 
--- How far out the aim ray reaches when nothing is hit (studs). Only sets the direction
--- the Handle points; it doesn't gate any cleaning.
-local AIM_RANGE = 500
-
 -- How far the Handle may tilt up/down from horizontal when aiming (radians). Aiming
 -- steeply up or down is clamped to this so the tool never points near-vertical.
 local MAX_PITCH = math.rad(90)
@@ -86,37 +84,46 @@ local floatWeld: Weld? = nil
 -- Watches the character for the engine re-adding a RightGrip while we're floating.
 local gripWatch: RBXScriptConnection? = nil
 
-local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Exclude
-
--- World position the player is aiming at: the raycast hit under the crosshair/mouse, or a
--- point far out along the ray when nothing is hit.
-local function aimTarget(): Vector3?
+-- The DIRECTION the player is aiming, plus the camera's right vector.
+--
+-- We deliberately point the Handle along the camera ray's *direction* rather than toward a
+-- raycast HIT point. Aiming at the hit point looks correct until you sweep across surfaces at
+-- different depths: because the shoulder anchor is offset from the camera, the direction from
+-- it to the hit point depends on the hit's distance (parallax), so the tool jumps whenever the
+-- ray snaps between a near and a far surface, and swings wildly when aimed at nearby ground.
+-- A direction is depth-independent, so the aim stays smooth. camRight is returned as a stable
+-- yaw reference for when the aim points straight up/down (see aimOrientation).
+local function aimDirection(): (Vector3?, Vector3?)
 	local cam = Workspace.CurrentCamera
 	if not cam then
-		return nil
+		return nil, nil
 	end
 	local point = if IS_MOBILE then cam.ViewportSize / 2 else UserInputService:GetMouseLocation()
 	local ray = cam:ViewportPointToRay(point.X, point.Y)
-	rayParams.FilterDescendantsInstances = { localPlayer.Character :: Instance }
-	local result = Workspace:Raycast(ray.Origin, ray.Direction * AIM_RANGE, rayParams)
-	if result then
-		return result.Position
-	end
-	return ray.Origin + ray.Direction * AIM_RANGE
+	return ray.Direction.Unit, cam.CFrame.RightVector
 end
 
--- Direction the tool should point. Its YAW is locked to the body's horizontal facing (in
--- first person the character auto-turns to the look direction), so the tool never skews
--- sideways/inward from the right-shoulder offset. Only the up/down PITCH tracks the aim,
--- clamped to MAX_PITCH. Returns a unit forward vector with zero roll.
-local function aimForwardDirection(origin: Vector3, target: Vector3, bodyLook: Vector3): Vector3
-	local flatForward = Vector3.new(bodyLook.X, 0, bodyLook.Z)
-	flatForward = if flatForward.Magnitude > 1e-4 then flatForward.Unit else Vector3.zAxis
-	local dir = target - origin
-	local flatDist = Vector3.new(dir.X, 0, dir.Z).Magnitude
-	local pitch = math.clamp(math.atan2(dir.Y, flatDist), -MAX_PITCH, MAX_PITCH)
-	return flatForward * math.cos(pitch) + Vector3.yAxis * math.sin(pitch)
+-- Orientation for the Handle at `origin` aiming toward `target`. Both YAW and PITCH track the
+-- aim (pitch clamped to MAX_PITCH); roll (the Z-axis, the tool's own look axis) is locked to
+-- zero at every pitch.
+--
+-- We build the rotation basis by hand rather than using CFrame.lookAt: lookAt derives its up
+-- vector from the aim direction, so when you aim straight up or down (forward ∥ world up) it
+-- hits a gimbal singularity and the Handle rolls/flips unpredictably. Here the RIGHT vector is
+-- derived from the horizontal (yaw) direction alone, so it stays horizontal — and therefore
+-- roll stays zero — no matter how steeply the tool pitches, even pointing straight down.
+local function aimOrientation(origin: Vector3, lookDir: Vector3, camRight: Vector3): CFrame
+	local flat = Vector3.new(lookDir.X, 0, lookDir.Z)
+	local pitch = math.clamp(math.atan2(lookDir.Y, flat.Magnitude), -MAX_PITCH, MAX_PITCH)
+	-- Yaw reference: the aim's horizontal direction, falling back to the camera's ground-forward
+	-- (worldUp × camRight) when aiming straight up/down, where `flat` collapses to ~zero.
+	local flatForward = if flat.Magnitude > 1e-4 then flat.Unit else Vector3.yAxis:Cross(camRight).Unit
+	local forward = flatForward * math.cos(pitch) + Vector3.yAxis * math.sin(pitch)
+	-- Right depends only on the yaw direction, never on pitch, so it can't go singular.
+	local right = flatForward:Cross(Vector3.yAxis)
+	local up = right:Cross(forward)
+	-- fromMatrix(pos, right, up) => LookVector = forward, with the horizontal right vector.
+	return CFrame.fromMatrix(origin, right, up)
 end
 
 -- The engine welds the Handle to the hand via a Weld named "RightGrip" on equip. Destroy
@@ -213,8 +220,8 @@ local function onRenderStepped()
 		return
 	end
 
-	local target = aimTarget()
-	if not target then
+	local lookDir, camRight = aimDirection()
+	if not lookDir or not camRight then
 		return
 	end
 
@@ -222,11 +229,11 @@ local function onRenderStepped()
 	local shoulderWorld = anchor.CFrame * (SHOULDER_OFFSET[toolId] or DEFAULT_SHOULDER_OFFSET)
 	local aimOffset = HANDLE_AIM_OFFSET[toolId] or DEFAULT_AIM_OFFSET
 	local pivot = HANDLE_PIVOT[toolId] or DEFAULT_PIVOT
-	-- Yaw-locked to body facing, pitch tracks the aim (clamped): no sideways/inward curve.
-	local forward = aimForwardDirection(shoulderWorld, target, anchor.CFrame.LookVector)
+	-- Yaw + pitch both track the aim (pitch clamped); roll stays locked at zero.
+	local orientation = aimOrientation(shoulderWorld, lookDir, camRight)
 	-- Pin `pivot` (a point on the Handle) at shoulderWorld and rotate the model about it,
 	-- so aiming swings the front of the tool while the pivot point stays put.
-	local desired = CFrame.lookAt(shoulderWorld, shoulderWorld + forward) * aimOffset * CFrame.new(-pivot)
+	local desired = orientation * aimOffset * CFrame.new(-pivot)
 
 	-- Weld: Part0.CFrame * C0 = Handle.CFrame (C1 is identity). Solve C0 for the pose we want.
 	weld.C0 = anchor.CFrame:Inverse() * desired
