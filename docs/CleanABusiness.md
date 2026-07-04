@@ -83,8 +83,8 @@ report, so a player can only ever clean the one business they've accepted. Concr
   walls are per-client.
 
 ### Plots & the job board
-- **Plots** are the player's home base only. Each plot is a Folder under Workspace with
-  a `spawnPart`. `PlotService` (server) assigns each joining player a free plot,
+- **Plots** are the player's home base only. Each plot is a Folder (`Plot1..PlotN`) under
+  the `Plots` folder in Workspace, with a `spawnPart`. `PlotService` (server) assigns each joining player a free plot,
   publishes its name via the `Plot` player attribute, spawns the character on the
   `spawnPart` (on assignment and **every** respawn), and frees it on leave. Plots no
   longer hold businesses.

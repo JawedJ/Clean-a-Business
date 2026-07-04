@@ -34,9 +34,12 @@ local CleaningConfig = {
 	SurfaceIdAttribute = "surfaceId",
 
 	-- Plots are still a thing: each joining player is assigned a personal plot (their
-	-- home/spawn base) named Plot1..Plot(PlotCount), published to the owner via this
-	-- attribute. Plots no longer hold businesses -- cleaning happens at the shared
-	-- buildings above, gated by the player's accepted job rather than plot ownership.
+	-- home/spawn base) named Plot1..Plot(PlotCount), living under one Workspace folder:
+	--   Workspace.<PlotsFolderName>.Plot(i)
+	-- The assigned plot's name is published to the owner via PlotAttribute. Plots no
+	-- longer hold businesses -- cleaning happens at the shared buildings above, gated by
+	-- the player's accepted job rather than plot ownership.
+	PlotsFolderName = "Plots",
 	PlotCount = 8,
 	PlotAttribute = "Plot",
 

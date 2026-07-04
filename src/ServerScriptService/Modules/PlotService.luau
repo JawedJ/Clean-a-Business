@@ -1,6 +1,6 @@
 --!strict
 
--- Assigns each player one of the workspace plots (Plot1..Plot(PlotCount)) on join
+-- Assigns each player one of the workspace plots (Workspace.<PlotsFolderName>.Plot1..N) on join
 -- as their personal home/spawn base, and frees it on leave. The owner is told which
 -- plot is theirs through a player attribute, and their character spawns there on
 -- join and respawn. Plots no longer hold businesses -- cleaning happens at the
@@ -32,10 +32,16 @@ local function spawnCharacterAt(character: Model, plot: Instance)
 	character:PivotTo(CFrame.new(spawnPart.Position + SPAWN_OFFSET))
 end
 
--- First plot (in Plot1..PlotN order) that nobody currently owns.
+-- First plot (in Plot1..PlotN order) that nobody currently owns. Plots live under
+-- the shared Workspace.<PlotsFolderName> folder.
 local function findFreePlot(): Instance?
+	local plotsFolder = Workspace:FindFirstChild(Config.PlotsFolderName)
+	if not plotsFolder then
+		warn(string.format("[PlotService] No %q folder under Workspace.", Config.PlotsFolderName))
+		return nil
+	end
 	for i = 1, Config.PlotCount do
-		local plot = Workspace:FindFirstChild("Plot" .. i)
+		local plot = plotsFolder:FindFirstChild("Plot" .. i)
 		if plot and not ownerByPlot[plot] then
 			return plot
 		end
