@@ -30,19 +30,44 @@ local ToolFloatController = {}
 -- Where the Handle floats, in the HumanoidRootPart's local space:
 --   +X = right, +Y = up, -Z = forward (Roblox parts look down -Z).
 -- The HRP origin sits at the torso centre, so this is offset out to the right shoulder
--- and a bit forward. Tune in-Studio to taste.
-local SHOULDER_OFFSET = Vector3.new(1.25, 0.8, -2.75)
+-- and a bit forward. Per-tool since models differ; falls back to DEFAULT_SHOULDER_OFFSET.
+local SHOULDER_OFFSET: { [string]: Vector3 } = {
+	startingBroom = Vector3.new(1.25, 0.8, 0),
+}
+local DEFAULT_SHOULDER_OFFSET = Vector3.new(1.25, 1.0, -0.75)
 
 -- Per-tool twist applied AFTER the look CFrame, to align the Handle's modelled "forward"
 -- with the aim direction. Identity assumes the Handle already looks down its own -Z.
 -- If a tool points sideways/up when floating, add an entry keyed by its ToolId, e.g.
 --   ["pressureWasher"] = CFrame.Angles(0, math.rad(90), 0),
-local HANDLE_AIM_OFFSET: { [string]: CFrame } = {}
+local HANDLE_AIM_OFFSET: { [string]: CFrame } = {
+	-- The broom's Handle is modelled pointing along its own +X, so without a twist it aims
+	-- 90° to the right. Yaw it back so the broom's length points down the aim direction.
+	startingBroom = CFrame.Angles(0, math.rad(90), 0),
+}
 local DEFAULT_AIM_OFFSET = CFrame.identity
+
+-- The point on the Handle (in its own oriented space; +Z = back, since the tool looks
+-- down -Z toward the target) that stays pinned at the shoulder anchor as the tool aims.
+-- Rotation happens ABOUT this point, so pushing it toward the rear of the model makes
+-- aiming down swing only the FRONT down instead of spinning the whole model about its
+-- centre. Increase Z until the back sits still. Per-tool since models differ in length;
+-- falls back to DEFAULT_PIVOT.
+local HANDLE_PIVOT: { [string]: Vector3 } = {
+	-- The broom points along its own +X (see HANDLE_AIM_OFFSET), so its "back" is -X, not
+	-- +Z. Pin along -X to match, otherwise the default +Z pivot lands sideways and shoves
+	-- the broom off to the left.
+	startingBroom = Vector3.new(-2, 0, 0),
+}
+local DEFAULT_PIVOT = Vector3.new(0, 0, 2)
 
 -- How far out the aim ray reaches when nothing is hit (studs). Only sets the direction
 -- the Handle points; it doesn't gate any cleaning.
 local AIM_RANGE = 500
+
+-- How far the Handle may tilt up/down from horizontal when aiming (radians). Aiming
+-- steeply up or down is clamped to this so the tool never points near-vertical.
+local MAX_PITCH = math.rad(90)
 
 local TOOL_ID_ATTRIBUTE = "ToolId"
 local GRIP_WELD_NAME = "RightGrip"
@@ -81,6 +106,19 @@ local function aimTarget(): Vector3?
 	return ray.Origin + ray.Direction * AIM_RANGE
 end
 
+-- Direction the tool should point. Its YAW is locked to the body's horizontal facing (in
+-- first person the character auto-turns to the look direction), so the tool never skews
+-- sideways/inward from the right-shoulder offset. Only the up/down PITCH tracks the aim,
+-- clamped to MAX_PITCH. Returns a unit forward vector with zero roll.
+local function aimForwardDirection(origin: Vector3, target: Vector3, bodyLook: Vector3): Vector3
+	local flatForward = Vector3.new(bodyLook.X, 0, bodyLook.Z)
+	flatForward = if flatForward.Magnitude > 1e-4 then flatForward.Unit else Vector3.zAxis
+	local dir = target - origin
+	local flatDist = Vector3.new(dir.X, 0, dir.Z).Magnitude
+	local pitch = math.clamp(math.atan2(dir.Y, flatDist), -MAX_PITCH, MAX_PITCH)
+	return flatForward * math.cos(pitch) + Vector3.yAxis * math.sin(pitch)
+end
+
 -- The engine welds the Handle to the hand via a Weld named "RightGrip" on equip. Destroy
 -- any that target our Handle so the hand lets go and the arm returns to its idle pose.
 local function destroyGripWelds(handle: BasePart)
@@ -91,6 +129,18 @@ local function destroyGripWelds(handle: BasePart)
 	for _, desc in character:GetDescendants() do
 		if desc:IsA("Weld") and desc.Name == GRIP_WELD_NAME and (desc.Part0 == handle or desc.Part1 == handle) then
 			desc:Destroy()
+		end
+	end
+end
+
+-- The floating tool sits out in front of the character, so its parts must not collide with
+-- the world/character, and must be massless so their offset weight doesn't drag the
+-- character's physics around.
+local function makeNonCollidable(tool: Tool)
+	for _, desc in tool:GetDescendants() do
+		if desc:IsA("BasePart") then
+			desc.CanCollide = false
+			desc.Massless = true
 		end
 	end
 end
@@ -123,6 +173,8 @@ local function onEquipped(tool: Tool)
 	tearDown()
 	currentTool = tool
 	currentHandle = handle
+
+	makeNonCollidable(tool)
 
 	-- Weld the Handle to the torso; we drive C0 each frame to place + aim it.
 	local weld = Instance.new("Weld")
@@ -166,9 +218,15 @@ local function onRenderStepped()
 		return
 	end
 
-	local shoulderWorld = anchor.CFrame * SHOULDER_OFFSET
-	local aimOffset = HANDLE_AIM_OFFSET[tool:GetAttribute(TOOL_ID_ATTRIBUTE) :: string] or DEFAULT_AIM_OFFSET
-	local desired = CFrame.lookAt(shoulderWorld, target) * aimOffset
+	local toolId = tool:GetAttribute(TOOL_ID_ATTRIBUTE) :: string
+	local shoulderWorld = anchor.CFrame * (SHOULDER_OFFSET[toolId] or DEFAULT_SHOULDER_OFFSET)
+	local aimOffset = HANDLE_AIM_OFFSET[toolId] or DEFAULT_AIM_OFFSET
+	local pivot = HANDLE_PIVOT[toolId] or DEFAULT_PIVOT
+	-- Yaw-locked to body facing, pitch tracks the aim (clamped): no sideways/inward curve.
+	local forward = aimForwardDirection(shoulderWorld, target, anchor.CFrame.LookVector)
+	-- Pin `pivot` (a point on the Handle) at shoulderWorld and rotate the model about it,
+	-- so aiming swings the front of the tool while the pivot point stays put.
+	local desired = CFrame.lookAt(shoulderWorld, shoulderWorld + forward) * aimOffset * CFrame.new(-pivot)
 
 	-- Weld: Part0.CFrame * C0 = Handle.CFrame (C1 is identity). Solve C0 for the pose we want.
 	weld.C0 = anchor.CFrame:Inverse() * desired
