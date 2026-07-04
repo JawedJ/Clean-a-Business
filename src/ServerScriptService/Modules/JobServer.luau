@@ -139,8 +139,7 @@ end
 
 -- Tell the owning player's client to show the JobSummary screen. `fraction` is how much of
 -- the job was cleaned (1 for a full completion, the prorated share for a finish-early), which
--- drives the star rating; `cash`/`xp` are the amounts actually awarded (already multiplied);
--- `bonus` flags the 1.5x replay so the client can show its "(1.5X REWARDS)" badge.
+-- drives the star rating; `cash`/`xp` are the amounts actually awarded (already multiplied).
 function JobServer._fireSummary(self: JobServer, cash: number, xp: number, fraction: number)
 	JobSummary:FireClient(self.player, {
 		businessId = self.businessId,
@@ -148,7 +147,6 @@ function JobServer._fireSummary(self: JobServer, cash: number, xp: number, fract
 		xp = xp,
 		fraction = fraction,
 		duration = os.clock() - self.startedAt,
-		bonus = self.rewardMultiplier > 1,
 	})
 end
 

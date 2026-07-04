@@ -8,7 +8,6 @@
 --   * StarAmount               -- one star per 20% cleaned (5 at 100%)
 --   * RatingDescription        -- flavour text for that star rating
 --   * CompletionText           -- "You finished in mm:ss Minutes!"
---   * MoneyReward (outer)       -- a "(1.5X REWARDS)" badge, shown only on a bonus replay
 -- and its two buttons:
 --   * PlayAgain -- re-accepts the same job (which the server pays at 1.5x -- the replay bonus)
 --   * GoHome    -- teleports back to the plot spawn
@@ -66,7 +65,6 @@ type SummaryData = {
 	xp: number,
 	fraction: number,
 	duration: number,
-	bonus: boolean,
 }
 
 local JobSummaryController = {}
@@ -78,7 +76,6 @@ local xpReward: TextLabel? = nil
 local starAmount: TextLabel? = nil
 local ratingDescription: TextLabel? = nil
 local completionText: TextLabel? = nil
-local bonusBadge: TextLabel? = nil
 local playAgain: ImageButton? = nil
 local goHome: ImageButton? = nil
 
@@ -206,11 +203,6 @@ local function show(data: SummaryData)
 	if completionText then
 		completionText.Text = formatDuration(data.duration)
 	end
-	-- The "(1.5X REWARDS)" badge only reads true on a bonus replay.
-	if bonusBadge then
-		bonusBadge.Visible = data.bonus
-	end
-
 	-- Bounce the frame down from the top-center of the screen into place (see UiAnimations).
 	if dropIn then
 		dropIn:play()
@@ -280,10 +272,6 @@ local function bind(screenGui: Instance)
 	completionText = textFrame:WaitForChild("CompletionText") :: TextLabel
 	playAgain = root:WaitForChild("PlayAgain") :: ImageButton
 	goHome = root:WaitForChild("GoHome") :: ImageButton
-	-- The "(1.5X REWARDS)" badge (the root TextLabel "Multi") is cosmetic -- look it up WITHOUT
-	-- yielding, so a rename/removal can't infinite-yield here and hang the whole bind (which
-	-- would leave the drop-in animation and both buttons dead).
-	bonusBadge = root:FindFirstChild("Multi") :: TextLabel?
 
 	-- Build the drop-in from the frame's authored spot (see UiAnimations), then hide it until a
 	-- job finishes. Studio authors it hidden too.
