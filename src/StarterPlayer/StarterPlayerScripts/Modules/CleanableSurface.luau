@@ -1,6 +1,12 @@
 --!nonstrict
 
--- One dirt overlay for one cleanable BasePart's LEFT face.
+-- One dirt overlay for one cleanable BasePart.
+--
+-- The overlay goes on whichever face the wall's own Texture faces, so the map author
+-- controls it just by texturing the visible side -- no matter how the part was oriented
+-- when the map was built. A wall with no Texture falls back to the Left face. The face's
+-- (u,v) axis mapping and the brush radius scaling both follow that same choice, so
+-- erasing always tracks the brush.
 --
 -- Performance contract (this is the whole reason past attempts went choppy):
 --   * The pixel data lives in ONE persistent buffer, allocated once at construct.
@@ -21,6 +27,46 @@ local Config = require(game.ReplicatedStorage.SharedModules.CleaningConfig)
 
 local IMAGE_SIZE = Config.ImageSize
 local SIZE_VEC = Vector2.new(IMAGE_SIZE, IMAGE_SIZE)
+
+-- How each face maps a local point to overlay pixels:
+--   * `uComp`/`uSign` say image-right (+u) runs along uSign * local uComp axis.
+--   * `vComp`/`vSign` say image-up runs along vSign * local vComp axis (v is
+--     image-DOWN, so v = 0.5 - vSign * lp[vComp] / Size[vComp]).
+-- These are Roblox's own decal texture orientation for each face (right x up =
+-- outward normal), anchored on the known-good Left case, so the painted pixels line
+-- up with what the Decal displays. uComp/vComp also drive the brush-radius scaling,
+-- since a world-space circle becomes an ellipse on a non-square face.
+local FACE_MAPS = {
+	[Enum.NormalId.Left] = { uComp = "Z", uSign = 1, vComp = "Y", vSign = 1 },
+	[Enum.NormalId.Right] = { uComp = "Z", uSign = -1, vComp = "Y", vSign = 1 },
+	[Enum.NormalId.Front] = { uComp = "X", uSign = -1, vComp = "Y", vSign = 1 },
+	[Enum.NormalId.Back] = { uComp = "X", uSign = 1, vComp = "Y", vSign = 1 },
+	[Enum.NormalId.Top] = { uComp = "X", uSign = -1, vComp = "Z", vSign = 1 },
+	[Enum.NormalId.Bottom] = { uComp = "X", uSign = 1, vComp = "Z", vSign = 1 },
+}
+-- Used when a wall has no Texture to point us at a face (preserves the old behaviour).
+local DEFAULT_FACE = Enum.NormalId.Left
+
+-- Reads a named component off a Vector3 (Size or a local point).
+local function comp(v: Vector3, axis: string): number
+	if axis == "X" then
+		return v.X
+	elseif axis == "Y" then
+		return v.Y
+	end
+	return v.Z
+end
+
+-- The face the overlay should live on: the face of the part's own Texture (the visible
+-- side the map author textured), or Left if the part has no Texture.
+local function overlayFace(part: BasePart): Enum.NormalId
+	for _, child in part:GetChildren() do
+		if child:IsA("Texture") then
+			return child.Face
+		end
+	end
+	return DEFAULT_FACE
+end
 
 -- The dirt source is downloaded once and shared by every surface.
 local cachedSource: EditableImage? = nil
@@ -125,6 +171,8 @@ export type CleanableSurface = typeof(setmetatable(
 		part: BasePart,
 		image: EditableImage,
 		decal: Decal,
+		face: Enum.NormalId,
+		faceMap: { uComp: string, uSign: number, vComp: string, vSign: number },
 		pixels: buffer,
 		dirtyTotal: number,
 		cleanedCount: number,
@@ -136,6 +184,8 @@ export type CleanableSurface = typeof(setmetatable(
 ))
 
 function CleanableSurface.new(part: BasePart): CleanableSurface
+	local face = overlayFace(part)
+	local faceMap = FACE_MAPS[face]
 	local template, dirtyTotal = getTemplate()
 
 	-- Persistent working copy: clone the shared template (a fast buffer copy, not a
@@ -147,7 +197,7 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 	image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, pixels)
 
 	local decal = Instance.new("Decal")
-	decal.Face = Enum.NormalId.Left
+	decal.Face = face
 	decal.TextureContent = Content.fromObject(image)
 	decal.Parent = part
 
@@ -155,6 +205,8 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		part = part,
 		image = image,
 		decal = decal,
+		face = face,
+		faceMap = faceMap,
 		pixels = pixels,
 		dirtyTotal = dirtyTotal,
 		cleanedCount = 0,
@@ -164,11 +216,14 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 	}, CleanableSurface)
 end
 
--- World point -> pixel coordinates on the left face (spans local Z and Y).
+-- World point -> pixel coordinates on the overlay face. The face's u/v axes were
+-- resolved at construct time (self.faceMap); u spans uComp, v spans vComp.
 local function worldToPixel(self: CleanableSurface, worldPos: Vector3): (number, number)
 	local lp = self.part.CFrame:PointToObjectSpace(worldPos)
-	local u = lp.Z / self.part.Size.Z + 0.5
-	local v = 0.5 - lp.Y / self.part.Size.Y
+	local f = self.faceMap
+	local size = self.part.Size
+	local u = 0.5 + f.uSign * comp(lp, f.uComp) / comp(size, f.uComp)
+	local v = 0.5 - f.vSign * comp(lp, f.vComp) / comp(size, f.vComp)
 	if Config.FlipU then
 		u = 1 - u
 	end
@@ -222,12 +277,15 @@ function CleanableSurface.clean(
 
 	local erasedBefore = self.cleanedCount
 
-	-- Circle in world space -> ellipse in pixel space on non-square parts.
-	-- Left face spans local Z (depth, u) and local Y (height, v). Computed per
-	-- call so the radius can change with tool upgrades.
+	-- Circle in world space -> ellipse in pixel space on non-square parts. The
+	-- overlay face's u axis spans local uComp and its v axis spans vComp; scale the
+	-- radius by each so the brush stays a world-space circle. Computed per call so
+	-- the radius can change with tool upgrades.
+	local f = self.faceMap
+	local size = self.part.Size
 	local r = worldRadius or Config.BrushWorldRadius
-	local rx = r / self.part.Size.Z * IMAGE_SIZE
-	local ry = r / self.part.Size.Y * IMAGE_SIZE
+	local rx = r / comp(size, f.uComp) * IMAGE_SIZE
+	local ry = r / comp(size, f.vComp) * IMAGE_SIZE
 
 	local cx, cy = worldToPixel(self, worldPos)
 	if fromWorldPos then

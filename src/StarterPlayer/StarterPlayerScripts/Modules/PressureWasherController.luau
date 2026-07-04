@@ -2,7 +2,8 @@
 
 -- Drives the pressure washer: detects when the tool is equipped + firing,
 -- raycasts from the mouse each frame, and tells the aimed CleanableSurface to
--- erase. Only the FRONT face of a surface is cleanable.
+-- erase. The ray only hits cleanable walls, and only the surface's textured face
+-- (where the dirt overlay lives) is cleanable.
 --
 -- It also drives the spray VFX: the Handle's ParticleEmitter only emits while the
 -- player is firing, and each frame its attachment is re-aimed so the spray shoots
@@ -76,37 +77,29 @@ local sprayEmitter: ParticleEmitter? = nil
 local sprayAttachment: Attachment? = nil
 
 local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Exclude
+rayParams.FilterType = Enum.RaycastFilterType.Include
 
--- Instances the pressure washer ray always ignores: the local character plus every
--- business's CleanableDecals folder. Excluding the stain folders lets the ray pass
--- THROUGH cleanable stain hitboxes to the wall overlay behind them -- those stains are
--- broom targets, not washer targets, and would otherwise block the wash. Rebuilt when
--- the character respawns or a new stain folder streams in; assigned to rayParams then
--- (the engine copies the array on assign, so a rebuild must reassign).
-local stainFolders: { Instance } = {}
-local rayExclude: { Instance } = {}
+-- The pressure washer ray ONLY hits cleanable walls: its filter is every business's
+-- CleanableWalls folder. Everything else -- the character, props, counters, and the
+-- stain hitboxes in front of the walls -- is invisible to it, so nothing can block the
+-- wash and the ray always lands on the wall behind them. Rebuilt when a new walls folder
+-- streams in; assigned to rayParams then (the engine copies the array on assign, so a
+-- rebuild must reassign).
+local wallFolders: { Instance } = {}
 
-local function rebuildRayExclude()
-	table.clear(rayExclude)
-	if localPlayer.Character then
-		table.insert(rayExclude, localPlayer.Character)
-	end
-	for _, folder in stainFolders do
-		table.insert(rayExclude, folder)
-	end
-	rayParams.FilterDescendantsInstances = rayExclude
+local function rebuildRayInclude()
+	rayParams.FilterDescendantsInstances = wallFolders
 end
 
--- Collect every business's CleanableDecals folder (and any that stream in later) into
--- the ray exclude list. Mirrors DecalVisibility's Businesses-folder scan.
-local function watchStainFolders()
+-- Collect every business's CleanableWalls folder (and any that stream in later) into
+-- the ray include list. Mirrors DecalVisibility's Businesses-folder scan.
+local function watchWallFolders()
 	task.spawn(function()
 		local businesses = Workspace:WaitForChild(Config.BusinessesFolderName)
 		local function consider(desc: Instance)
-			if desc.Name == Config.DecalsFolderName and not table.find(stainFolders, desc) then
-				table.insert(stainFolders, desc)
-				rebuildRayExclude()
+			if desc.Name == Config.WallsFolderName and not table.find(wallFolders, desc) then
+				table.insert(wallFolders, desc)
+				rebuildRayInclude()
 			end
 		end
 		for _, desc in businesses:GetDescendants() do
@@ -316,8 +309,11 @@ local function onHeartbeat()
 		return
 	end
 
-	-- Left face only: its world normal is the part's negated RightVector.
-	if result.Normal:Dot(-part.CFrame.RightVector) < 0.99 then
+	-- Overlay face only: reject hits on any other face (edges/back), where the dirt
+	-- isn't. The surface knows which face it's on; its world normal is the part-local
+	-- face direction rotated into world space.
+	local faceNormal = part.CFrame:VectorToWorldSpace(Vector3.fromNormalId(surface.face))
+	if result.Normal:Dot(faceNormal) < 0.99 then
 		resetStroke()
 		return
 	end
@@ -379,10 +375,9 @@ function PressureWasherController.init(surfaceGetter: (BasePart) -> Surface?)
 	-- Mobile: start/stop the continuous spray as jobs begin and end (see refreshMobileFiring).
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(refreshMobileFiring)
 
-	-- Keep the ray exclude list current with the character and the streamed-in stain folders.
-	localPlayer.CharacterAdded:Connect(rebuildRayExclude)
-	watchStainFolders()
-	rebuildRayExclude()
+	-- Keep the ray include list current with the streamed-in wall folders.
+	watchWallFolders()
+	rebuildRayInclude()
 
 	RunService.Heartbeat:Connect(onHeartbeat)
 end

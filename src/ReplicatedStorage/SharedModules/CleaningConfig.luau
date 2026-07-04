@@ -77,7 +77,7 @@ local CleaningConfig = {
 	MaxBridgeWorldDistance = 16.0,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
-	CompletionThreshold = 0.99,
+	CompletionThreshold = 0.96,
 
 	-- Brown fallback, used ONLY if DirtAsset fails to load.
 	FallbackColor = Color3.fromRGB(102, 61, 24),
