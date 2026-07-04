@@ -28,11 +28,23 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local AcceptJob = Remotes:WaitForChild("AcceptJob") :: RemoteEvent
 local FinishEarly = Remotes:WaitForChild("FinishEarly") :: RemoteEvent
 local WallCompletion = Remotes:WaitForChild("WallCompletion") :: RemoteEvent
+local GoHome = Remotes:WaitForChild("GoHome") :: RemoteEvent
+
+-- Multiplier applied to the completion reward of a "play again" replay: finishing a job
+-- makes the SAME business eligible for one bonus run, claimed by re-accepting it (the
+-- JobSummary's PlayAgain button, which just fires AcceptJob again).
+local REPLAY_BONUS = 1.5
 
 local JobService = {}
 
 -- The JobServer each player is currently on the clock for, or nil.
 local jobs: { [Player]: JobServer.JobServer } = {}
+
+-- The businessId a player just finished (full completion or finish-early) that is eligible
+-- for one REPLAY_BONUS run. Set when a job ends, consumed (and cleared) by the next accept:
+-- accepting that same business pays the bonus, accepting anything else clears it. This keeps
+-- the bonus server-authoritative -- the client never asks for it, it just re-accepts.
+local replayBonusBusiness: { [Player]: string } = {}
 
 local function businessesFolder(): Instance?
 	return Workspace:FindFirstChild(Config.BusinessesFolderName)
@@ -102,19 +114,21 @@ local function accept(player: Player, businessId: any)
 	-- exactly the "redo" path -- a fresh JobServer with progress reset to zero.
 	JobService.endJob(player)
 
-	-- This callback runs only on genuine completion (JobServer.complete), not on a job
-	-- switch or leave. End the job right away -- clearing ActiveJob hides the completion
-	-- frame and stops cleaning -- then hold a beat before sending them home. The client
-	-- keeps them in first person across that beat and zooms out on its own timer (see
-	-- JobCameraController), so the camera pull-back lines up with this teleport. Skip the
-	-- teleport if they've since started another job.
-	jobs[player] = JobServer.new(player, businessId, building, function(_job)
+	-- Claim the replay bonus if this accept is the eligible business (PlayAgain on the same
+	-- job you just finished); otherwise pay normal rate. Either way the pending eligibility
+	-- is spent -- accepting anything clears it, so the bonus only ever applies to the very
+	-- next run after a finish.
+	local multiplier = if replayBonusBusiness[player] == businessId then REPLAY_BONUS else 1
+	replayBonusBusiness[player] = nil
+
+	-- This callback runs when the job ends -- genuine completion OR finish-early (both go
+	-- through JobServer -> onComplete), never a job switch or leave. End the job right away
+	-- (clearing ActiveJob hides the HUD, stops cleaning, and cues the client's 1s camera
+	-- pull-back + JobSummary reveal) and mark this business eligible for one replay bonus.
+	-- We no longer teleport home here -- the JobSummary's GoHome button does that on demand.
+	jobs[player] = JobServer.new(player, businessId, building, multiplier, function(_job)
 		JobService.endJob(player)
-		task.delay(1, function()
-			if JobService.getActiveJob(player) == nil then
-				PlotService.sendToPlotSpawn(player)
-			end
-		end)
+		replayBonusBusiness[player] = businessId
 	end)
 	player:SetAttribute(Config.ActiveJobAttribute, businessId)
 
@@ -148,13 +162,25 @@ local function finishEarly(player: Player, wallAmount: any)
 	job:finishEarly()
 end
 
+-- Player pressed GoHome on the JobSummary: send them back to their plot spawn. This is the
+-- teleport that used to fire automatically a second after finishing; now it's on demand so
+-- the player can sit on the summary (and PlayAgain) as long as they like. No-op if they're
+-- somehow back on a job.
+local function goHome(player: Player)
+	if JobService.getActiveJob(player) == nil then
+		PlotService.sendToPlotSpawn(player)
+	end
+end
+
 function JobService.init()
 	AcceptJob.OnServerEvent:Connect(accept)
 	FinishEarly.OnServerEvent:Connect(finishEarly)
 	WallCompletion.OnServerEvent:Connect(reportWallCompletion)
+	GoHome.OnServerEvent:Connect(goHome)
 
 	Players.PlayerRemoving:Connect(function(player)
 		JobService.endJob(player)
+		replayBonusBusiness[player] = nil
 	end)
 end
 

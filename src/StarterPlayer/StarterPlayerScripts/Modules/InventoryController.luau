@@ -170,15 +170,25 @@ local function applyInventoryVisible()
 	end
 end
 
--- React to a job starting/ending: show the inventory and auto-equip slot 1 on start,
--- hide it and put the tool away on end.
+-- React to a job starting: show the inventory and auto-equip slot 1. On a job ENDING we
+-- deliberately leave the hotbar up and the tool in hand -- the JobSummary is showing and the
+-- player is still "in the job" until they choose. The stow (hide + unequip) is deferred to
+-- GoHome, via stow(); PlayAgain just starts another job and re-equips through here.
 local function onActiveJobChanged()
-	applyInventoryVisible()
 	if hasActiveJob() then
+		applyInventoryVisible()
 		equipSlot(PRIMARY_SLOT)
-	else
-		unequipTools()
 	end
+end
+
+-- Player left the JobSummary via GoHome: now hide the hotbar and put the tool away (the
+-- teardown that used to fire the instant a job ended).
+function InventoryController.stow()
+	local frame = inventoryFrame
+	if frame then
+		frame.Visible = false
+	end
+	unequipTools()
 end
 
 local function bind(screenGui: Instance)

@@ -12,11 +12,11 @@
 -- left the player stuck full-screen; never lowering the min below IDLE_MIN_ZOOM off a job
 -- makes that impossible.
 --
--- The zoom-out is DELAYED: when a job ends we hold first person for UNLOCK_DELAY seconds
--- before pulling the camera back, so the finish reads (and the pull-back lines up with the
--- server sending the player home) rather than snapping to third person the instant the job
--- clears. Starting another job during that window cancels the pending zoom-out (tracked by
--- a generation token) so a job switch stays seamlessly in first person.
+-- The zoom-out is DEFERRED to the summary: when a job ends the client shows the JobSummary
+-- screen, and we hold first person over it rather than pulling back. JobSummaryController
+-- calls freeMouseForSummary() so the player can click its buttons, then releaseToIdle() when
+-- they pick GoHome -- only then do we zoom out. PlayAgain just starts another job, which
+-- re-locks (lock() re-hides the freed cursor) so a replay stays seamlessly in first person.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35,10 +35,6 @@ local FIRST_PERSON_ZOOM = 0.5
 -- the clock, and -- because we never drop the min below this off a job -- the camera can
 -- always clamp itself out of first person, so a finished job can't leave them stuck.
 local IDLE_MIN_ZOOM = 10
-
--- Seconds we stay in first person after a job ends before zooming the camera back out.
--- Matches the server's delay before it teleports the player home, so the two coincide.
-local UNLOCK_DELAY = 1
 
 -- Tap this to toggle the mouse free while first-person-locked on a job (and again to
 -- re-lock it). Only active during a job, since that's the only time we force first person.
@@ -87,8 +83,13 @@ end
 
 local function lock()
 	unlockGen += 1 -- supersede any pending delayed zoom-out (e.g. switching straight into a job)
+	-- A fresh job always starts with the mouse locked to center (crosshair), even coming
+	-- straight out of a summary hold where we'd freed it so the player could click. When we
+	-- were already locked (PlayAgain) this re-hides the cursor; on the very first lock it's a
+	-- no-op since the mouse was never freed.
+	setMouseFreed(false)
 	if locked then
-		return -- already on a job
+		return -- already on a job (or holding first person over the summary)
 	end
 	locked = true
 	-- Equal min/max leaves no room to zoom out, forcing (and holding) first person.
@@ -109,29 +110,32 @@ local function unlock()
 	localPlayer.CameraMinZoomDistance = IDLE_MIN_ZOOM
 end
 
--- The job ended. If we were on one, hold first person for UNLOCK_DELAY before zooming out,
--- so the finish reads and the pull-back coincides with the server's teleport home. A new
--- job starting during the hold bumps unlockGen and cancels this. If we weren't on a job
--- (e.g. the initial sync at startup), just settle into the idle state now.
-local function scheduleUnlock()
-	unlockGen += 1
-	if not locked then
-		unlock()
-		return
+-- The job ended -> the client is showing the JobSummary. We deliberately do NOT zoom out
+-- here anymore: the player stays in first person over the summary and only pulls back to
+-- third person when they choose GoHome (releaseToIdle). freeMouseForSummary lets them mouse
+-- around to click the summary's buttons while we hold them there.
+--
+-- Let the summary appear, then free the cursor so its buttons are clickable. No-op if we're
+-- not actually in the post-job hold (e.g. a new job already started).
+function JobCameraController.freeMouseForSummary()
+	if locked and type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) ~= "string" then
+		setMouseFreed(true)
 	end
-	local gen = unlockGen
-	task.delay(UNLOCK_DELAY, function()
-		if gen == unlockGen then
-			unlock()
-		end
-	end)
+end
+
+-- Player left the summary via GoHome: now do the deferred pull-back to third person.
+function JobCameraController.releaseToIdle()
+	unlock()
 end
 
 local function sync()
 	if type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string" then
 		lock()
-	else
-		scheduleUnlock()
+	elseif not locked then
+		-- No job and we weren't holding first person (startup / idle sync): settle third
+		-- person now. If we WERE locked, a job just ended -- stay in first person for the
+		-- summary; the pull-back waits for GoHome (releaseToIdle).
+		unlock()
 	end
 end
 

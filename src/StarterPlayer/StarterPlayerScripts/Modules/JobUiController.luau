@@ -52,6 +52,11 @@ local jobPanel: UiAnimations.Panel? = nil
 -- One refresher per TaskDesign row, rebuilt on each bind; re-evaluates its lock state.
 local taskRefreshers: { () -> () } = {}
 
+-- True while a finished job's JobSummary is up: the ActiveJob attribute has cleared, but we
+-- keep the whole job UI hidden (the board button must NOT pop back over the summary) until the
+-- player leaves the summary via GoHome, which calls releaseSummaryHold. See JobSummaryController.
+local summaryHold = false
+
 -- Whether the local player currently holds a job (drives whole-UI visibility).
 local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
@@ -72,12 +77,14 @@ local function refreshTasks()
 end
 
 -- Show/hide the whole job UI off the ActiveJob attribute: hidden while on a job, back
--- when it clears (job finished). Guards the post-respawn gap before anything is bound.
+-- when it clears (job finished). While the summary hold is up the button stays hidden too --
+-- the finished job's summary owns the screen until GoHome. Guards the post-respawn gap before
+-- anything is bound.
 local function applyActiveJobState()
 	local active = hasActiveJob()
 	local button = jobButton
 	if button and button.Parent then
-		button.Visible = not active
+		button.Visible = not active and not summaryHold
 	end
 	local frame = jobFrame
 	local panel = jobPanel
@@ -86,13 +93,27 @@ local function applyActiveJobState()
 	end
 end
 
+-- ActiveJob flipped: a job starting clears any summary hold; a job ending enters one (its
+-- summary is now showing) so the board button stays hidden until GoHome releases it.
+local function onActiveJobChanged()
+	summaryHold = not hasActiveJob()
+	applyActiveJobState()
+end
+
+-- Called when the player leaves the JobSummary via GoHome: end the hold and let the board
+-- button (and B shortcut) come back.
+function JobUiController.releaseSummaryHold()
+	summaryHold = false
+	applyActiveJobState()
+end
+
 -- Toggle the board open/closed. Shared by the JobButton and the TOGGLE_KEY shortcut.
 -- No-op (returns false) while on a job (the whole UI is hidden then) or before anything
 -- is bound; returns true when it actually toggled, so the key path can play its click.
 local function toggleBoard(): boolean
 	local frame = jobFrame
 	local panel = jobPanel
-	if not frame or not frame.Parent or not panel or panel:isAnimating() or hasActiveJob() then
+	if not frame or not frame.Parent or not panel or panel:isAnimating() or hasActiveJob() or summaryHold then
 		return false
 	end
 	if frame.Visible then
@@ -174,7 +195,7 @@ function JobUiController.init()
 	local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 	-- Persistent subscriptions; each reads whichever elements/rows are currently bound.
-	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(applyActiveJobState)
+	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(onActiveJobChanged)
 	DataService:getChangedSignal({ "BusinessList" }):Connect(refreshTasks)
 
 	-- TOGGLE_KEY opens/closes the board just like the JobButton. Ignore it when the

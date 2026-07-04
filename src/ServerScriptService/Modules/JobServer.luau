@@ -18,6 +18,10 @@ local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
 
+-- Fired to the owning player when the job ends (full completion OR finish-early) so their
+-- client can show the JobSummary screen. See JobSummaryController.
+local JobSummary = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("JobSummary") :: RemoteEvent
+
 local JobServer = {}
 JobServer.__index = JobServer
 
@@ -26,6 +30,12 @@ export type JobServer = typeof(setmetatable(
 		player: Player,
 		businessId: string,
 		onComplete: (JobServer) -> (),
+		-- Multiplier on the completion payout (1 normally, 1.5 on a PlayAgain replay -- see
+		-- JobService's replay-bonus tracking). Applied to full completion and the prorated
+		-- finish-early reward alike.
+		rewardMultiplier: number,
+		-- os.clock() when the job was accepted, for the summary's "finished in mm:ss".
+		startedAt: number,
 		totalWalls: number,
 		totalDecals: number,
 		cleanedWalls: { [string]: boolean },
@@ -63,12 +73,15 @@ function JobServer.new(
 	player: Player,
 	businessId: string,
 	building: Instance,
+	rewardMultiplier: number,
 	onComplete: (JobServer) -> ()
 ): JobServer
 	local self = setmetatable({}, JobServer) :: JobServer
 	self.player = player
 	self.businessId = businessId
 	self.onComplete = onComplete
+	self.rewardMultiplier = rewardMultiplier
+	self.startedAt = os.clock()
 	self.totalWalls = countChildren(building, Config.WallsFolderName, "BasePart")
 	self.totalDecals = countChildren(building, Config.DecalsFolderName, "Model")
 	self.cleanedWalls = {}
@@ -124,6 +137,21 @@ function JobServer.isComplete(self: JobServer): boolean
 	return self.completed
 end
 
+-- Tell the owning player's client to show the JobSummary screen. `fraction` is how much of
+-- the job was cleaned (1 for a full completion, the prorated share for a finish-early), which
+-- drives the star rating; `cash`/`xp` are the amounts actually awarded (already multiplied);
+-- `bonus` flags the 1.5x replay so the client can show its "(1.5X REWARDS)" badge.
+function JobServer._fireSummary(self: JobServer, cash: number, xp: number, fraction: number)
+	JobSummary:FireClient(self.player, {
+		businessId = self.businessId,
+		cash = cash,
+		xp = xp,
+		fraction = fraction,
+		duration = os.clock() - self.startedAt,
+		bonus = self.rewardMultiplier > 1,
+	})
+end
+
 -- Pay the completion reward and hand back to JobService to end the job. Runs once.
 function JobServer.complete(self: JobServer)
 	if self.completed then
@@ -139,14 +167,19 @@ function JobServer.complete(self: JobServer)
 	end)
 
 	-- Completion pays the business's BaseReward (Cash) and XpReward (XP) as a lump bonus on
-	-- top of the per-clean rewards. Paid silently via awardCash/awardXp (not reward), so no
-	-- floating popup is fired to the client -- the balances/XP bar just tick up.
+	-- top of the per-clean rewards, scaled by the replay multiplier. Paid silently via
+	-- awardCash/awardXp (not reward), so no floating popup is fired to the client -- the
+	-- balances/XP bar just tick up, and the JobSummary reports the totals instead.
 	local def = BusinessConfig[self.businessId]
+	local cash, xp = 0, 0
 	if def then
-		ProgressionService.awardCash(self.player, def.BaseReward)
-		ProgressionService.awardXp(self.player, def.XpReward)
+		cash = math.floor(def.BaseReward * self.rewardMultiplier)
+		xp = math.floor(def.XpReward * self.rewardMultiplier)
+		ProgressionService.awardCash(self.player, cash)
+		ProgressionService.awardXp(self.player, xp)
 	end
 
+	self:_fireSummary(cash, xp, 1)
 	self.onComplete(self)
 end
 
@@ -162,13 +195,17 @@ function JobServer.finishEarly(self: JobServer)
 	end
 	self.completed = true
 
+	local fraction = self:getCompletion()
 	local def = BusinessConfig[self.businessId]
+	local cash, xp = 0, 0
 	if def then
-		local fraction = self:getCompletion()
-		ProgressionService.awardCash(self.player, math.floor(def.BaseReward * fraction))
-		ProgressionService.awardXp(self.player, math.floor(def.XpReward * fraction))
+		cash = math.floor(def.BaseReward * fraction * self.rewardMultiplier)
+		xp = math.floor(def.XpReward * fraction * self.rewardMultiplier)
+		ProgressionService.awardCash(self.player, cash)
+		ProgressionService.awardXp(self.player, xp)
 	end
 
+	self:_fireSummary(cash, xp, fraction)
 	self.onComplete(self)
 end
 

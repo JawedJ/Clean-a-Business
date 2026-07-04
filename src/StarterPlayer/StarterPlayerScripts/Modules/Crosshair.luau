@@ -20,6 +20,35 @@ local DOT_SIZE = 12
 
 local Crosshair = {}
 
+-- The crosshair ScreenGui + current state, lifted to module scope so setSuppressed can drive
+-- them alongside the first-person render loop.
+local gui: ScreenGui? = nil
+local firstPerson = false
+-- When true, the dot is force-hidden (and the cursor shown) even in first person -- used by
+-- the JobSummary so its buttons aren't blocked by the centered dot.
+local suppressed = false
+
+-- Apply the current state: the dot shows only in first person AND while not suppressed; the
+-- mouse icon is the inverse so the cursor returns whenever the dot is hidden.
+local function apply()
+	local g = gui
+	if not g then
+		return
+	end
+	local show = firstPerson and not suppressed
+	g.Enabled = show
+	UserInputService.MouseIconEnabled = not show
+end
+
+-- Force the crosshair off (or release it) regardless of first-person state.
+function Crosshair.setSuppressed(value: boolean)
+	if suppressed == value then
+		return
+	end
+	suppressed = value
+	apply()
+end
+
 local function buildGui(): (ScreenGui, Frame)
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "Crosshair"
@@ -44,10 +73,9 @@ local function buildGui(): (ScreenGui, Frame)
 end
 
 function Crosshair.init()
-	local gui = buildGui()
-	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-	local firstPerson = false
+	local builtGui = buildGui()
+	builtGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+	gui = builtGui
 
 	-- Resolve to first person below the enter threshold and back to third person
 	-- only above the (larger) exit threshold; in the band between, hold state.
@@ -71,8 +99,7 @@ function Crosshair.init()
 			return
 		end
 		firstPerson = nowFirstPerson
-		gui.Enabled = firstPerson
-		UserInputService.MouseIconEnabled = not firstPerson
+		apply()
 	end)
 end
 
