@@ -20,6 +20,7 @@ local JobCameraController = require(Modules:WaitForChild("JobCameraController"))
 local UiSoundController = require(Modules:WaitForChild("UiSoundController"))
 local UiStrokeScaler = require(Modules:WaitForChild("UiStrokeScaler"))
 local InventoryController = require(Modules:WaitForChild("InventoryController"))
+local ToolFloatController = require(Modules:WaitForChild("ToolFloatController"))
 
 
 DataService:init()
@@ -40,4 +41,5 @@ JobCameraController.init()
 UiSoundController.init()
 UiStrokeScaler.init()
 InventoryController.init()
+ToolFloatController.init()
 
