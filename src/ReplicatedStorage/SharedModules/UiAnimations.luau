@@ -178,6 +178,67 @@ function Panel.hideInstant(self: Panel)
 end
 
 --============================================================================--
+-- DropIn: bounce a frame straight down from the top of the screen into place
+--============================================================================--
+
+-- Bounce feel + how far (in screen-heights) above its resting spot the frame starts before
+-- dropping. Big enough to clear the top edge for any frame; only the Y scale is ever touched.
+local DROP_DURATION = 1.25
+local DROP_TWEEN = TweenInfo.new(DROP_DURATION, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out)
+local DROP_RISE = 1.5
+
+local DropIn = {}
+DropIn.__index = DropIn
+UiAnimations.DropIn = DropIn
+
+export type DropIn = typeof(setmetatable(
+	{} :: {
+		frame: GuiObject,
+		restPosition: UDim2,
+		activeTween: Tween?,
+	},
+	DropIn
+))
+
+-- Build one per frame (re-build on each respawn, like Panel). Captures the frame's authored
+-- spot as the landing; must be called while the frame is at its resting position. We do NOT
+-- re-anchor or read Size -- the drop only moves Y -- so it's safe with any anchor and with a
+-- UIAspectRatioConstraint (which makes the rendered size differ from the authored Size).
+function DropIn.new(frame: GuiObject): DropIn
+	return setmetatable({
+		frame = frame,
+		restPosition = frame.Position,
+		activeTween = nil,
+	}, DropIn)
+end
+
+-- Lift the frame straight up (SAME X, so its authored/centered X can never drift off-screen)
+-- above the top edge, then bounce it down into the resting position. Makes the frame Visible
+-- and returns the tween so callers can react to Completed.
+function DropIn.play(self: DropIn): Tween
+	if self.activeTween then
+		self.activeTween:Cancel()
+	end
+	local frame = self.frame
+	local rest = self.restPosition
+	frame.Position = UDim2.new(rest.X.Scale, rest.X.Offset, rest.Y.Scale - DROP_RISE, rest.Y.Offset)
+	frame.Visible = true
+	local tween = TweenService:Create(frame, DROP_TWEEN, { Position = rest })
+	self.activeTween = tween
+	tween:Play()
+	return tween
+end
+
+-- Cancel an in-flight drop (e.g. the frame is dismissed mid-bounce). Leaves Visible alone --
+-- the caller decides whether to hide.
+function DropIn.stop(self: DropIn)
+	if self.activeTween then
+		self.activeTween:Cancel()
+		self.activeTween = nil
+	end
+end
+
+--============================================================================--
 -- hoverGrow: grow a button while hovered
 --============================================================================--
 

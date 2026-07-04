@@ -18,12 +18,12 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
+local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
 local JobCameraController = require(script.Parent.JobCameraController)
 local InventoryController = require(script.Parent.InventoryController)
 local JobUiController = require(script.Parent.JobUiController)
@@ -41,10 +41,6 @@ local SCREEN_GUI_NAME = "ScreenGui"
 -- beat first. The player stays in first person across this hold; the camera only pulls back
 -- once they pick GoHome.
 local SHOW_DELAY = 1
-
--- The frame drops in from just above the screen and bounces into its authored position. Only
--- the Y changes; the tween lands on the position captured at bind time.
-local DROP_TWEEN = TweenInfo.new(1.25, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out)
 
 -- Seconds the money + XP counters tick up from 0 to their real totals as the frame drops in.
 local COUNT_DURATION = 3
@@ -86,11 +82,9 @@ local bonusBadge: TextLabel? = nil
 local playAgain: ImageButton? = nil
 local goHome: ImageButton? = nil
 
--- The frame's authored (target) position, captured on bind, so the drop-in tween can land on
--- it exactly regardless of where the designer places the frame.
-local targetPosition: UDim2 = UDim2.new()
--- The drop-in tween in flight, so a fresh reveal can supersede one still playing.
-local dropTween: Tween? = nil
+-- Drop-in bounce animation for the frame (see UiAnimations.DropIn), rebuilt on each bind since
+-- the ScreenGui is re-cloned per respawn.
+local dropIn: UiAnimations.DropIn? = nil
 
 -- The RenderStepped connection ticking the money/XP counters up, and the looping SFX that
 -- plays alongside it. Both live only for the COUNT_DURATION count-up; stopCount tears them down.
@@ -103,12 +97,6 @@ local buttonsInteractable = false
 
 -- The business the summary is currently showing, so PlayAgain knows which job to re-accept.
 local currentBusinessId: string? = nil
-
--- The target position raised so the whole frame sits just above the top edge (same X + any
--- offsets; only the Y scale changes). This is where the drop-in starts from.
-local function offscreenAbove(target: UDim2, size: UDim2): UDim2
-	return UDim2.new(target.X.Scale, target.X.Offset, -size.Y.Scale - 0.05, -size.Y.Offset)
-end
 
 -- One star per 20% cleaned, clamped to 1..5 so there's always a rating (and a description);
 -- a full completion sends fraction = 1 -> 5 stars. The tiny epsilon keeps an exact 1.0 from
@@ -223,16 +211,12 @@ local function show(data: SummaryData)
 		bonusBadge.Visible = data.bonus
 	end
 
-	-- Drop in from just above the screen and bounce into the authored position (Y only).
-	if dropTween then
-		dropTween:Cancel()
-		dropTween = nil
+	-- Bounce the frame down from the top-center of the screen into place (see UiAnimations).
+	if dropIn then
+		dropIn:play()
+	else
+		root.Visible = true
 	end
-	root.Position = offscreenAbove(targetPosition, root.Size)
-	root.Visible = true
-	local tween = TweenService:Create(root, DROP_TWEEN, { Position = targetPosition })
-	dropTween = tween
-	tween:Play()
 
 	-- We're held in first person over the summary (the camera doesn't zoom out and the
 	-- inventory stays up); free the cursor so PlayAgain/GoHome are clickable, and hide the
@@ -243,9 +227,8 @@ end
 
 -- Tear the summary off screen. Used by both buttons and as a safety when a new job starts.
 local function hide()
-	if dropTween then
-		dropTween:Cancel()
-		dropTween = nil
+	if dropIn then
+		dropIn:stop()
 	end
 	-- Kill the count-up + its loop SFX if the summary leaves mid-tick.
 	stopCount()
@@ -295,13 +278,16 @@ local function bind(screenGui: Instance)
 	starAmount = textFrame:WaitForChild("StarAmount") :: TextLabel
 	ratingDescription = textFrame:WaitForChild("RatingDescription") :: TextLabel
 	completionText = textFrame:WaitForChild("CompletionText") :: TextLabel
-	-- The "(1.5X REWARDS)" badge sits at the frame root, alongside the buttons.
-	bonusBadge = root:WaitForChild("MoneyReward") :: TextLabel
 	playAgain = root:WaitForChild("PlayAgain") :: ImageButton
 	goHome = root:WaitForChild("GoHome") :: ImageButton
+	-- The "(1.5X REWARDS)" badge (the root TextLabel "Multi") is cosmetic -- look it up WITHOUT
+	-- yielding, so a rename/removal can't infinite-yield here and hang the whole bind (which
+	-- would leave the drop-in animation and both buttons dead).
+	bonusBadge = root:FindFirstChild("Multi") :: TextLabel?
 
-	-- Where the frame lives when open; the drop-in tween lands here (Studio authors it hidden).
-	targetPosition = root.Position
+	-- Build the drop-in from the frame's authored spot (see UiAnimations), then hide it until a
+	-- job finishes. Studio authors it hidden too.
+	dropIn = UiAnimations.DropIn.new(root)
 	root.Visible = false
 
 	playAgain.Activated:Connect(onPlayAgain)

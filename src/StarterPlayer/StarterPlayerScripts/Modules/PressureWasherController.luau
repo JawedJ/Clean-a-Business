@@ -182,16 +182,40 @@ local function aimSpray(target: Vector3)
 	att.WorldCFrame = CFrame.lookAt(origin, target)
 end
 
+local function hasActiveJob(): boolean
+	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
+end
+
+-- Mobile only: fire whenever the washer is equipped AND a job is active, stop otherwise.
+-- (Desktop/console keep hold-to-fire via Activated/Deactivated.) The washer now stays equipped
+-- through the end-of-job JobSummary, so equip alone can't gate firing anymore -- otherwise the
+-- spray would keep running over the summary. Driven by both the Equipped event and the
+-- ActiveJob attribute so it starts on a fresh job and stops the instant one ends.
+local function refreshMobileFiring()
+	if not IS_MOBILE then
+		return
+	end
+	local shouldFire = equippedTool ~= nil and hasActiveJob()
+	if shouldFire == firing then
+		return
+	end
+	firing = shouldFire
+	if shouldFire then
+		startSound()
+		startSpray()
+	else
+		resetStroke()
+		stopSound()
+		stopSpray()
+	end
+end
+
 local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
 		resolveSpray(tool)
-		-- Mobile: fire the moment it's equipped and keep firing until unequipped.
-		if IS_MOBILE then
-			firing = true
-			startSound()
-			startSpray()
-		end
+		-- Mobile: fire while equipped, but only during a job (refreshMobileFiring gates it).
+		refreshMobileFiring()
 	end)
 	tool.Activated:Connect(function()
 		-- On mobile firing is tied to equip, not to taps -- a tap is a look/aim gesture.
@@ -351,6 +375,9 @@ function PressureWasherController.init(surfaceGetter: (BasePart) -> Surface?)
 	if localPlayer.Character then
 		watch(localPlayer.Character)
 	end
+
+	-- Mobile: start/stop the continuous spray as jobs begin and end (see refreshMobileFiring).
+	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(refreshMobileFiring)
 
 	-- Keep the ray exclude list current with the character and the streamed-in stain folders.
 	localPlayer.CharacterAdded:Connect(rebuildRayExclude)
