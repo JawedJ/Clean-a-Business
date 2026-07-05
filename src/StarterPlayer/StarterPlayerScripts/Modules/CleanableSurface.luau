@@ -176,12 +176,26 @@ export type CleanableSurface = typeof(setmetatable(
 		pixels: buffer,
 		dirtyTotal: number,
 		cleanedCount: number,
+		threshold: number,
 		cleaned: boolean,
 		onCleaned: (() -> ())?,
 		onProgress: (() -> ())?,
 	},
 	CleanableSurface
 ))
+
+-- The fraction of dirt that must be erased before this surface counts as clean.
+-- Defaults to the shared Config.CompletionThreshold, but a part can override it with
+-- an optional "Percentage" attribute. The attribute may be authored as a 0-1 fraction
+-- (e.g. 0.9) or a 0-100 percentage (e.g. 90); values > 1 are treated as a percentage.
+local function resolveThreshold(part: BasePart): number
+	local pct = part:GetAttribute("Percentage")
+	if typeof(pct) ~= "number" then
+		return Config.CompletionThreshold
+	end
+	local fraction = if pct > 1 then pct / 100 else pct
+	return math.clamp(fraction, 0, 1)
+end
 
 function CleanableSurface.new(part: BasePart): CleanableSurface
 	local face = overlayFace(part)
@@ -210,6 +224,7 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		pixels = pixels,
 		dirtyTotal = dirtyTotal,
 		cleanedCount = 0,
+		threshold = resolveThreshold(part),
 		cleaned = false,
 		onCleaned = nil,
 		onProgress = nil,
@@ -308,7 +323,7 @@ function CleanableSurface.clean(
 	-- Mark done first so onProgress sees the final state (a finished wall reads as fully
 	-- clean, not stuck at the ~0.99 threshold), then report progress, then completion.
 	local justCleaned = false
-	if self.cleanedCount / self.dirtyTotal >= Config.CompletionThreshold then
+	if self.cleanedCount / self.dirtyTotal >= self.threshold then
 		self.cleaned = true
 		self.decal:Destroy()
 		justCleaned = true

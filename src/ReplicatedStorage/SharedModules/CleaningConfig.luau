@@ -83,6 +83,9 @@ local CleaningConfig = {
 	MaxBridgeWorldDistance = 16.0,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
+	-- Default for every wall; an individual CleanableWall part can override it with a
+	-- numeric "Percentage" attribute (a 0-1 fraction like 0.9, or a 0-100 percentage
+	-- like 90 -- values > 1 are read as a percentage).
 	CompletionThreshold = 0.97,
 
 	-- Brown fallback, used ONLY if DirtAsset fails to load.
