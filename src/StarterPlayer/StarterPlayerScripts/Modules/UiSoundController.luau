@@ -23,7 +23,25 @@ local HOVER_BUTTON_NAME = "JobButton"
 
 local UiSoundController = {}
 
+-- Roblox's default mobile controls (jump button, thumbstick) live under a
+-- ScreenGui named "TouchGui" in PlayerGui. Those are GuiButtons too, but they
+-- aren't real UI clicks -- don't play the click sound for them.
+local function isTouchControl(button: GuiButton): boolean
+	local ancestor = button.Parent
+	while ancestor do
+		if ancestor.Name == "TouchGui" and ancestor:IsA("ScreenGui") then
+			return true
+		end
+		ancestor = ancestor.Parent
+	end
+	return false
+end
+
 local function wireButton(button: GuiButton)
+	if isTouchControl(button) then
+		return
+	end
+
 	button.Activated:Connect(function()
 		SoundManager.playOneShot(CLICK_SOUND)
 	end)
