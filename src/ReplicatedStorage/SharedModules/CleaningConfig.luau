@@ -24,6 +24,12 @@ local CleaningConfig = {
 	CleanablesFolderName = "Cleanables",
 	WallsFolderName = "CleanableWalls",
 
+	-- Interior geometry (windows, props) authored inside each business at:
+	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.<InteriorFolderName>
+	-- The cleaning ray ignores this folder's descendants so interior objects sitting in
+	-- front of a wall never block the wash from reaching the wall behind them.
+	InteriorFolderName = "Interior",
+
 	-- Cleanable stains (broom targets) live alongside the walls:
 	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableDecals.<model>
 	-- Each <model> has a child BasePart named HitboxName the player clicks, and a
@@ -77,7 +83,7 @@ local CleaningConfig = {
 	MaxBridgeWorldDistance = 16.0,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
-	CompletionThreshold = 0.96,
+	CompletionThreshold = 0.97,
 
 	-- Brown fallback, used ONLY if DirtAsset fails to load.
 	FallbackColor = Color3.fromRGB(102, 61, 24),

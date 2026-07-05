@@ -2,8 +2,8 @@
 
 -- Drives the pressure washer: detects when the tool is equipped + firing,
 -- raycasts from the mouse each frame, and tells the aimed CleanableSurface to
--- erase. The ray only hits cleanable walls, and only the surface's textured face
--- (where the dirt overlay lives) is cleanable.
+-- erase. The ray ignores the character and each business's interior/stain folders, and
+-- only the surface's textured face (where the dirt overlay lives) is cleanable.
 --
 -- It also drives the spray VFX: the Handle's ParticleEmitter only emits while the
 -- player is firing, and each frame its attachment is re-aimed so the spray shoots
@@ -77,29 +77,43 @@ local sprayEmitter: ParticleEmitter? = nil
 local sprayAttachment: Attachment? = nil
 
 local rayParams = RaycastParams.new()
-rayParams.FilterType = Enum.RaycastFilterType.Include
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- The pressure washer ray ONLY hits cleanable walls: its filter is every business's
--- CleanableWalls folder. Everything else -- the character, props, counters, and the
--- stain hitboxes in front of the walls -- is invisible to it, so nothing can block the
--- wash and the ray always lands on the wall behind them. Rebuilt when a new walls folder
--- streams in; assigned to rayParams then (the engine copies the array on assign, so a
--- rebuild must reassign).
-local wallFolders: { Instance } = {}
+-- Instances the pressure washer ray ignores: the local character plus every business's
+-- Interior folder (windows/props that sit in front of the walls) and CleanableDecals
+-- folder (stain hitboxes are broom targets, so the ray passes THROUGH them to the wall
+-- overlay behind). Excluding these lets the wash reach the wall no matter what's in the
+-- way. Rebuilt when the character respawns or a new folder streams in; assigned to
+-- rayParams then (the engine copies the array on assign, so a rebuild must reassign).
+local ignoredFolders: { Instance } = {}
+local rayExclude: { Instance } = {}
 
-local function rebuildRayInclude()
-	rayParams.FilterDescendantsInstances = wallFolders
+-- Folder names (directly under a business's Cleanables) whose descendants the ray skips.
+local IGNORED_FOLDER_NAMES: { [string]: boolean } = {
+	[Config.InteriorFolderName] = true,
+	[Config.DecalsFolderName] = true,
+}
+
+local function rebuildRayExclude()
+	table.clear(rayExclude)
+	if localPlayer.Character then
+		table.insert(rayExclude, localPlayer.Character)
+	end
+	for _, folder in ignoredFolders do
+		table.insert(rayExclude, folder)
+	end
+	rayParams.FilterDescendantsInstances = rayExclude
 end
 
--- Collect every business's CleanableWalls folder (and any that stream in later) into
--- the ray include list. Mirrors DecalVisibility's Businesses-folder scan.
-local function watchWallFolders()
+-- Collect every business's ignored folders (and any that stream in later) into the ray
+-- exclude list. Mirrors DecalVisibility's Businesses-folder scan.
+local function watchIgnoredFolders()
 	task.spawn(function()
 		local businesses = Workspace:WaitForChild(Config.BusinessesFolderName)
 		local function consider(desc: Instance)
-			if desc.Name == Config.WallsFolderName and not table.find(wallFolders, desc) then
-				table.insert(wallFolders, desc)
-				rebuildRayInclude()
+			if desc:IsA("Folder") and IGNORED_FOLDER_NAMES[desc.Name] and not table.find(ignoredFolders, desc) then
+				table.insert(ignoredFolders, desc)
+				rebuildRayExclude()
 			end
 		end
 		for _, desc in businesses:GetDescendants() do
@@ -375,9 +389,10 @@ function PressureWasherController.init(surfaceGetter: (BasePart) -> Surface?)
 	-- Mobile: start/stop the continuous spray as jobs begin and end (see refreshMobileFiring).
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(refreshMobileFiring)
 
-	-- Keep the ray include list current with the streamed-in wall folders.
-	watchWallFolders()
-	rebuildRayInclude()
+	-- Keep the ray exclude list current with the character and the streamed-in folders.
+	localPlayer.CharacterAdded:Connect(rebuildRayExclude)
+	watchIgnoredFolders()
+	rebuildRayExclude()
 
 	RunService.Heartbeat:Connect(onHeartbeat)
 end
