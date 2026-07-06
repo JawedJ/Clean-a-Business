@@ -309,6 +309,7 @@ StarterPlayer/StarterPlayerScripts/
   Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI + MissingHighlight + UiPreloader
   Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide, onProgressChanged signal
   Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %
+  Modules/CashUiController.luau    cash HUD: writes Cash into CashDisplay.MoneyAmt as a "$"-prefixed abbreviated number (e.g. "$1.1k"), re-renders on Cash change
   Modules/JobUiController.luau     job board UI: toggle (JobButton/B key), per-business rows, AcceptJob
   Modules/JobCompletionController.luau  completion HUD: live progress bar + %, FinishEarly button/H key
   Modules/SurfaceManager.luau      wall-overlay engine, driven by JobClient (buildWalls/clear)
@@ -326,7 +327,8 @@ Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
 and the shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a
 `Cleanables` folder (`CleanableWalls` + `CleanableDecals`) authored right in the building.
 The **HUD `ScreenGui`** is also Studio-authored (not Rojo): `JobButton`/`JobFrame` (board),
-`JobCompletion` (progress bar + `FinishEarly`), `XpBar`, `Inventory` (the custom hotbar:
+`JobCompletion` (progress bar + `FinishEarly`), `XpBar`, `CashDisplay` (the `MoneyAmt`
+label showing the player's live Cash), `Inventory` (the custom hotbar:
 `ImageButton1..5`), and `HighlightButton` (an `ImageButton` that triggers the reveal glow,
 shown only during a job). The client controllers bind to these instances by name and re-bind
 on each respawn (the `ScreenGui` is re-cloned). `UiPreloader` warms these assets' images up
