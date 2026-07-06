@@ -22,6 +22,7 @@ local UiStrokeScaler = require(Modules:WaitForChild("UiStrokeScaler"))
 local InventoryController = require(Modules:WaitForChild("InventoryController"))
 local ToolFloatController = require(Modules:WaitForChild("ToolFloatController"))
 local MissingHighlightController = require(Modules:WaitForChild("MissingHighlightController"))
+local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
 
 
 DataService:init()
@@ -45,4 +46,6 @@ InventoryController.init()
 ToolFloatController.init()
 -- Press R on a job to flash a yellow, through-walls highlight over what's left to clean.
 MissingHighlightController.init()
+-- Warm the HUD's image assets in the background so they don't first render blurry.
+UiPreloader.init()
 

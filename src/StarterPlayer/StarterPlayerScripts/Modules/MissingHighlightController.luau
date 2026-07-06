@@ -31,7 +31,7 @@ local REVEAL_KEY = Enum.KeyCode.R
 local REVEAL_DURATION = 8
 -- Neon-yellow glow for stains (walls carry their own glow via CleanableSurface).
 local STAIN_GLOW_COLOR = Color3.fromRGB(255, 234, 0)
-local STAIN_GLOW_TRANSPARENCY = 0.75
+local STAIN_GLOW_TRANSPARENCY = 0.55
 
 -- The HUD button that triggers the same reveal (PlayerGui.ScreenGui.HighlightButton).
 local SCREEN_GUI_NAME = "ScreenGui"
@@ -45,6 +45,11 @@ local glowingParts: { PartLook } = {}
 -- Bumped on every reveal (and on teardown) so a stale expiry timer can tell it's been
 -- superseded and skip its clear, leaving the newer reveal's glow alone.
 local revealToken = 0
+-- os.clock() before which a new reveal is ignored. Each reveal rebuilds every wall's glow
+-- overlay (new EditableImages), so spamming the key/button churns them and hitches the game.
+-- Gating for the reveal's own duration means you can only re-trigger once the current glow has
+-- run its course -- which is exactly when a refresh is actually useful.
+local revealCooldownUntil = 0
 
 -- The currently bound button frame, refreshed each time the ScreenGui is (re)bound.
 local buttonFrame: Frame? = nil
@@ -82,6 +87,12 @@ local function glowStainPart(part: BasePart)
 end
 
 local function reveal()
+	-- Cooldown: ignore re-triggers until the current glow has run its course.
+	if os.clock() < revealCooldownUntil then
+		return
+	end
+	revealCooldownUntil = os.clock() + REVEAL_DURATION
+
 	clearGlow()
 
 	-- Walls glow their own remaining-dirt pixels.
@@ -151,6 +162,7 @@ function MissingHighlightController.init()
 	-- the job.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(function()
 		revealToken += 1
+		revealCooldownUntil = 0 -- a fresh job starts with the reveal ready
 		clearGlow()
 		applyButtonVisibility()
 	end)
