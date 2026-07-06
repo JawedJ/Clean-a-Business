@@ -284,6 +284,7 @@ ReplicatedStorage/SharedModules/
   CleaningConfig.luau   cleaning tunables (shared by client + server)
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
+  UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow; hoverGrowInGrid pushes grid neighbours + left-edge padding)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
   FinishEarly           RemoteEvent (client → server: end the active job now for a prorated reward; carries wall %)
@@ -310,7 +311,8 @@ StarterPlayer/StarterPlayerScripts/
   Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide, onProgressChanged signal
   Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %
   Modules/CashUiController.luau    cash HUD: writes Cash into CashDisplay.MoneyAmt as a "$"-prefixed abbreviated number (e.g. "$1.1k"), re-renders on Cash change
-  Modules/JobUiController.luau     job board UI: toggle (JobButton/B key), per-business rows, AcceptJob
+  Modules/JobUiController.luau     job board UI: toggle (Buttons.JobButton/B key), per-business rows, AcceptJob; hides the whole Buttons frame while on a job; wires the Buttons-frame hover polish
+  Modules/UiSoundController.luau   plays shared UI SFX: click on every GuiButton, hover on buttons under the Buttons frame
   Modules/JobCompletionController.luau  completion HUD: live progress bar + %, FinishEarly button/H key
   Modules/SurfaceManager.luau      wall-overlay engine, driven by JobClient (buildWalls/clear)
   Modules/DecalVisibility.luau     stain visibility: hidden unless on the job; per-client clean + redo
@@ -326,12 +328,23 @@ Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
 `ReplicatedStorage.Items.Broom` (each with a `ToolId` attribute; `StarterPack` is empty),
 and the shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a
 `Cleanables` folder (`CleanableWalls` + `CleanableDecals`) authored right in the building.
-The **HUD `ScreenGui`** is also Studio-authored (not Rojo): `JobButton`/`JobFrame` (board),
+The **HUD `ScreenGui`** is also Studio-authored (not Rojo): a `Buttons` frame holding the
+main HUD buttons (`JobButton` opens the board; `UpgradesButton` is a placeholder, no click
+wired yet), laid out side by side by a `UIGridLayout`; plus `JobFrame` (board),
 `JobCompletion` (progress bar + `FinishEarly`), `XpBar`, `CashDisplay` (the `MoneyAmt`
 label showing the player's live Cash), `Inventory` (the custom hotbar:
 `ImageButton1..5`), and `HighlightButton` (an `ImageButton` that triggers the reveal glow,
 shown only during a job). The client controllers bind to these instances by name and re-bind
-on each respawn (the `ScreenGui` is re-cloned). `UiPreloader` warms these assets' images up
+on each respawn (the `ScreenGui` is re-cloned).
+
+Every button in the `Buttons` frame shares the same polish, wired in `JobUiController.bind`:
+a center hover-grow (`UiAnimations.hoverGrowInGrid`) that, because a `UIGridLayout` can't
+reflow on its own, also widens the grid's `CellPadding` by exactly how far the grown edge
+reaches so the row-neighbour is pushed aside and the gap stays constant; the left-edge button
+additionally tweens the frame's `UIPadding.PaddingLeft` so it grows *into* that new room
+rather than off the screen edge. Click/hover SFX come from `UiSoundController` (click on any
+`GuiButton`, hover on anything under the `Buttons` frame). `JobUiController` hides the whole
+`Buttons` frame — not just `JobButton` — while a job is active, so no HUD buttons show mid-job. `UiPreloader` warms these assets' images up
 front (via `ContentProvider:PreloadAsync` on the `StarterGui` templates, in a background task)
 so they don't first render blurry.
 

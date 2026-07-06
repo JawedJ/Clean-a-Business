@@ -267,4 +267,57 @@ function UiAnimations.hoverGrow(button: GuiButton)
 	end)
 end
 
+-- Like hoverGrow, but for buttons sharing a UIGridLayout -- which forces every cell to its
+-- fixed CellSize and so never reflows to make room for the grow, leaving hovered buttons
+-- overlapping their neighbours. Alongside the same center grow, this widens the grid's
+-- horizontal CellPadding while hovered by exactly how far the grown button's edge reaches
+-- toward its neighbour ((HOVER_SCALE - 1) / 2 of the cell width), so the neighbour is pushed
+-- just enough to keep the gap between them constant -- it reads as the grow making space.
+--
+-- `leftEdgePadding` is the grid container's UIPadding; pass it ONLY for the button at the
+-- cluster's left edge (a left-aligned grid pins that button's left edge to the frame, which
+-- here hugs the screen edge, so its leftward grow would spill off-screen). Its PaddingLeft is
+-- tweened by the same reach, sliding the whole cluster right so that button's left edge stays
+-- put while it grows into the room opened on the right.
+--
+-- Attach to every button sharing the grid; the resting CellPadding/PaddingLeft are captured
+-- as baselines, so attach while the grid sits at rest (a fresh clone each respawn is fine).
+function UiAnimations.hoverGrowInGrid(button: GuiButton, grid: UIGridLayout, leftEdgePadding: UIPadding?)
+	recenterAnchor(button)
+	local scale = button:FindFirstChildOfClass("UIScale")
+	if not scale then
+		scale = Instance.new("UIScale")
+		scale.Parent = button
+	end
+	local basePadding = grid.CellPadding
+	local basePaddingLeft = if leftEdgePadding then leftEdgePadding.PaddingLeft else UDim.new()
+
+	button.MouseEnter:Connect(function()
+		-- AbsoluteSize is the cell's real on-screen size (UIScale is a render transform and
+		-- doesn't change it), so this tracks the actual cell width at any resolution.
+		local reach = button.AbsoluteSize.X * (HOVER_SCALE - 1) / 2
+		TweenService:Create(scale, HOVER_TWEEN, { Scale = HOVER_SCALE }):Play()
+		TweenService:Create(grid, HOVER_TWEEN, {
+			CellPadding = UDim2.new(
+				basePadding.X.Scale,
+				basePadding.X.Offset + reach,
+				basePadding.Y.Scale,
+				basePadding.Y.Offset
+			),
+		}):Play()
+		if leftEdgePadding then
+			TweenService:Create(leftEdgePadding, HOVER_TWEEN, {
+				PaddingLeft = UDim.new(basePaddingLeft.Scale, basePaddingLeft.Offset + reach),
+			}):Play()
+		end
+	end)
+	button.MouseLeave:Connect(function()
+		TweenService:Create(scale, HOVER_TWEEN, { Scale = 1 }):Play()
+		TweenService:Create(grid, HOVER_TWEEN, { CellPadding = basePadding }):Play()
+		if leftEdgePadding then
+			TweenService:Create(leftEdgePadding, HOVER_TWEEN, { PaddingLeft = basePaddingLeft }):Play()
+		end
+	end)
+end
+
 return UiAnimations

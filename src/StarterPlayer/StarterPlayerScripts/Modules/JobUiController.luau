@@ -1,15 +1,15 @@
 --!strict
 
--- Drives the job board UI (PlayerGui.ScreenGui: JobButton + JobFrame). The JobButton
+-- Drives the job board UI (PlayerGui.ScreenGui: Buttons.JobButton + JobFrame). The JobButton
 -- toggles the JobFrame; the frame's ExitButton closes it. The frame's ScrollingFrame
 -- holds one TaskDesign per business, each tagged with a "BusinessId" attribute: a row
 -- shows its WashButton if the local player has that business Unlocked, or its
 -- LockedButton if not. Pressing Wash accepts that business's job (AcceptJob), which the
 -- server confirms by publishing the businessId on the ActiveJob attribute.
 --
--- While a job is active the whole job UI hides (JobButton + JobFrame) -- you can't start
--- another until this one finishes. When the job completes the server clears ActiveJob and
--- the JobButton returns. So visibility of the job UI is driven off that one attribute,
+-- While a job is active the whole job UI hides (the Buttons frame + JobFrame) -- you can't
+-- start another until this one finishes. When the job completes the server clears ActiveJob
+-- and the Buttons frame returns. So visibility of the job UI is driven off that one attribute,
 -- exactly like JobController drives the overlays.
 --
 -- Unlock state comes from DataService and is re-read whenever BusinessList changes or the
@@ -21,7 +21,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
@@ -42,8 +41,10 @@ local CLICK_SOUND = "UIClick"
 
 local JobUiController = {}
 
--- Current top-level UI elements, refreshed each time the ScreenGui is (re)bound.
-local jobButton: ImageButton? = nil
+-- Current top-level UI elements, refreshed each time the ScreenGui is (re)bound. The whole
+-- Buttons frame (JobButton + UpgradesButton) is what hides during a job, so no HUD buttons
+-- show mid-job.
+local buttonsFrame: Frame? = nil
 local jobFrame: Frame? = nil
 -- Drives the board's open/close (slide + expand) animation; rebuilt per bind alongside
 -- jobFrame since the ScreenGui is re-cloned each respawn.
@@ -82,9 +83,9 @@ end
 -- anything is bound.
 local function applyActiveJobState()
 	local active = hasActiveJob()
-	local button = jobButton
-	if button and button.Parent then
-		button.Visible = not active and not summaryHold
+	local buttons = buttonsFrame
+	if buttons and buttons.Parent then
+		buttons.Visible = not active and not summaryHold
 	end
 	local frame = jobFrame
 	local panel = jobPanel
@@ -161,18 +162,41 @@ end
 -- Resolve one ScreenGui's job elements, wire the buttons + rows, then apply current
 -- state (lock rows + active-job visibility). Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)
-	local button = screenGui:WaitForChild("JobButton") :: ImageButton
+	local buttons = screenGui:WaitForChild("Buttons")
+	local button = buttons:WaitForChild("JobButton") :: ImageButton
 	local frame = screenGui:WaitForChild("JobFrame") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton
 	local scroll = frame:WaitForChild("ScrollingFrame")
 
-	jobButton = button
+	buttonsFrame = buttons :: Frame
 	jobFrame = frame
 	jobPanel = UiAnimations.Panel.new(frame)
 	frame.Visible = false
 
 	button.Activated:Connect(toggleBoard)
-	UiAnimations.hoverGrow(button)
+
+	-- Every button in the Buttons frame gets the same hover polish as the JobButton: a center
+	-- grow that also pushes its row-neighbours aside (via the shared grid's padding) so the
+	-- growing button keeps a constant gap instead of overlapping them.
+	local grid = buttons:WaitForChild("UIGridLayout") :: UIGridLayout
+	-- The frame's UIPadding compensates the leftmost button's grow so it doesn't spill toward
+	-- the screen edge (the frame hugs it); only that button gets it -- see hoverGrowInGrid.
+	local framePadding = buttons:WaitForChild("UIPadding") :: UIPadding
+
+	-- Leftmost = smallest LayoutOrder (the grid lays the row out left-to-right in that order).
+	local leftEdgeButton: GuiButton? = nil
+	for _, child in buttons:GetChildren() do
+		if child:IsA("GuiButton") and (leftEdgeButton == nil or child.LayoutOrder < leftEdgeButton.LayoutOrder) then
+			leftEdgeButton = child
+		end
+	end
+
+	for _, child in buttons:GetChildren() do
+		if child:IsA("GuiButton") then
+			local edgePadding = if child == leftEdgeButton then framePadding else nil
+			UiAnimations.hoverGrowInGrid(child, grid, edgePadding)
+		end
+	end
 
 	exitButton.Activated:Connect(function()
 		if jobPanel then
