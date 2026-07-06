@@ -21,6 +21,7 @@ local UiSoundController = require(Modules:WaitForChild("UiSoundController"))
 local UiStrokeScaler = require(Modules:WaitForChild("UiStrokeScaler"))
 local InventoryController = require(Modules:WaitForChild("InventoryController"))
 local ToolFloatController = require(Modules:WaitForChild("ToolFloatController"))
+local MissingHighlightController = require(Modules:WaitForChild("MissingHighlightController"))
 
 
 DataService:init()
@@ -42,4 +43,6 @@ UiSoundController.init()
 UiStrokeScaler.init()
 InventoryController.init()
 ToolFloatController.init()
+-- Press R on a job to flash a yellow, through-walls highlight over what's left to clean.
+MissingHighlightController.init()
 

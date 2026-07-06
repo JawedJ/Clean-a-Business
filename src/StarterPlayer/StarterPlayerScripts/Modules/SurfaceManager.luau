@@ -116,6 +116,17 @@ function SurfaceManager.getSurface(part: BasePart): CleanableSurface.CleanableSu
 	return surfaces[part]
 end
 
+-- Turn the "what's left" reveal glow on or off across every built wall of the current job.
+-- Each surface glows only its still-dirty pixels (see CleanableSurface.setGlow); finished
+-- walls are skipped. Walls still queued for their overlay aren't built yet, so they won't
+-- glow -- but the queue drains within a frame or two of the job starting, long before a
+-- mid-job player asks what's left.
+function SurfaceManager.setWallsGlow(enabled: boolean)
+	for _, surface in surfaces do
+		surface:setGlow(enabled)
+	end
+end
+
 -- Total wall progress of the current job, in whole-wall units (a half-cleaned wall counts
 -- 0.5, a finished one 1). Sums the built surfaces' fractions; walls not yet built count 0.
 -- Divide by the job's wall count (JobClient) for a 0..1 completion that moves mid-wall.

@@ -77,6 +77,26 @@ function DecalVisibility.getStainCount(businessId: string): number
 	return counts[businessId] or 0
 end
 
+-- Every stain of the active job still dirty on this client -- i.e. shown, not hidden. A
+-- stain is hidden exactly when it's been cleaned (or doesn't belong to the active job), so
+-- the visible ones are precisely what's left to clean. For the remaining-cleanables highlight.
+function DecalVisibility.getActiveVisibleStains(): { Model }
+	local result: { Model } = {}
+	if not activeBusinessId then
+		return result
+	end
+	for model in seen do
+		-- Skip hidden (cleaned) stains and any that have since been destroyed (Parent nil).
+		if not hidden[model] and model.Parent then
+			local identity = DecalResolver.resolve(model)
+			if identity and identity.businessId == activeBusinessId then
+				table.insert(result, model)
+			end
+		end
+	end
+	return result
+end
+
 -- Hide a single stain that was just cleaned on this client.
 function DecalVisibility.hideOne(model: Model)
 	local identity = DecalResolver.resolve(model)
