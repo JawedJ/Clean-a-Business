@@ -74,9 +74,11 @@ report, so a player can only ever clean the one business they've accepted. Concr
     the business.
   - `SurfaceResolver` (SharedModules) walks this hierarchy to derive the identity;
     no tags or attributes are needed. Anything outside this exact structure is ignored.
-- The surface's part shows its normal "clean" look. A **dirt overlay** is layered on
-  the part's **LEFT face only** as a `Decal` whose `TextureContent` references a
-  client-built `EditableImage`. Cleaning erases overlay pixels to reveal the part.
+- The surface's part shows its normal "clean" look. A **dirt overlay** is layered on the
+  face of the part's own **`Texture`** (whichever side the map author textured; falls back to
+  the **Left** face if the part has no Texture) as a `Decal` whose `TextureContent` references a
+  client-built `EditableImage`. Cleaning erases overlay pixels to reveal the part. The face's
+  (u,v) pixel mapping and the brush-radius scaling both follow that same face choice.
 - Businesses are authored **in the Studio place**, not in code (Workspace isn't
   Rojo-mounted) — a single shared `Workspace.Businesses` folder holds one building per
   `businessId`. The buildings are **shared by everyone**; the overlays layered on their
@@ -148,10 +150,18 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   left face, erases a **circular stamp** (a world-space circle → ellipse in pixel
   space on non-square parts), and **interpolates stamps along the segment** from the
   previous point so fast strokes leave no gaps.
-- **Completion:** when erased fraction ≥ `CompletionThreshold` (0.99), the surface
-  marks itself cleaned, destroys the decal, and fires its `onCleaned` callback. It also
-  fires `onProgress` on any stroke that erased pixels, so the completion bar tracks the
-  wash live rather than only stepping when a whole wall finishes.
+- **Completion:** when erased fraction ≥ the surface's threshold, it marks itself cleaned,
+  destroys the decal, and fires its `onCleaned` callback. The threshold defaults to
+  `CompletionThreshold` (0.975) but a wall can override it with a numeric **`Percentage`**
+  attribute (a 0–1 fraction like `0.9`, or a 0–100 percentage like `90`; values > 1 are read as
+  a percentage) — resolved per-surface at construct time. It also fires `onProgress` on any
+  stroke that erased pixels, so the completion bar tracks the wash live rather than only stepping
+  when a whole wall finishes.
+- **`setGlow(enabled)`** builds/tears down the reveal-glow overlay: a **second decal** on the
+  same face, solid neon yellow masked by the dirt's current alpha, over the untouched dirt
+  overlay (see *Reveal remaining cleanables*). Its buffer is kept in sync by `stamp` (same
+  layout, same alpha offset), so the glow shrinks with the wash at no extra per-stroke cost; the
+  overlay is torn down on disable, on wall completion, and in `destroy`.
 
 ### `PressureWasherController` (client)
 - Detects the tool via the `ToolId` attribute and binds its `Equipped` / `Activated`
@@ -161,8 +171,10 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   on mobile the washer fires **continuously the whole time it's equipped** (`Activated` /
   `Deactivated` are ignored; only `Unequipped` stops it). Desktop and console (gamepad) keep
   the normal hold-to-fire. `IS_MOBILE` = `TouchEnabled and not Keyboard/Mouse/Gamepad`.
-- Each `Heartbeat` while firing: raycasts and, if it hits a cleanable part **on its left
-  face** (`Normal·(-RightVector) > 0.99`), tells that surface to clean. Tracks the last hit
+- Each `Heartbeat` while firing: raycasts and, if it hits a cleanable part **on its overlay
+  face** (the hit normal must match the surface's own face within `> 0.99`), tells that surface
+  to clean. The ray also **ignores each business's `Interior` and `CleanableDecals` folders** (so
+  props/windows and stain hitboxes in front of a wall don't block the wash). Tracks the last hit
   so consecutive frames bridge into one stroke. The aim point is the **mouse** on desktop
   but the **center of the screen** (`ViewportSize/2`, the crosshair) on mobile — since the
   mobile washer fires from the crosshair, not from wherever the player last tapped.
@@ -179,6 +191,8 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   (summed live wall fractions, in whole-wall units) for the completion bar. On completion it
   plays the pop VFX + sound and invokes the `onCleaned` callback (which `JobClient` uses to
   fire `WallCleaned`); every dirt-removing stroke invokes `onProgress`, which drives the bar.
+- `setWallsGlow(enabled)` fans the reveal glow out to every built wall (calls each surface's
+  `setGlow`), used by `MissingHighlightController` (see *Reveal remaining cleanables*).
 
 ### Persistence
 **Cleaning is not persisted.** Jobs are per-session: accepting a job is always a fresh
@@ -188,7 +202,8 @@ business data saved per player is the **`Unlocked`** flag (which gates accepting
 ### `CleaningConfig` (shared)
 Single source of truth for cleaning tunables, consumed by client and server:
 the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`/
-`DecalsFolderName`, `HitboxName`/`SurfaceIdAttribute`, `PlotCount`/`PlotAttribute`/
+`DecalsFolderName`/`InteriorFolderName` (props/windows the cleaning ray ignores),
+`HitboxName`/`SurfaceIdAttribute`, `PlotCount`/`PlotAttribute`/
 `PlotSpawnPartName`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
 `DirtAsset`, `ImageSize`, `BrushWorldRadius`, `MaxBridgeWorldDistance`,
 `CompletionThreshold`, brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
@@ -213,6 +228,31 @@ appears mirrored from where you aim).
   `ToolConfig`; both sides read the same source so the bar mirrors the server timer.
 - **Cleaned-stain tracking lives in the `JobServer`**, so it resets on each accept — the
   player can redo the job and earn the rewards again.
+
+### Reveal remaining cleanables (implemented)
+A client-only assist that flashes a neon-yellow glow over everything the player still has left
+to clean on their active job. **Purely cosmetic** — it reads existing client state and touches
+no server state or remotes.
+- **Trigger:** the **R** key **or** the on-screen **`ScreenGui.HighlightButton`** (an
+  `ImageButton`), both routed through `MissingHighlightController`. The button is shown **only
+  while a job is active** (off `ActiveJob`, like the rest of the HUD) and re-binds on each
+  respawn.
+- **Walls glow per-pixel.** `SurfaceManager.setWallsGlow(true)` calls `CleanableSurface.setGlow`
+  on every built wall. `setGlow` builds a **second `Decal` on the same face** — solid neon
+  yellow masked by the dirt's *current* alpha, at **0.8 transparency** — layered over (not
+  replacing) the dirt overlay, which stays fully intact. Its buffer is erased in lockstep with
+  the dirt inside `stamp`, so the glow **shrinks live as the player cleans** and a finished wall
+  drops its glow with its overlay. Only the not-yet-cleaned pixels light up.
+- **Stains glow whole.** Stains have no partial state, so `MissingHighlightController` switches
+  each visible stain part (from `DecalVisibility.getActiveVisibleStains`, skipping the invisible
+  `Hitbox`) to `Material = Neon`, neon yellow, **0.55 transparency**, snapshotting and restoring
+  each part's original material/color/transparency exactly.
+- **Duration + cooldown.** The glow lingers `REVEAL_DURATION` (**8s**) then clears itself (a
+  `revealToken` disarms superseded expiry timers). Re-triggering is gated by the **same
+  duration** — a new reveal is ignored until the current one runs out — since each reveal
+  rebuilds every wall's glow overlay (new `EditableImage`s) and spamming it would churn them and
+  hitch the game. The cooldown resets on job change so a fresh job is immediately ready. Ending
+  or switching a job drops the glow.
 
 ### Tool
 - The **Pressure Washer** and **Broom** `Tool`s live in **`ReplicatedStorage.Items`**
@@ -266,7 +306,7 @@ ServerScriptService/
   Modules/InventoryManager.luau      present but NOT yet wired into Main
 
 StarterPlayer/StarterPlayerScripts/
-  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI
+  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI + MissingHighlight + UiPreloader
   Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide, onProgressChanged signal
   Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %
   Modules/JobUiController.luau     job board UI: toggle (JobButton/B key), per-business rows, AcceptJob
@@ -277,6 +317,8 @@ StarterPlayer/StarterPlayerScripts/
   Modules/PressureWasherController.luau   tool input + raycast + cleaning
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
+  Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown
+  Modules/UiPreloader.luau         warms StarterGui image assets in the background so HUD doesn't first render blurry
 ```
 
 Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
@@ -284,9 +326,12 @@ Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
 and the shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a
 `Cleanables` folder (`CleanableWalls` + `CleanableDecals`) authored right in the building.
 The **HUD `ScreenGui`** is also Studio-authored (not Rojo): `JobButton`/`JobFrame` (board),
-`JobCompletion` (progress bar + `FinishEarly`), `XpBar`, and `Inventory` (the custom hotbar:
-`ImageButton1..5`). The client controllers bind to these instances by name and re-bind on
-each respawn (the `ScreenGui` is re-cloned).
+`JobCompletion` (progress bar + `FinishEarly`), `XpBar`, `Inventory` (the custom hotbar:
+`ImageButton1..5`), and `HighlightButton` (an `ImageButton` that triggers the reveal glow,
+shown only during a job). The client controllers bind to these instances by name and re-bind
+on each respawn (the `ScreenGui` is re-cloned). `UiPreloader` warms these assets' images up
+front (via `ContentProvider:PreloadAsync` on the `StarterGui` templates, in a background task)
+so they don't first render blurry.
 
 ## Not yet implemented / planned
 

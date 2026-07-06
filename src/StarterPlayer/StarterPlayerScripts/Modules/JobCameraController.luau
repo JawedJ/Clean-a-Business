@@ -22,6 +22,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 
@@ -128,9 +129,44 @@ function JobCameraController.releaseToIdle()
 	unlock()
 end
 
+-- Point the camera along the job building's TeleportPart Front face, matching the facing
+-- the server gives the character on teleport. The default camera owns its yaw/pitch, so
+-- setting CFrame alone gets overwritten -- instead we briefly flip to Scriptable, aim it,
+-- then hand back to Custom, which re-derives its angles from the CFrame we left. We read the
+-- part straight off the shared building (resolved by businessId, like the rest of the job
+-- client) rather than the character, so we don't race the teleport replicating in.
+local function faceTeleportPart()
+	local businessId = localPlayer:GetAttribute(Config.ActiveJobAttribute)
+	if type(businessId) ~= "string" then
+		return
+	end
+	local businesses = Workspace:FindFirstChild(Config.BusinessesFolderName)
+	local building = businesses and businesses:FindFirstChild(businessId)
+	local teleportPart = building and building:FindFirstChild(Config.TeleportPartName)
+	if not teleportPart or not teleportPart:IsA("BasePart") then
+		return
+	end
+
+	local front = teleportPart.CFrame.LookVector
+	local flat = Vector3.new(front.X, 0, front.Z)
+	flat = if flat.Magnitude > 1e-4 then flat.Unit else Vector3.new(0, 0, -1)
+
+	local gen = unlockGen -- lock() bumps this; a new job starting mid-toggle supersedes us
+	local camera = Workspace.CurrentCamera
+	camera.CameraType = Enum.CameraType.Scriptable
+	camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + flat)
+	task.wait()
+	-- Hand control back to the default camera, unless a newer job started during the wait --
+	-- that job's own faceTeleportPart owns the camera now, so we leave it be.
+	if gen == unlockGen and camera == Workspace.CurrentCamera then
+		camera.CameraType = Enum.CameraType.Custom
+	end
+end
+
 local function sync()
 	if type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string" then
 		lock()
+		task.spawn(faceTeleportPart)
 	elseif not locked then
 		-- No job and we weren't holding first person (startup / idle sync): settle third
 		-- person now. If we WERE locked, a job just ended -- stay in first person for the

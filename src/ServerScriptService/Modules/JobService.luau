@@ -55,7 +55,8 @@ local function buildingFor(businessId: string): Instance?
 	return folder and folder:FindFirstChild(businessId)
 end
 
--- Drop the character onto a building's TeleportPart (upright, slightly above it).
+-- Drop the character onto a building's TeleportPart (upright, slightly above it),
+-- facing the same direction as the part's Front face (flattened so we never pitch/roll).
 local function teleportToJob(character: Model, building: Instance)
 	local teleportPart = building:FindFirstChild(Config.TeleportPartName)
 	if not teleportPart or not teleportPart:IsA("BasePart") then
@@ -63,7 +64,11 @@ local function teleportToJob(character: Model, building: Instance)
 		return
 	end
 	character:WaitForChild("HumanoidRootPart")
-	character:PivotTo(CFrame.new(teleportPart.Position + Config.TeleportOffset))
+	local pos = teleportPart.Position + Config.TeleportOffset
+	local front = teleportPart.CFrame.LookVector
+	local flat = Vector3.new(front.X, 0, front.Z)
+	flat = if flat.Magnitude > 1e-4 then flat.Unit else Vector3.new(0, 0, -1)
+	character:PivotTo(CFrame.lookAt(pos, pos + flat))
 end
 
 local function isUnlocked(player: Player, businessId: string): boolean
