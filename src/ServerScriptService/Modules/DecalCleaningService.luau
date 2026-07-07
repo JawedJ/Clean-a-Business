@@ -33,8 +33,8 @@ local DecalCleaned = Remotes:WaitForChild("DecalCleaned") :: RemoteEvent
 local TOOL_ID = ToolConfig.startingBroom.UniqueID
 
 -- Reward paid once per stain fully cleaned.
-local DECAL_XP = 25
-local DECAL_CASH = 100
+local DECAL_XP = 4
+local DECAL_CASH = 4
 
 -- This player's current broom UseTime (seconds), read fresh so tool upgrades take effect
 -- immediately, falling back to the static ToolConfig default.

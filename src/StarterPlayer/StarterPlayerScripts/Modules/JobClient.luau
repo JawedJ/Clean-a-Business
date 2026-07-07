@@ -28,6 +28,12 @@ local WallCompletion = Remotes:WaitForChild("WallCompletion") :: RemoteEvent
 -- How often (seconds) we push wall completion to the server while it's changing.
 local WALL_REPORT_INTERVAL = 1
 
+-- Completion bar weighting: walls fill 80% of the bar, stains the remaining 20%. When a
+-- business has only one kind of cleanable, that kind takes the whole bar (see getCompletion).
+-- Mirrored server-side in JobServer.getCompletion so the finish-early payout matches the bar.
+local WALL_WEIGHT = 0.8
+local DECAL_WEIGHT = 0.2
+
 local JobClient = {}
 JobClient.__index = JobClient
 
@@ -171,13 +177,24 @@ end
 
 -- 0..1 fraction of this job cleaned locally (for UI). Walls contribute their live clean
 -- amount (a half-washed wall counts as half), so this moves smoothly mid-wall rather than
--- stepping only when a whole wall finishes.
+-- stepping only when a whole wall finishes. Walls are weighted at WALL_WEIGHT of the bar and
+-- stains at DECAL_WEIGHT; if the business has only one kind, that kind fills the whole bar so
+-- completion still reaches 1.
 function JobClient.getCompletion(self: JobClient): number
-	local total = self.totalWalls + self.totalDecals
-	if total == 0 then
+	local hasWalls = self.totalWalls > 0
+	local hasDecals = self.totalDecals > 0
+	if not hasWalls and not hasDecals then
 		return 0
 	end
-	return (self:getWallAmount() + self.cleanedDecals) / total
+	local wallShare = if hasWalls then self:getWallAmount() / self.totalWalls else 0
+	local decalShare = if hasDecals then self.cleanedDecals / self.totalDecals else 0
+	if not hasDecals then
+		return wallShare
+	end
+	if not hasWalls then
+		return decalShare
+	end
+	return wallShare * WALL_WEIGHT + decalShare * DECAL_WEIGHT
 end
 
 function JobClient.destroy(self: JobClient)

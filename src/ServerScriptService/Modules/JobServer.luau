@@ -124,13 +124,26 @@ end
 -- use the client's live report, floored at the server-verified full-wall count so it can
 -- never pay LESS than what we've confirmed. Full completion does NOT use this -- see
 -- _checkComplete, which gates on the authoritative counts only.
+--
+-- Walls are weighted at 80% of the job, stains at 20% -- kept in sync with the client bar
+-- (JobClient.getCompletion) so the finish-early payout matches the % the player saw. If the
+-- business has only one kind of cleanable, that kind is the whole job.
 function JobServer.getCompletion(self: JobServer): number
-	local total = self:getTotal()
-	if total == 0 then
+	local hasWalls = self.totalWalls > 0
+	local hasDecals = self.totalDecals > 0
+	if not hasWalls and not hasDecals then
 		return 0
 	end
 	local walls = math.clamp(self.reportedWallAmount, self.cleanedWallCount, self.totalWalls)
-	return (walls + self.cleanedDecalCount) / total
+	local wallShare = if hasWalls then walls / self.totalWalls else 0
+	local decalShare = if hasDecals then self.cleanedDecalCount / self.totalDecals else 0
+	if not hasDecals then
+		return wallShare
+	end
+	if not hasWalls then
+		return decalShare
+	end
+	return wallShare * 0.8 + decalShare * 0.2
 end
 
 function JobServer.isComplete(self: JobServer): boolean
