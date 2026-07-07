@@ -51,6 +51,9 @@ local INTERACT_BUTTON_NAME = "InteractButton"
 local BUY_IMAGE = "rbxassetid://110464713650126"
 local UPGRADE_IMAGE = "rbxassetid://135186205507719"
 local MAX_IMAGE = "rbxassetid://107751883089715"
+-- Cost label tint when the player can't currently afford the buy/upgrade. Affordable (and
+-- MAXED) slots keep the label's authored colour -- see setCostAffordable.
+local UNAFFORDABLE_COLOR = Color3.fromRGB(255, 76, 76)
 -- Feedback SFX played on the interact click, predicted client-side from the player's cash: a
 -- buy/upgrade the client expects to succeed plays PURCHASE_SOUND, one it can't afford plays
 -- PURCHASE_FAILED_SOUND. Only one plays at a time (see playFeedback).
@@ -105,6 +108,30 @@ local function canAfford(cost: number): boolean
 	return type(cash) == "number" and cash >= cost
 end
 
+-- Solid-red gradient swapped in when a slot is unaffordable. The cost text is coloured by a
+-- UIGradient (a 2-colour ColorSequence), so tinting TextColor3 would do nothing -- we replace
+-- the whole gradient with this flat red instead.
+local RED_GRADIENT = ColorSequence.new(UNAFFORDABLE_COLOR)
+
+-- Authored gradient of each cost label's UIGradient, captured the first time we tint it so we
+-- can restore the designer's colours when the player can afford the slot again -- never baking
+-- red in permanently. Weak-keyed: the ScreenGui is re-cloned each respawn, so old gradients
+-- must be free to GC rather than pinned here forever.
+local originalGradients: { [Instance]: ColorSequence } = setmetatable({}, { __mode = "k" }) :: any
+
+-- Tint a cost label red when the player can't afford it, restoring its authored gradient when
+-- they can. No-op if the label has no UIGradient (nothing meaningful to tint).
+local function setCostAffordable(costLabel: TextLabel, affordable: boolean)
+	local gradient = costLabel:FindFirstChildOfClass("UIGradient")
+	if not gradient then
+		return
+	end
+	if not originalGradients[gradient] then
+		originalGradients[gradient] = gradient.Color
+	end
+	gradient.Color = if affordable then originalGradients[gradient] else RED_GRADIENT
+end
+
 -- Whether the local player currently holds a job (the whole Buttons frame -- including the
 -- UpgradesButton -- hides while on one, so the shop must hide/refuse to open then too).
 local function hasActiveJob(): boolean
@@ -140,10 +167,15 @@ local function renderSlot(slot: Instance)
 	if costLabel and costLabel:IsA("TextLabel") then
 		if not owned then
 			costLabel.Text = "Cost: $" .. NumberFormat.abbreviate(item.Cost)
+			setCostAffordable(costLabel, canAfford(item.Cost))
 		elseif ItemUpgrades.canUpgrade(item) then
-			costLabel.Text = "Cost: $" .. NumberFormat.abbreviate(ItemUpgrades.getUpgradeCost(item))
+			local cost = ItemUpgrades.getUpgradeCost(item)
+			costLabel.Text = "Cost: $" .. NumberFormat.abbreviate(cost)
+			setCostAffordable(costLabel, canAfford(cost))
 		else
 			costLabel.Text = "MAXED"
+			-- Maxed slots aren't a purchase; keep the authored colour, never red.
+			setCostAffordable(costLabel, true)
 		end
 	end
 
@@ -325,8 +357,11 @@ end
 function UpgradesUiController.init()
 	local playerGui = localPlayer:WaitForChild("PlayerGui")
 
-	-- Persistent subscriptions; each reads whichever elements are currently bound.
+	-- Persistent subscriptions; each reads whichever elements are currently bound. Cash is
+	-- watched too so the cost labels re-tint (red/normal) the moment the player can or can't
+	-- afford a slot, without needing an Inventory change.
 	DataService:getChangedSignal({ "Inventory" }):Connect(renderSlots)
+	DataService:getChangedSignal({ "Cash" }):Connect(renderSlots)
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(applyActiveJobState)
 
 	local function onChild(child: Instance)

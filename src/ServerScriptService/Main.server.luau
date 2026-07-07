@@ -10,7 +10,6 @@ local ShopService = require(game.ServerScriptService.Modules.ShopService)
 
 DataService:init({
 	template = DataTemplate,
-	useMock = true,
 })
 
 
