@@ -72,18 +72,31 @@ local upgradesFrame: Frame? = nil
 local slotsContainer: Instance? = nil
 -- Drives the frame's open/close (slide + expand) animation; rebuilt per bind alongside the frame.
 local upgradesPanel: UiAnimations.Panel? = nil
--- The interact-feedback SFX currently playing, so a rapid repeat can kill it before starting the
--- next -- keeping the buy/fail sounds from stacking on top of each other.
-local feedbackSound: Sound? = nil
+-- The interact-feedback SFX currently playing, keyed by sound name. Only a rapid repeat of the
+-- SAME sound cuts off its previous clone; two DIFFERENT feedback sounds (e.g. purchase then
+-- fail) are left to overlap rather than cutting each other off.
+local feedbackSounds: { [string]: Sound } = {}
 
--- Play a buy/upgrade feedback one-shot, first killing any feedback sound still playing so
--- repeats don't overlap. Destroy() both stops and removes the previous clone, and is safe even
--- if it already ended on its own.
+-- Play a buy/upgrade feedback one-shot, first killing any still-playing clone of the SAME sound
+-- so rapid repeats of it don't stack -- while leaving any other feedback sound playing. Destroy()
+-- both stops and removes the previous clone, and is safe even if it already ended on its own.
 local function playFeedback(soundName: string)
-	if feedbackSound then
-		feedbackSound:Destroy()
+	local existing = feedbackSounds[soundName]
+	if existing then
+		existing:Destroy()
 	end
-	feedbackSound = SoundManager.playOneShot(soundName)
+	local sound = SoundManager.playOneShot(soundName)
+	if sound then
+		feedbackSounds[soundName] = sound
+		-- Drop our reference once it ends on its own, unless a newer repeat has already replaced it.
+		sound.Ended:Once(function()
+			if feedbackSounds[soundName] == sound then
+				feedbackSounds[soundName] = nil
+			end
+		end)
+	else
+		feedbackSounds[soundName] = nil
+	end
 end
 
 -- Whether the player can currently afford `cost`, read fresh from their replicated Cash.

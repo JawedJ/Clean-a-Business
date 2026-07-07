@@ -97,7 +97,7 @@ local DataTemplate = {
 		SlotNumber = 1,
 		BaseUpgradeCost = 200,
 		UpgradeRange = 5,
-		UpgradeRadius = 0.1,
+		UpgradeRadius = 0.05,
 		},
 
 	} :: { [string]: Item },

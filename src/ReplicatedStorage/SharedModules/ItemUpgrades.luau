@@ -21,7 +21,7 @@ local ItemUpgrades = {}
 ItemUpgrades.MAX_LEVEL = 10
 
 -- How much each successive upgrade costs relative to the previous one.
-local GROWTH = 1.5
+local GROWTH = 2.3
 
 -- Cost to buy the NEXT upgrade for `item`, from its current Level. 0 if the item declares no
 -- BaseUpgradeCost (not upgradeable). Not gated on the level cap -- use canUpgrade for that.
