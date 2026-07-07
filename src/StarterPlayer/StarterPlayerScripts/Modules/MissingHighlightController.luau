@@ -31,7 +31,7 @@ local REVEAL_KEY = Enum.KeyCode.R
 local REVEAL_DURATION = 8
 -- Neon-yellow glow for stains (walls carry their own glow via CleanableSurface).
 local STAIN_GLOW_COLOR = Color3.fromRGB(255, 234, 0)
-local STAIN_GLOW_TRANSPARENCY = 0.55
+local STAIN_GLOW_TRANSPARENCY = 0.45
 
 -- The HUD button that triggers the same reveal (PlayerGui.ScreenGui.HighlightButton).
 local SCREEN_GUI_NAME = "ScreenGui"

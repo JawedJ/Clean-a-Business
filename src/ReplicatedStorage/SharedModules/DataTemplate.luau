@@ -6,12 +6,21 @@ export type Item = {
 	Unlocked: boolean,
 	Cost: number,
 	UniqueID: string,
+	Level: number, -- upgrade level; starts at 0, capped at ItemUpgrades.MAX_LEVEL
 
 	Range: number?, -- max cleaning distance (studs)
 	Power: number?,
 	UseTime: number?,
 	Radius: number?,
 	SlotNumber: number?,
+
+	-- Upgrade tuning (see ItemUpgrades). BaseUpgradeCost is the price of the FIRST upgrade
+	-- (level 0 -> 1); the shared cost formula scales it up per level. UpgradeRange/UpgradeRadius
+	-- are how much each upgrade adds to the item's Range/Radius. An item with no BaseUpgradeCost
+	-- isn't upgradeable.
+	BaseUpgradeCost: number?,
+	UpgradeRange: number?,
+	UpgradeRadius: number?,
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -63,10 +72,12 @@ local DataTemplate = {
 		Unlocked = true,
 		Cost = 0,
 		UniqueID = "startingBroom",
-		Power = 1,
+		Level = 0,
 		UseTime = 2.5,
-		Range = 70,
+		Range = 30,
 		SlotNumber = 2,
+		BaseUpgradeCost = 100,
+		UpgradeRange = 5,
 		},
 
 		["pressureWasher"] = {
@@ -75,10 +86,13 @@ local DataTemplate = {
 		Unlocked = true,
 		Cost = 0,
 		UniqueID = "pressureWasher",
-		Range = 70,
-		Power = 1,
+		Level = 0,
+		Range = 30,
 		Radius = 0.8,
 		SlotNumber = 1,
+		BaseUpgradeCost = 200,
+		UpgradeRange = 5,
+		UpgradeRadius = 0.1,
 		},
 
 	} :: { [string]: Item },

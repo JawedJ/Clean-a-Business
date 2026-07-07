@@ -66,17 +66,19 @@ end
 
 -- Plays the named sound once, 2D, for the local player. No-op (with a warning) if
 -- the template is missing so a typo can't crash the caller. Pass a config with a
--- duration to play only the first `duration` seconds.
-function SoundManager.playOneShot(soundName: string, config: OneShotConfig?)
+-- duration to play only the first `duration` seconds. Returns the playing clone (or nil
+-- if it couldn't play) so callers that need to interrupt it can :Destroy() it early --
+-- otherwise the clone cleans itself up when it ends.
+function SoundManager.playOneShot(soundName: string, config: OneShotConfig?): Sound?
 	-- Client-only: a server-played sound would be heard by everyone.
 	if not RunService:IsClient() then
 		warn("SoundManager.playOneShot called on the server; sounds must play on the client")
-		return
+		return nil
 	end
 
 	local template = findTemplate(soundName)
 	if not template then
-		return
+		return nil
 	end
 
 	local sound = template:Clone()
@@ -104,6 +106,8 @@ function SoundManager.playOneShot(soundName: string, config: OneShotConfig?)
 			end
 		end)
 	end
+
+	return sound
 end
 
 -- A handle whose methods do nothing; returned when a sustained sound can't be set

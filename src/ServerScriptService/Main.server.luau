@@ -6,9 +6,11 @@ local PlayerCollisionService = require(game.ServerScriptService.Modules.PlayerCo
 local CleaningService = require(game.ServerScriptService.Modules.CleaningService)
 local DecalCleaningService = require(game.ServerScriptService.Modules.DecalCleaningService)
 local ToolService = require(game.ServerScriptService.Modules.ToolService)
+local ShopService = require(game.ServerScriptService.Modules.ShopService)
 
 DataService:init({
 	template = DataTemplate,
+	useMock = true,
 })
 
 
@@ -19,4 +21,5 @@ PlayerCollisionService.init()
 CleaningService.init()
 DecalCleaningService.init()
 ToolService.init()
+ShopService.init()
 

@@ -27,11 +27,16 @@ local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
 
+local ExclusivePanels = require(script.Parent.ExclusivePanels)
+
 local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
 
 local localPlayer = Players.LocalPlayer
 
 local SCREEN_GUI_NAME = "ScreenGui"
+-- Stable name this panel registers under with ExclusivePanels (only one exclusive panel is
+-- open at a time; opening this closes the upgrades shop first, and vice versa).
+local PANEL_NAME = "JobBoard"
 local BUSINESS_ID_ATTRIBUTE = "BusinessId"
 -- Keyboard shortcut that toggles the board, same as clicking the JobButton.
 local TOGGLE_KEY = Enum.KeyCode.B
@@ -91,6 +96,7 @@ local function applyActiveJobState()
 	local panel = jobPanel
 	if active and frame and frame.Parent and panel then
 		panel:hideInstant()
+		ExclusivePanels.markHidden(PANEL_NAME)
 	end
 end
 
@@ -108,22 +114,16 @@ function JobUiController.releaseSummaryHold()
 	applyActiveJobState()
 end
 
--- Toggle the board open/closed. Shared by the JobButton and the TOGGLE_KEY shortcut.
--- No-op (returns false) while on a job (the whole UI is hidden then) or before anything
--- is bound; returns true when it actually toggled, so the key path can play its click.
+-- Toggle the board open/closed via the shared coordinator (so opening it closes the upgrades
+-- shop first, and vice versa). Shared by the JobButton and the TOGGLE_KEY shortcut. No-op
+-- (returns false) while on a job, during the summary hold, or before anything is bound; returns
+-- true when it actually toggled, so the key path can play its click. The board's contents are
+-- refreshed via the coordinator's beforeOpen (refreshTasks) right before it opens.
 local function toggleBoard(): boolean
-	local frame = jobFrame
-	local panel = jobPanel
-	if not frame or not frame.Parent or not panel or panel:isAnimating() or hasActiveJob() or summaryHold then
+	if hasActiveJob() or summaryHold then
 		return false
 	end
-	if frame.Visible then
-		panel:close()
-	else
-		refreshTasks() -- pick up any unlocks since it was last shown
-		panel:open()
-	end
-	return true
+	return ExclusivePanels.toggle(PANEL_NAME)
 end
 
 -- Wire one TaskDesign row and return its refresher, or nil if it isn't a real row
@@ -168,10 +168,15 @@ local function bind(screenGui: Instance)
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton
 	local scroll = frame:WaitForChild("ScrollingFrame")
 
+	local panel = UiAnimations.Panel.new(frame)
 	buttonsFrame = buttons :: Frame
 	jobFrame = frame
-	jobPanel = UiAnimations.Panel.new(frame)
+	jobPanel = panel
 	frame.Visible = false
+
+	-- Register with the coordinator so open/close is sequenced against the other panels; it
+	-- refreshes the task rows (beforeOpen) right before showing.
+	ExclusivePanels.register(PANEL_NAME, panel, refreshTasks)
 
 	button.Activated:Connect(toggleBoard)
 
@@ -198,10 +203,11 @@ local function bind(screenGui: Instance)
 		end
 	end
 
+	-- Grow the close button on hover, like the cluster buttons above (its hover sound is wired
+	-- centrally in UiSoundController).
+	UiAnimations.hoverGrow(exitButton)
 	exitButton.Activated:Connect(function()
-		if jobPanel then
-			jobPanel:close()
-		end
+		ExclusivePanels.close(PANEL_NAME)
 	end)
 
 	taskRefreshers = {}

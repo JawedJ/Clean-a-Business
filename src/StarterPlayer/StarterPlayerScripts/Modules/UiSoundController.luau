@@ -1,8 +1,10 @@
 --!strict
 
 -- Plays the shared UI sound effects for the local player:
---   * UIClick   on every GuiButton press, anywhere in PlayerGui.
---   * UIHOVER_2 when the pointer enters any button in the HUD's "Buttons" frame.
+--   * UIClick   on every GuiButton press, anywhere in PlayerGui -- except the shop's
+--     InteractButton, which plays its own purchase/fail SFX (so it isn't doubled up).
+--   * UIHOVER_2 when the pointer enters any button in the HUD's "Buttons" frame, or any panel
+--     ExitButton (the job board / upgrades close buttons).
 -- Buttons are discovered by scanning PlayerGui once and then watching DescendantAdded,
 -- so UI cloned in later (e.g. the ScreenGui re-added on each respawn, or dynamically
 -- built rows) is wired automatically -- no per-button hookup elsewhere.
@@ -18,9 +20,15 @@ local CLICK_SOUND = "UIClick"
 local HOVER_SOUND = "UIHover"
 -- Skip past the hover sound's quiet lead-in so it reads instantly on hover.
 local HOVER_START = 0.140
--- Only buttons under a frame with this name (the HUD's main button cluster) play the hover
--- sound; every button still plays the click.
+-- Buttons under a frame with this name (the HUD's main button cluster) play the hover sound;
+-- every button still plays the click.
 local HOVER_FRAME_NAME = "Buttons"
+-- Panel close buttons (job board, upgrades shop) also play the hover sound, even though they
+-- sit outside the button cluster. Matched by name so any panel's ExitButton is covered.
+local EXIT_BUTTON_NAME = "ExitButton"
+-- The shop's InteractButton is skipped for the generic click sound: it already plays its own
+-- purchase/fail SFX (UpgradesUiController), so a click here would just overlap them.
+local INTERACT_BUTTON_NAME = "InteractButton"
 
 local UiSoundController = {}
 
@@ -56,10 +64,13 @@ local function wireButton(button: GuiButton)
 		return
 	end
 
-	button.Activated:Connect(function()
-		SoundManager.playOneShot(CLICK_SOUND)
-	end)
-	if isInHoverFrame(button) then
+	-- Skip the generic click for the shop's InteractButton -- it has its own purchase/fail SFX.
+	if button.Name ~= INTERACT_BUTTON_NAME then
+		button.Activated:Connect(function()
+			SoundManager.playOneShot(CLICK_SOUND)
+		end)
+	end
+	if isInHoverFrame(button) or button.Name == EXIT_BUTTON_NAME then
 		button.MouseEnter:Connect(function()
 			SoundManager.playOneShot(HOVER_SOUND, { startTime = HOVER_START })
 		end)
