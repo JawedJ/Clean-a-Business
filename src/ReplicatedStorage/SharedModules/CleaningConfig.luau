@@ -82,6 +82,12 @@ local CleaningConfig = {
 	-- aim genuinely jumps far.
 	MaxBridgeWorldDistance = 16.0,
 
+	-- Default fraction (0..1) of the completion bar filled by a business's cleanable stains;
+	-- walls fill the rest (1 - this). Used for any business whose BusinessConfig entry doesn't
+	-- set its own DecalWeight. Both the client bar (JobClient) and the server's finish-early
+	-- payout (JobServer) read this so the two stay in sync.
+	DefaultDecalWeight = 0.2,
+
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
 	-- Default for every wall; an individual CleanableWall part can override it with a
 	-- numeric "Percentage" attribute (a 0-1 fraction like 0.9, or a 0-100 percentage

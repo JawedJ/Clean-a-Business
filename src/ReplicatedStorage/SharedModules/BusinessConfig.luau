@@ -16,6 +16,8 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		UniqueID = "mcDonalds",
 		Completions = 0,
 		XpReward = 250,
+		-- Stains fill 25% of the completion bar here, walls the other 75%.
+		DecalWeight = 0.25,
 	},
 
 	starbucks = {

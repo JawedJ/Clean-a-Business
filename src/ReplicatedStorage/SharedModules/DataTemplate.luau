@@ -39,6 +39,11 @@ export type Business = {
 	UniqueID: string,
 	Completions: number,
 	XpReward: number,
+	-- Fraction (0..1) of the completion bar the business's cleanable stains fill; walls
+	-- fill the rest (1 - DecalWeight). Optional -- omitted businesses use
+	-- CleaningConfig.DefaultDecalWeight. Only meaningful on the static BusinessConfig
+	-- catalog, not the per-player record.
+	DecalWeight: number?,
 }
 
 

@@ -15,6 +15,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local SurfaceManager = require(script.Parent.SurfaceManager)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 
@@ -27,12 +28,6 @@ local WallCompletion = Remotes:WaitForChild("WallCompletion") :: RemoteEvent
 
 -- How often (seconds) we push wall completion to the server while it's changing.
 local WALL_REPORT_INTERVAL = 1
-
--- Completion bar weighting: walls fill 80% of the bar, stains the remaining 20%. When a
--- business has only one kind of cleanable, that kind takes the whole bar (see getCompletion).
--- Mirrored server-side in JobServer.getCompletion so the finish-early payout matches the bar.
-local WALL_WEIGHT = 0.8
-local DECAL_WEIGHT = 0.2
 
 local JobClient = {}
 JobClient.__index = JobClient
@@ -177,9 +172,9 @@ end
 
 -- 0..1 fraction of this job cleaned locally (for UI). Walls contribute their live clean
 -- amount (a half-washed wall counts as half), so this moves smoothly mid-wall rather than
--- stepping only when a whole wall finishes. Walls are weighted at WALL_WEIGHT of the bar and
--- stains at DECAL_WEIGHT; if the business has only one kind, that kind fills the whole bar so
--- completion still reaches 1.
+-- stepping only when a whole wall finishes. Stains are weighted at the business's DecalWeight
+-- of the bar and walls at the rest; if the business has only one kind, that kind fills the
+-- whole bar so completion still reaches 1. Mirrored server-side in JobServer.getCompletion.
 function JobClient.getCompletion(self: JobClient): number
 	local hasWalls = self.totalWalls > 0
 	local hasDecals = self.totalDecals > 0
@@ -194,7 +189,9 @@ function JobClient.getCompletion(self: JobClient): number
 	if not hasWalls then
 		return decalShare
 	end
-	return wallShare * WALL_WEIGHT + decalShare * DECAL_WEIGHT
+	local def = BusinessConfig[self.businessId]
+	local decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight
+	return wallShare * (1 - decalWeight) + decalShare * decalWeight
 end
 
 function JobClient.destroy(self: JobClient)

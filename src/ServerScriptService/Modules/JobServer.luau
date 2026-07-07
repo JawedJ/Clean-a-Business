@@ -125,9 +125,9 @@ end
 -- never pay LESS than what we've confirmed. Full completion does NOT use this -- see
 -- _checkComplete, which gates on the authoritative counts only.
 --
--- Walls are weighted at 80% of the job, stains at 20% -- kept in sync with the client bar
--- (JobClient.getCompletion) so the finish-early payout matches the % the player saw. If the
--- business has only one kind of cleanable, that kind is the whole job.
+-- Stains are weighted at the business's DecalWeight of the job, walls at the rest -- kept in
+-- sync with the client bar (JobClient.getCompletion) so the finish-early payout matches the %
+-- the player saw. If the business has only one kind of cleanable, that kind is the whole job.
 function JobServer.getCompletion(self: JobServer): number
 	local hasWalls = self.totalWalls > 0
 	local hasDecals = self.totalDecals > 0
@@ -143,7 +143,9 @@ function JobServer.getCompletion(self: JobServer): number
 	if not hasWalls then
 		return decalShare
 	end
-	return wallShare * 0.8 + decalShare * 0.2
+	local def = BusinessConfig[self.businessId]
+	local decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight
+	return wallShare * (1 - decalWeight) + decalShare * decalWeight
 end
 
 function JobServer.isComplete(self: JobServer): boolean
