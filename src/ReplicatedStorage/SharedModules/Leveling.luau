@@ -10,7 +10,7 @@ type Level = DataTemplate.Level
 
 -- XP curve tuning. xpForLevel(n) is the XP needed to go from level n to n+1.
 local BASE_XP = 100
-local GROWTH = 1.2
+local GROWTH = 1.25
 
 local Leveling = {}
 
