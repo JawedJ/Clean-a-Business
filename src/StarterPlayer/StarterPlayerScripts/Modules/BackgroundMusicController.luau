@@ -19,6 +19,8 @@ local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local ContentProvider = game:GetService("ContentProvider")
 
+local SoundGroups = require(ReplicatedStorage.SharedModules.SoundGroups)
+
 -- Length of the fade-in and fade-out ramps, in seconds.
 local FADE = 4
 -- Fallback volume if a template doesn't set one (Roblox default is 0.5).
@@ -82,6 +84,7 @@ local function playTrack(template: Sound)
 	local sound = template:Clone()
 	sound.Looped = false
 	sound.Volume = 0
+	sound.SoundGroup = SoundGroups.getMusicGroup() -- scale by the player's music master volume
 	sound.Parent = SoundService -- 2D playback for this client only
 	sound:Play()
 

@@ -31,6 +31,14 @@ export type Level = {
 	XP: number,
 }
 
+-- Player-tunable client preferences. Volumes are 0..1 master multipliers applied to the
+-- SFX / music SoundGroups (see SoundGroups); 0.5 is the mid-slider default a new player starts
+-- at. Persisted like the rest of the profile so a player's mix is remembered across sessions.
+export type Settings = {
+	MusicVolume: number,
+	SFXVolume: number,
+}
+
 -- Per-player business record. We no longer persist cleaned state (jobs are
 -- per-session and reset every time they're accepted), so this only tracks whether
 -- the player has Unlocked the business -- which is what gates accepting its job.
@@ -58,6 +66,12 @@ local DataTemplate = {
 		CurrentLevel = 1,
 		XP = 0
 	} :: Level,
+
+	-- Sliders start centered (0.5) on a first join; reconciled onto existing profiles.
+	Settings = {
+		MusicVolume = 0.5,
+		SFXVolume = 0.5,
+	} :: Settings,
 
 	BusinessList = {
 		["mcDonalds"] = {

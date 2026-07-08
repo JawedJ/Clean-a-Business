@@ -23,6 +23,7 @@
         "GoHome": { "$className": "RemoteEvent" },
         "JobSummary": { "$className": "RemoteEvent" },
         "RewardPopup": { "$className": "RemoteEvent" },
+        "UpdateSetting": { "$className": "RemoteEvent" },
         "WallCleaned": { "$className": "RemoteEvent" },
         "WallCompletion": { "$className": "RemoteEvent" }
       }

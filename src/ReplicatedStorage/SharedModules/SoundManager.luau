@@ -7,7 +7,7 @@
 -- server. For a server-triggered sound, fire a RemoteEvent to the target client
 -- and have a client-side listener call into here.
 --
--- Sounds are looked up by name under ReplicatedStorage.Audios. Two flavours:
+-- Sounds are looked up by name under ReplicatedStorage.Audios.SFX. Two flavours:
 --   * playOneShot: fire-and-forget. Clones the template, plays it 2D, and destroys
 --     the clone once it finishes. Pass { duration = n } to play only the first n
 --     seconds, stopping (and cleaning up) early.
@@ -21,8 +21,12 @@ local SoundService = game:GetService("SoundService")
 local Debris = game:GetService("Debris")
 local ContentProvider = game:GetService("ContentProvider")
 
--- Folder under ReplicatedStorage holding the Sound templates.
+local SoundGroups = require(script.Parent.SoundGroups)
+
+-- Path under ReplicatedStorage holding the SFX Sound templates: Audios.SFX.
+-- (Background music lives alongside in Audios.BackgroundMusic, handled separately.)
 local AUDIOS_FOLDER = "Audios"
+local SFX_FOLDER = "SFX"
 -- Backstop cleanup if a clone's Ended never fires (e.g. the asset failed to load).
 local MAX_LIFETIME = 30
 
@@ -52,13 +56,14 @@ export type OneShotConfig = {
 
 local SoundManager = {}
 
--- Resolves a Sound template by name under ReplicatedStorage.Audios, warning (and
+-- Resolves a Sound template by name under ReplicatedStorage.Audios.SFX, warning (and
 -- returning nil) if it's missing so a typo can't crash the caller.
 local function findTemplate(soundName: string): Sound?
 	local audios = ReplicatedStorage:FindFirstChild(AUDIOS_FOLDER)
-	local template = audios and audios:FindFirstChild(soundName)
+	local sfx = audios and audios:FindFirstChild(SFX_FOLDER)
+	local template = sfx and sfx:FindFirstChild(soundName)
 	if not template or not template:IsA("Sound") then
-		warn(`SoundManager: no Sound named '{soundName}' under ReplicatedStorage.{AUDIOS_FOLDER}`)
+		warn(`SoundManager: no Sound named '{soundName}' under ReplicatedStorage.{AUDIOS_FOLDER}.{SFX_FOLDER}`)
 		return nil
 	end
 	return template
@@ -83,6 +88,7 @@ function SoundManager.playOneShot(soundName: string, config: OneShotConfig?): So
 
 	local sound = template:Clone()
 	sound.Looped = false
+	sound.SoundGroup = SoundGroups.getSfxGroup() -- scale by the player's SFX master volume
 	sound.Parent = SoundService -- 2D playback for this client only
 	sound.Ended:Once(function()
 		sound:Destroy()
@@ -136,6 +142,7 @@ function SoundManager.createSustained(soundName: string, config: SustainedConfig
 
 	local sound = template:Clone()
 	sound.Looped = true
+	sound.SoundGroup = SoundGroups.getSfxGroup() -- scale by the player's SFX master volume
 	sound.Parent = SoundService -- 2D playback for this client only
 
 	if cfg.preload ~= false then

@@ -7,6 +7,7 @@ local CleaningService = require(game.ServerScriptService.Modules.CleaningService
 local DecalCleaningService = require(game.ServerScriptService.Modules.DecalCleaningService)
 local ToolService = require(game.ServerScriptService.Modules.ToolService)
 local ShopService = require(game.ServerScriptService.Modules.ShopService)
+local SettingsService = require(game.ServerScriptService.Modules.SettingsService)
 
 DataService:init({
 	template = DataTemplate,
@@ -22,4 +23,5 @@ CleaningService.init()
 DecalCleaningService.init()
 ToolService.init()
 ShopService.init()
+SettingsService.init()
 
