@@ -27,6 +27,7 @@ local InventoryController = require(Modules:WaitForChild("InventoryController"))
 local ToolFloatController = require(Modules:WaitForChild("ToolFloatController"))
 local MissingHighlightController = require(Modules:WaitForChild("MissingHighlightController"))
 local JobGhostController = require(Modules:WaitForChild("JobGhostController"))
+local HidePlayersController = require(Modules:WaitForChild("HidePlayersController"))
 local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
 
 
@@ -59,6 +60,8 @@ ToolFloatController.init()
 MissingHighlightController.init()
 -- On a job, other players working the same business show as a blue highlight, not their model.
 JobGhostController.init()
+-- Optional (Settings.HidePlayers) hiding of every other player's character, toggled from the tab.
+HidePlayersController.init()
 -- Warm the HUD's image assets in the background so they don't first render blurry.
 UiPreloader.init()
 

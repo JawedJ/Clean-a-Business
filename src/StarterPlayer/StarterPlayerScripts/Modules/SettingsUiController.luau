@@ -12,9 +12,14 @@
 -- is sent to the server (UpdateSetting) to persist; the server clamps + saves it via DataService
 -- and replicates the confirmed value back, which we re-apply and re-sync the handle to.
 --
--- Initial values come from the player's saved Settings (a first-join profile defaults both to 0.5,
--- so each handle starts centered). Volumes are applied on init -- before the music starts -- so a
--- returning player never hears a blip at the wrong level.
+-- Alongside the sliders sits the HidePlayersCB checkbox (a TextButton): clicking it toggles the
+-- Settings.HidePlayers preference, showing/hiding its Design.X check mark and applying it live via
+-- HidePlayersController (every other player's character hides for this client). It persists through
+-- the same UpdateSetting round-trip as the sliders.
+--
+-- Initial values come from the player's saved Settings (a first-join profile defaults both volumes
+-- to 0.5, so each handle starts centered, and HidePlayers to off). Volumes are applied on init --
+-- before the music starts -- so a returning player never hears a blip at the wrong level.
 --
 -- Like the other HUD controllers, the ScreenGui is re-cloned into PlayerGui on every respawn, so
 -- we re-bind to the fresh instances each time one appears. The SettingsButton lives in the Buttons3
@@ -30,6 +35,7 @@ local SoundGroups = require(ReplicatedStorage.SharedModules.SoundGroups)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
 
 local ExclusivePanels = require(script.Parent.ExclusivePanels)
+local HidePlayersController = require(script.Parent.HidePlayersController)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local UpdateSetting = Remotes:WaitForChild("UpdateSetting") :: RemoteEvent
@@ -42,6 +48,10 @@ local SCREEN_GUI_NAME = "ScreenGui"
 local PANEL_NAME = "Settings"
 -- Value a slider falls back to if its saved setting is missing/invalid -- the centered default.
 local DEFAULT_VALUE = 0.5
+-- The setting key + control name for the "hide other players" checkbox (a TextButton whose Design.X
+-- label is shown when the toggle is on). Persisted like the volume rows via UpdateSetting.
+local HIDE_PLAYERS_KEY = "HidePlayers"
+local HIDE_PLAYERS_CONTROL = "HidePlayersCB"
 
 -- One row of settings: the DataService path key it persists under, the control frame (the bar),
 -- and the SoundGroups setter that applies its live value.
@@ -64,11 +74,24 @@ local settingsTab: Frame? = nil
 -- The currently-bound sliders, keyed by their setting key, refreshed each bind.
 local sliders: { [string]: Slider } = {}
 
+-- A bound checkbox: setValue re-syncs its checked state (X visibility) from outside a click
+-- (init / server confirmation / reopen). Rebuilt each bind; nil before the first bind.
+type Checkbox = {
+	setValue: (value: boolean) -> (),
+}
+local hidePlayersCheckbox: Checkbox? = nil
+
 -- Read a saved setting as a 0..1 value, falling back to the centered default if it's missing or
 -- not a number (e.g. before the profile reconciles the new Settings table in).
 local function getSaved(key: string): number
 	local value = DataService:get({ "Settings", key })
 	return if type(value) == "number" then math.clamp(value, 0, 1) else DEFAULT_VALUE
+end
+
+-- Read a saved boolean setting, defaulting to false if it's missing or not a boolean (e.g. before
+-- the profile reconciles the new key in).
+local function getSavedBool(key: string): boolean
+	return DataService:get({ "Settings", key }) == true
 end
 
 -- Whether the local player currently holds a job (the Buttons3 cluster -- including the
@@ -170,11 +193,44 @@ local function bindSlider(control: Frame, scroll: ScrollingFrame, onChange: (val
 	}
 end
 
+-- Wire `control` (a TextButton) as an on/off checkbox: clicking flips its state, shows/hides the
+-- Design.X check label to match, calls `onChange` with the new state (apply live), and calls
+-- `onCommit` with it (persist). setValue re-syncs the check from outside a click without firing
+-- either callback. `checked` seeds the initial state.
+local function bindCheckbox(control: TextButton, checked: boolean, onChange: (value: boolean) -> (), onCommit: (value: boolean) -> ()): Checkbox
+	local check = control:WaitForChild("Design"):WaitForChild("X") :: TextLabel
+	-- The button must be Active for Activated to fire on click (it's authored inactive in Studio).
+	control.Active = true
+	local currentValue = checked
+
+	local function render()
+		check.Visible = currentValue
+	end
+	render()
+
+	control.Activated:Connect(function()
+		currentValue = not currentValue
+		render()
+		onChange(currentValue)
+		onCommit(currentValue)
+	end)
+
+	return {
+		setValue = function(value: boolean)
+			currentValue = value
+			render()
+		end,
+	}
+end
+
 -- Re-sync every bound handle to the current saved values -- used as the panel's beforeOpen so the
 -- sliders reflect the latest data each time the tab is shown.
 local function syncSliders()
 	for key, slider in sliders do
 		slider.setValue(getSaved(key))
+	end
+	if hidePlayersCheckbox then
+		hidePlayersCheckbox.setValue(getSavedBool(HIDE_PLAYERS_KEY))
 	end
 end
 
@@ -237,6 +293,12 @@ local function bind(screenGui: Instance)
 		sliders[key] = slider
 	end
 
+	-- Wire the hide-other-players checkbox: apply the toggle live, then persist it on click.
+	local hidePlayersControl = scroll:WaitForChild(HIDE_PLAYERS_CONTROL) :: TextButton
+	hidePlayersCheckbox = bindCheckbox(hidePlayersControl, getSavedBool(HIDE_PLAYERS_KEY), HidePlayersController.setEnabled, function(value: boolean)
+		UpdateSetting:FireServer(HIDE_PLAYERS_KEY, value)
+	end)
+
 	applyActiveJobState()
 end
 
@@ -246,6 +308,8 @@ function SettingsUiController.init()
 	for _, row in ROWS do
 		row.apply(getSaved(row.key))
 	end
+	-- Apply the saved hide-other-players preference immediately, before any characters are handled.
+	HidePlayersController.setEnabled(getSavedBool(HIDE_PLAYERS_KEY))
 
 	-- Keep volume in sync with the data: fires on the server's confirmation of a committed change
 	-- (and any other write), re-applying it and nudging the handle to the confirmed value.
@@ -263,6 +327,18 @@ function SettingsUiController.init()
 			end
 		end)
 	end
+
+	-- Keep the hide-other-players toggle in sync with the data (server confirmation / any write),
+	-- re-applying it and nudging the checkbox to the confirmed state.
+	DataService:getChangedSignal({ "Settings", HIDE_PLAYERS_KEY }):Connect(function(value)
+		if type(value) ~= "boolean" then
+			return
+		end
+		HidePlayersController.setEnabled(value)
+		if hidePlayersCheckbox then
+			hidePlayersCheckbox.setValue(value)
+		end
+	end)
 
 	local playerGui = localPlayer:WaitForChild("PlayerGui")
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(applyActiveJobState)

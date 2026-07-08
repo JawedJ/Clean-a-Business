@@ -12,6 +12,8 @@
 --     opaque fill, and Occluded means walls hide the blue just like they'd hide a real body.
 --   * their particle emitters / beams / trails are Enabled = false (kills the washer spray),
 --     with the prior value remembered so it's restored on reveal.
+--   * their Humanoid's NameDisplayDistance is zeroed so the floating character name doesn't hover
+--     over the blue figure (the highlight's opaque fill hides the body but not the name).
 -- We deliberately do NOT hide the parts (e.g. via LocalTransparencyModifier): an Occluded
 -- highlight reads the parts' depth to know what a wall is covering, and invisible parts write
 -- no depth -- so hiding them would make the highlight vanish entirely. The opaque fill is what
@@ -45,6 +47,7 @@ type Ghost = {
 	highlight: Highlight,
 	descConn: RBXScriptConnection,
 	emitters: { [Instance]: boolean },
+	nameDistances: { [Humanoid]: number },
 }
 local ghosts: { [Player]: Ghost } = {}
 
@@ -57,8 +60,9 @@ local function isEmitter(inst: Instance): boolean
 	return inst:IsA("ParticleEmitter") or inst:IsA("Beam") or inst:IsA("Trail")
 end
 
--- Silence one emitter for this ghost, remembering its prior Enabled so reveal can put it back.
--- Non-emitters are left alone -- the opaque highlight, not hiding, conceals the model.
+-- Silence one emitter (and zero one Humanoid's name distance) for this ghost, remembering the prior
+-- value so reveal can put it back. Other instances are left alone -- the opaque highlight, not
+-- hiding, conceals the model.
 local function hideInstance(inst: Instance, ghost: Ghost)
 	if isEmitter(inst) then
 		local emitter = inst :: any
@@ -66,6 +70,12 @@ local function hideInstance(inst: Instance, ghost: Ghost)
 			ghost.emitters[inst] = emitter.Enabled
 		end
 		emitter.Enabled = false
+	elseif inst:IsA("Humanoid") then
+		-- Hide the floating character name so it doesn't hover over the blue figure.
+		if ghost.nameDistances[inst] == nil then
+			ghost.nameDistances[inst] = inst.NameDisplayDistance
+		end
+		inst.NameDisplayDistance = 0
 	end
 end
 
@@ -75,11 +85,16 @@ local function hideCharacter(character: Model, ghost: Ghost)
 	end
 end
 
--- Restore each emitter we silenced to the Enabled value it had before.
+-- Restore each emitter we silenced, and each Humanoid's name distance, to what it was before.
 local function revealCharacter(ghost: Ghost)
 	for emitter, wasEnabled in ghost.emitters do
 		if (emitter :: any).Parent then
 			(emitter :: any).Enabled = wasEnabled
+		end
+	end
+	for humanoid, priorDistance in ghost.nameDistances do
+		if humanoid.Parent then
+			humanoid.NameDisplayDistance = priorDistance
 		end
 	end
 end
@@ -140,6 +155,7 @@ local function applyGhost(player: Player)
 		highlight = highlight,
 		descConn = nil :: any,
 		emitters = {},
+		nameDistances = {},
 	}
 	-- Silence emitters that stream in later (the tool on equip).
 	ghost.descConn = character.DescendantAdded:Connect(function(d)

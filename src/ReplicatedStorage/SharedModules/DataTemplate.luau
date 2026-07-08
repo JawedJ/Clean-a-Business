@@ -33,10 +33,13 @@ export type Level = {
 
 -- Player-tunable client preferences. Volumes are 0..1 master multipliers applied to the
 -- SFX / music SoundGroups (see SoundGroups); 0.5 is the mid-slider default a new player starts
--- at. Persisted like the rest of the profile so a player's mix is remembered across sessions.
+-- at. HidePlayers, when true, hides every OTHER player's character locally (see
+-- HidePlayersController). Persisted like the rest of the profile so a player's preferences are
+-- remembered across sessions.
 export type Settings = {
 	MusicVolume: number,
 	SFXVolume: number,
+	HidePlayers: boolean,
 }
 
 -- Per-player business record. We no longer persist cleaned state (jobs are
@@ -67,10 +70,12 @@ local DataTemplate = {
 		XP = 0
 	} :: Level,
 
-	-- Sliders start centered (0.5) on a first join; reconciled onto existing profiles.
+	-- Sliders start centered (0.5) on a first join; HidePlayers defaults off. Reconciled onto
+	-- existing profiles.
 	Settings = {
 		MusicVolume = 0.5,
 		SFXVolume = 0.5,
+		HidePlayers = false,
 	} :: Settings,
 
 	BusinessList = {
