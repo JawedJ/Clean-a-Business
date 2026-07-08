@@ -82,7 +82,11 @@ end
 -- volume); `onCommit` is called once with the final value on release (persist). The handle is
 -- positioned in scale off AbsoluteSize so it works whether the handle was authored in offset or
 -- scale, and stays inside the bar at both ends.
-local function bindSlider(control: Frame, onChange: (value: number) -> (), onCommit: (value: number) -> ()): Slider
+--
+-- `scroll` is the enclosing ScrollingFrame: on touch devices a drag that starts on the bar would
+-- otherwise ALSO pan the list up/down, so we freeze its scrolling for the duration of the drag and
+-- restore it on release.
+local function bindSlider(control: Frame, scroll: ScrollingFrame, onChange: (value: number) -> (), onCommit: (value: number) -> ()): Slider
 	local handle = control:WaitForChild("Slider") :: Frame
 	-- The bar receives the input (clicking/dragging anywhere on it moves the handle), so it must
 	-- be Active; the handle stays inactive so the pointer over it still reaches the bar.
@@ -133,6 +137,8 @@ local function bindSlider(control: Frame, onChange: (value: number) -> (), onCom
 			return
 		end
 		drag(input.Position.X)
+		-- Stop the drag from doubling as a scroll pan on touch; restored on release below.
+		scroll.ScrollingEnabled = false
 
 		local moveConn: RBXScriptConnection
 		local endConn: RBXScriptConnection
@@ -145,6 +151,7 @@ local function bindSlider(control: Frame, onChange: (value: number) -> (), onCom
 			if endInput.UserInputType == Enum.UserInputType.MouseButton1 or endInput.UserInputType == Enum.UserInputType.Touch then
 				moveConn:Disconnect()
 				endConn:Disconnect()
+				scroll.ScrollingEnabled = true
 				onCommit(currentValue)
 			end
 		end)
@@ -198,7 +205,7 @@ local function bind(screenGui: Instance)
 	local settingsButton = buttons3:WaitForChild("SettingsButton") :: ImageButton
 	local tab = screenGui:WaitForChild("SettingsTab") :: Frame
 	local exitButton = tab:WaitForChild("ExitButton") :: ImageButton
-	local scroll = tab:WaitForChild("ScrollingFrame")
+	local scroll = tab:WaitForChild("ScrollingFrame") :: ScrollingFrame
 
 	local panel = UiAnimations.Panel.new(tab)
 	settingsTab = tab
@@ -223,7 +230,7 @@ local function bind(screenGui: Instance)
 		local control = scroll:WaitForChild(row.control) :: Frame
 		local key = row.key
 		local apply = row.apply
-		local slider = bindSlider(control, apply, function(value: number)
+		local slider = bindSlider(control, scroll, apply, function(value: number)
 			UpdateSetting:FireServer(key, value)
 		end)
 		slider.setValue(getSaved(key))
