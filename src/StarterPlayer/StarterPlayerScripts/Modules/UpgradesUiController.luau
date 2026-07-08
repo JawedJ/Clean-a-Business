@@ -11,7 +11,7 @@
 --   * Cost   -- "Cost: $<abbrev>" (the item's price / upgrade price)
 --   * Range  -- "Range: <studs>"  (optional label; hidden if the item has no Range)
 --   * Radius -- "Radius: <n.n>"   (optional label; hidden if the item has no Radius)
---   * TextInfo.Name   -- the item's display name
+--   * UseTime -- "Time: <n.n>s"     (optional label; hidden if the item has no UseTime)
 --   * TextInfo.Level  -- "Level <current>/<max>"
 --   * TextInfo.Owned? -- shown only if the player owns the item
 --   * InteractButton -- its image + click action depend on state: BUY when not owned (click
@@ -115,9 +115,11 @@ local RED_GRADIENT = ColorSequence.new(UNAFFORDABLE_COLOR)
 
 -- Authored gradient of each cost label's UIGradient, captured the first time we tint it so we
 -- can restore the designer's colours when the player can afford the slot again -- never baking
--- red in permanently. Weak-keyed: the ScreenGui is re-cloned each respawn, so old gradients
--- must be free to GC rather than pinned here forever.
-local originalGradients: { [Instance]: ColorSequence } = setmetatable({}, { __mode = "k" }) :: any
+-- red in permanently. Strong-keyed and cleared at the start of every bind: a weak table would let
+-- a live (but only-weakly-referenced) gradient's entry GC mid-session, after which the next
+-- capture would read the RED colour back as the "original" and stick it red forever. Clearing per
+-- bind drops the previous respawn's clones instead, and the fresh clone is captured pristine.
+local originalGradients: { [Instance]: ColorSequence } = {}
 
 -- Tint a cost label red when the player can't afford it, restoring its authored gradient when
 -- they can. No-op if the label has no UIGradient (nothing meaningful to tint).
@@ -203,13 +205,19 @@ local function renderSlot(slot: Instance)
 		end
 	end
 
+	local useTimeLabel = slot:FindFirstChild("UseTime")
+	if useTimeLabel and useTimeLabel:IsA("TextLabel") then
+		local useTime = item.UseTime
+		if useTime then
+			useTimeLabel.Text = string.format("Time: %.1fs", useTime)
+			useTimeLabel.Visible = true
+		else
+			useTimeLabel.Visible = false
+		end
+	end
+
 	local textInfo = slot:FindFirstChild("TextInfo")
 	if textInfo then
-		local nameLabel = textInfo:FindFirstChild("Name")
-		if nameLabel and nameLabel:IsA("TextLabel") then
-			nameLabel.Text = item.Name
-		end
-
 		local levelLabel = textInfo:FindFirstChild("Level")
 		if levelLabel and levelLabel:IsA("TextLabel") then
 			levelLabel.Text = string.format("Level %d/%d", level, MAX_LEVEL)
@@ -316,6 +324,10 @@ local function bind(screenGui: Instance)
 	local frame = screenGui:WaitForChild("UpgradesFrame") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton
 	local slots = frame:WaitForChild("Slots")
+
+	-- Drop the previous clone's captured gradients so this fresh clone is captured pristine (see
+	-- originalGradients) rather than reusing a possibly-reddened entry.
+	table.clear(originalGradients)
 
 	local panel = UiAnimations.Panel.new(frame)
 	upgradesFrame = frame

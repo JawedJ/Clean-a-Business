@@ -16,11 +16,13 @@ export type Item = {
 
 	-- Upgrade tuning (see ItemUpgrades). BaseUpgradeCost is the price of the FIRST upgrade
 	-- (level 0 -> 1); the shared cost formula scales it up per level. UpgradeRange/UpgradeRadius
-	-- are how much each upgrade adds to the item's Range/Radius. An item with no BaseUpgradeCost
+	-- are how much each upgrade adds to the item's Range/Radius; UpgradeUseTime is how much each
+	-- upgrade SUBTRACTS from the item's UseTime (faster cleaning). An item with no BaseUpgradeCost
 	-- isn't upgradeable.
 	BaseUpgradeCost: number?,
 	UpgradeRange: number?,
 	UpgradeRadius: number?,
+	UpgradeUseTime: number?,
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -81,8 +83,9 @@ local DataTemplate = {
 		UseTime = 2.5,
 		Range = 30,
 		SlotNumber = 2,
-		BaseUpgradeCost = 100,
+		BaseUpgradeCost = 500,
 		UpgradeRange = 5,
+		UpgradeUseTime = 0.1,
 		},
 
 		["pressureWasher"] = {

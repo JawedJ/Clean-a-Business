@@ -18,8 +18,9 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		UseTime = 2.5, -- seconds of cleaning before a stain is removed
 		Range = 30,
 		SlotNumber = 2,
-		BaseUpgradeCost = 100,
+		BaseUpgradeCost = 500,
 		UpgradeRange = 5,
+		UpgradeUseTime = 0.1, -- each upgrade shortens UseTime by this many seconds
 	},
 
 	pressureWasher = {

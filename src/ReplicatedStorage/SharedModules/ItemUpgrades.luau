@@ -23,6 +23,9 @@ ItemUpgrades.MAX_LEVEL = 10
 -- How much each successive upgrade costs relative to the previous one.
 local GROWTH = 2.3
 
+-- Floor for UseTime after upgrades, so shortening it per level can never reach zero/negative.
+local MIN_USE_TIME = 0.1
+
 -- Cost to buy the NEXT upgrade for `item`, from its current Level. 0 if the item declares no
 -- BaseUpgradeCost (not upgradeable). Not gated on the level cap -- use canUpgrade for that.
 function ItemUpgrades.getUpgradeCost(item: Item): number
@@ -49,6 +52,9 @@ function ItemUpgrades.applyUpgrade(item: Item): Item
 	end
 	if item.UpgradeRadius and item.Radius then
 		upgraded.Radius = item.Radius + item.UpgradeRadius
+	end
+	if item.UpgradeUseTime and item.UseTime then
+		upgraded.UseTime = math.max(MIN_USE_TIME, item.UseTime - item.UpgradeUseTime)
 	end
 	return upgraded
 end
