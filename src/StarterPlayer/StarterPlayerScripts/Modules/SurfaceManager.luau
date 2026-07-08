@@ -27,13 +27,22 @@ local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local COMPLETION_SOUND = "PressureCompletionAudio"
 
 -- Seconds of overlay-building allowed per frame before yielding to the next one.
-local FRAME_BUDGET = 0.002
+local FRAME_BUDGET = 0.001
+-- Same idea for the reveal glow: toggling it on a wall is a full-image recolor + upload, so
+-- applying it to every wall in one frame hitches. We drain the walls under this budget so the
+-- glow flips on/off in a fast wave across a couple frames instead of one synchronous stall.
+local GLOW_FRAME_BUDGET = 0.0005
 
 local SurfaceManager = {}
 
 local surfaces: { [BasePart]: CleanableSurface.CleanableSurface } = {}
 local buildQueue: { BasePart } = {}
 local queued: { [BasePart]: boolean } = {}
+
+-- Desired glow state for the current job's walls, reconciled onto each surface by processGlow
+-- under GLOW_FRAME_BUDGET. glowPending stays true until every surface matches glowTarget.
+local glowTarget = false
+local glowPending = false
 
 -- Connections watching the current job's CleanableWalls folder, dropped on `clear`.
 local watchConns: { RBXScriptConnection } = {}
@@ -116,15 +125,43 @@ function SurfaceManager.getSurface(part: BasePart): CleanableSurface.CleanableSu
 	return surfaces[part]
 end
 
--- Turn the "what's left" reveal glow on or off across every built wall of the current job.
--- Each surface glows only its still-dirty pixels (see CleanableSurface.setGlow); finished
--- walls are skipped. Walls still queued for their overlay aren't built yet, so they won't
--- glow -- but the queue drains within a frame or two of the job starting, long before a
--- mid-job player asks what's left.
-function SurfaceManager.setWallsGlow(enabled: boolean)
-	for _, surface in surfaces do
-		surface:setGlow(enabled)
+-- Long-lived drainer: whenever the desired glow state differs from what's applied, flip a
+-- few walls per frame until they all match, so a reveal never recolors + re-uploads every
+-- wall's image in one hitchy frame. setGlow no-ops on walls already at the target, so a
+-- partial pass just resumes where the budget ran out.
+local function processGlow()
+	while true do
+		if not glowPending then
+			RunService.Heartbeat:Wait()
+		else
+			glowPending = false
+			local target = glowTarget
+			local startClock = os.clock()
+			for _, surface in surfaces do
+				if surface.glowing ~= target then
+					surface:setGlow(target)
+					if (os.clock() - startClock) >= GLOW_FRAME_BUDGET then
+						glowPending = true -- more walls to flip; finish next frame
+						break
+					end
+				end
+			end
+			if glowPending then
+				RunService.Heartbeat:Wait()
+			end
+		end
 	end
+end
+
+-- Turn the "what's left" reveal glow on or off across every built wall of the current job.
+-- The flip is applied lazily by processGlow (a few walls per frame) rather than all at once,
+-- so a big job doesn't stall a frame. Each surface glows only its still-dirty pixels (see
+-- CleanableSurface.setGlow); finished walls are skipped. Walls still queued for their overlay
+-- aren't built yet, so they won't glow -- but the queue drains within a frame or two of the
+-- job starting, long before a mid-job player asks what's left.
+function SurfaceManager.setWallsGlow(enabled: boolean)
+	glowTarget = enabled
+	glowPending = true
 end
 
 -- Total wall progress of the current job, in whole-wall units (a half-cleaned wall counts
@@ -158,6 +195,9 @@ function SurfaceManager.clear()
 	end
 	table.clear(buildQueue)
 	table.clear(queued)
+	-- Drop any in-flight glow flip so it can't chase the next job's freshly built walls.
+	glowTarget = false
+	glowPending = false
 end
 
 -- Build overlays for every wall in `wallsFolder` (and any added later), reporting each
@@ -180,6 +220,7 @@ end
 
 function SurfaceManager.init()
 	task.spawn(processQueue)
+	task.spawn(processGlow)
 end
 
 return SurfaceManager

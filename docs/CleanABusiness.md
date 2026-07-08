@@ -157,11 +157,13 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   a percentage) — resolved per-surface at construct time. It also fires `onProgress` on any
   stroke that erased pixels, so the completion bar tracks the wash live rather than only stepping
   when a whole wall finishes.
-- **`setGlow(enabled)`** builds/tears down the reveal-glow overlay: a **second decal** on the
-  same face, solid neon yellow masked by the dirt's current alpha, over the untouched dirt
-  overlay (see *Reveal remaining cleanables*). Its buffer is kept in sync by `stamp` (same
-  layout, same alpha offset), so the glow shrinks with the wash at no extra per-stroke cost; the
-  overlay is torn down on disable, on wall completion, and in `destroy`.
+- **`setGlow(enabled)`** toggles the reveal glow **on the wall's own dirt decal** (no second
+  decal — two coplanar decals z-fought and rendered unreliably). On enable it recolors the
+  still-dirty pixels toward neon yellow into a `glowBuffer` (the real dirt in `self.pixels` is
+  left untouched) and uploads that; `stamp` zeros its alpha in step with the dirt so the glow
+  shrinks with the wash at no extra per-stroke cost. On disable, on wall completion, and in
+  `destroy` the plain dirt is re-uploaded and the buffer dropped (see *Reveal remaining
+  cleanables*).
 
 ### `PressureWasherController` (client)
 - Detects the tool via the `ToolId` attribute and binds its `Equipped` / `Activated`
@@ -192,7 +194,10 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
   plays the pop VFX + sound and invokes the `onCleaned` callback (which `JobClient` uses to
   fire `WallCleaned`); every dirt-removing stroke invokes `onProgress`, which drives the bar.
 - `setWallsGlow(enabled)` fans the reveal glow out to every built wall (calls each surface's
-  `setGlow`), used by `MissingHighlightController` (see *Reveal remaining cleanables*).
+  `setGlow`), used by `MissingHighlightController` (see *Reveal remaining cleanables*). The flip
+  is **budgeted across frames** by a `processGlow` drainer (like the build queue) — toggling the
+  glow is a full-image recolor + upload per wall, so applying it to a whole job at once hitched;
+  now a few walls flip per frame (`GLOW_FRAME_BUDGET`) in a fast wave.
 
 ### Persistence
 **Cleaning is not persisted.** Jobs are per-session: accepting a job is always a fresh
@@ -238,11 +243,13 @@ no server state or remotes.
   while a job is active** (off `ActiveJob`, like the rest of the HUD) and re-binds on each
   respawn.
 - **Walls glow per-pixel.** `SurfaceManager.setWallsGlow(true)` calls `CleanableSurface.setGlow`
-  on every built wall. `setGlow` builds a **second `Decal` on the same face** — solid neon
-  yellow masked by the dirt's *current* alpha, at **0.8 transparency** — layered over (not
-  replacing) the dirt overlay, which stays fully intact. Its buffer is erased in lockstep with
-  the dirt inside `stamp`, so the glow **shrinks live as the player cleans** and a finished wall
-  drops its glow with its overlay. Only the not-yet-cleaned pixels light up.
+  on every built wall. `setGlow` recolors the still-dirty pixels of the wall's **own dirt image**
+  toward neon yellow (blend `0.85`) and uploads that to the existing dirt decal — **no second
+  decal**, so nothing z-fights (two coplanar decals used to render unreliably: some walls showed
+  no glow, others lit up whole). The real dirt (`self.pixels`) is untouched; the recolored
+  `glowBuffer` has its alpha erased in lockstep with the dirt inside `stamp`, so the glow
+  **shrinks live as the player cleans**, and disabling it (or finishing the wall) re-uploads the
+  plain dirt. Only the not-yet-cleaned pixels light up.
 - **Stains glow whole.** Stains have no partial state, so `MissingHighlightController` switches
   each visible stain part (from `DecalVisibility.getActiveVisibleStains`, skipping the invisible
   `Hitbox`) to `Material = Neon`, neon yellow, **0.55 transparency**, snapshotting and restoring

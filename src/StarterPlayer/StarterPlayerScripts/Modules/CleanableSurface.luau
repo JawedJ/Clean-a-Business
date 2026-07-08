@@ -179,12 +179,12 @@ export type CleanableSurface = typeof(setmetatable(
 		threshold: number,
 		cleaned: boolean,
 		glowing: boolean,
-		-- Reveal-glow overlay: a second yellow decal layered over the dirt (built lazily by
-		-- setGlow, torn down when the glow ends). glowPixels mirrors the dirt's alpha so the
-		-- glow only covers still-dirty pixels and shrinks as they're cleaned.
-		glowImage: EditableImage?,
-		glowDecal: Decal?,
-		glowPixels: buffer?,
+		-- Reveal-glow display buffer (built lazily by setGlow, dropped when the glow ends).
+		-- It's a recolored copy of the dirt pixels -- still-dirty pixels pushed toward neon
+		-- yellow, cleaned pixels left transparent -- uploaded to the SAME dirt image/decal
+		-- while the glow is on (no second decal, so nothing z-fights). Its alpha is zeroed in
+		-- lockstep with the dirt by `stamp`, so the glow shrinks as the player cleans.
+		glowBuffer: buffer?,
 		onCleaned: (() -> ())?,
 		onProgress: (() -> ())?,
 	},
@@ -234,9 +234,7 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 		threshold = resolveThreshold(part),
 		cleaned = false,
 		glowing = false,
-		glowImage = nil,
-		glowDecal = nil,
-		glowPixels = nil,
+		glowBuffer = nil,
 		onCleaned = nil,
 		onProgress = nil,
 	}, CleanableSurface)
@@ -263,9 +261,9 @@ end
 -- (rx, ry), in place.
 local function stamp(self: CleanableSurface, cxf: number, cyf: number, rx: number, ry: number)
 	local pixels = self.pixels
-	-- If the reveal glow is up, erase its overlay in lockstep so the yellow shrinks with the
-	-- dirt (same buffer layout, so the same alpha offset applies to both).
-	local glowPixels = self.glowPixels
+	-- If the reveal glow is up, zero its alpha in lockstep so the yellow shrinks with the dirt
+	-- (same buffer layout, so the same alpha offset applies to both).
+	local glowBuffer = self.glowBuffer
 
 	local x0 = math.max(0, math.floor(cxf - rx))
 	local x1 = math.min(IMAGE_SIZE - 1, math.ceil(cxf + rx))
@@ -283,8 +281,8 @@ local function stamp(self: CleanableSurface, cxf: number, cyf: number, rx: numbe
 				local a = (rowBase + px) * 4 + 3
 				if buffer.readu8(pixels, a) ~= 0 then
 					buffer.writeu8(pixels, a, 0)
-					if glowPixels then
-						buffer.writeu8(glowPixels, a, 0)
+					if glowBuffer then
+						buffer.writeu8(glowBuffer, a, 0)
 					end
 					count += 1
 				end
@@ -334,14 +332,9 @@ function CleanableSurface.clean(
 		stamp(self, cx, cy, rx, ry)
 	end
 
-	-- Single full upload. Constant cost, zero allocation.
-	self.image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, self.pixels)
-
-	-- Push the matching erase to the glow overlay so it tracks the wash live (only when dirt
-	-- actually came off -- idle aim leaves both images untouched).
-	if self.glowImage and self.glowPixels and self.cleanedCount > erasedBefore then
-		self.glowImage:WritePixelsBuffer(Vector2.zero, SIZE_VEC, self.glowPixels)
-	end
+	-- Single full upload. Constant cost, zero allocation. While the reveal glow is up we show
+	-- the recolored buffer (stamp kept its alpha in step with the dirt); otherwise plain dirt.
+	self.image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, self.glowBuffer or self.pixels)
 
 	-- Mark done first so onProgress sees the final state (a finished wall reads as fully
 	-- clean, not stuck at the ~0.99 threshold), then report progress, then completion.
@@ -365,19 +358,23 @@ function CleanableSurface.clean(
 	end
 end
 
--- Reveal glow: a neon-yellow layer at 80% transparency, over (not replacing) the dirt.
+-- Reveal glow: still-dirty pixels are pushed toward neon yellow.
 local GLOW_COLOR = Color3.fromRGB(255, 234, 0)
-local GLOW_TRANSPARENCY = 0.8
+-- How hard dirty pixels are pulled toward the glow color (0 = untouched dirt, 1 = solid
+-- yellow). Kept below 1 so the dirt texture still reads through as a highlight, not repaint.
+local GLOW_BLEND = 0.15
 
 local GLOW_R = math.floor(GLOW_COLOR.R * 255 + 0.5)
 local GLOW_G = math.floor(GLOW_COLOR.G * 255 + 0.5)
 local GLOW_B = math.floor(GLOW_COLOR.B * 255 + 0.5)
 
--- Toggle the reveal glow. On enable, builds a SECOND decal on the same face: solid yellow
--- masked by the dirt's current alpha, so it covers only the still-dirty pixels and leaves the
--- dirt overlay fully intact underneath. Its buffer is kept in sync by `stamp`, so the yellow
--- shrinks live as the player cleans. On disable (or when the wall finishes) the overlay is
--- destroyed and the dirt is untouched throughout.
+-- Toggle the reveal glow. It recolors the still-dirty pixels of the wall's OWN dirt image
+-- toward neon yellow and uploads that to the existing dirt decal -- there is no second decal,
+-- so nothing z-fights (two coplanar decals rendered unreliably: some walls showed no glow,
+-- others lit up whole). `self.pixels` stays the untouched source of truth; on enable we build
+-- a recolored copy (`glowBuffer`) whose alpha `stamp` keeps in step with the dirt so the yellow
+-- shrinks live as the player cleans. On disable (or when the wall finishes) we re-upload the
+-- plain dirt and drop the buffer.
 function CleanableSurface.setGlow(self: CleanableSurface, enabled: boolean)
 	if self.glowing == enabled then
 		return
@@ -388,46 +385,39 @@ function CleanableSurface.setGlow(self: CleanableSurface, enabled: boolean)
 		if self.cleaned or not self.decal then
 			return
 		end
-		local glowPixels = buffer.create(IMAGE_SIZE * IMAGE_SIZE * 4)
+		-- buffer.create zero-inits, so already-clean pixels stay transparent with no write.
+		local glowBuffer = buffer.create(IMAGE_SIZE * IMAGE_SIZE * 4)
 		local dirt = self.pixels
 		for i = 0, IMAGE_SIZE * IMAGE_SIZE - 1 do
 			local o = i * 4
-			buffer.writeu8(glowPixels, o, GLOW_R)
-			buffer.writeu8(glowPixels, o + 1, GLOW_G)
-			buffer.writeu8(glowPixels, o + 2, GLOW_B)
-			buffer.writeu8(glowPixels, o + 3, buffer.readu8(dirt, o + 3))
+			local a = buffer.readu8(dirt, o + 3)
+			if a ~= 0 then
+				local r = buffer.readu8(dirt, o)
+				local g = buffer.readu8(dirt, o + 1)
+				local b = buffer.readu8(dirt, o + 2)
+				buffer.writeu8(glowBuffer, o, r + math.floor((GLOW_R - r) * GLOW_BLEND + 0.5))
+				buffer.writeu8(glowBuffer, o + 1, g + math.floor((GLOW_G - g) * GLOW_BLEND + 0.5))
+				buffer.writeu8(glowBuffer, o + 2, b + math.floor((GLOW_B - b) * GLOW_BLEND + 0.5))
+				buffer.writeu8(glowBuffer, o + 3, a)
+			end
 		end
 
-		local glowImage = AssetService:CreateEditableImage({ Size = SIZE_VEC })
-		glowImage:WritePixelsBuffer(Vector2.zero, SIZE_VEC, glowPixels)
-
-		-- Parented after the dirt decal so it renders on top of it.
-		local glowDecal = Instance.new("Decal")
-		glowDecal.Face = self.face
-		glowDecal.Transparency = GLOW_TRANSPARENCY
-		glowDecal.TextureContent = Content.fromObject(glowImage)
-		glowDecal.Parent = self.part
-
-		self.glowPixels = glowPixels
-		self.glowImage = glowImage
-		self.glowDecal = glowDecal
+		self.glowBuffer = glowBuffer
+		self.image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, glowBuffer)
 		self.glowing = true
 	else
-		if self.glowDecal then
-			self.glowDecal:Destroy()
-		end
-		if self.glowImage then
-			self.glowImage:Destroy()
-		end
-		self.glowPixels = nil
-		self.glowImage = nil
-		self.glowDecal = nil
+		self.glowBuffer = nil
 		self.glowing = false
+		-- Restore the true dirt look (image survives until destroy(); decal may already be gone
+		-- on a wall that finished, in which case this upload is simply invisible).
+		if self.image then
+			self.image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, self.pixels)
+		end
 	end
 end
 
 function CleanableSurface.destroy(self: CleanableSurface)
-	-- Tear down the reveal-glow overlay first (no-op if it isn't up).
+	-- Drop the reveal glow first (no-op if it isn't up) so nothing tries to re-upload after.
 	self:setGlow(false)
 	if self.decal then
 		self.decal:Destroy()
