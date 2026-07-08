@@ -284,7 +284,7 @@ ReplicatedStorage/SharedModules/
   CleaningConfig.luau   cleaning tunables (shared by client + server)
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
-  UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow; hoverGrowInGrid pushes grid neighbours + left-edge padding)
+  UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow; hoverGrowInGrid pushes grid neighbours + left-edge padding; hoverGrowCluster wires a whole cluster frame; spreadStackOnHover pushes a stack of frames apart around the hovered one)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
   FinishEarly           RemoteEvent (client → server: end the active job now for a prorated reward; carries wall %)
@@ -337,14 +337,17 @@ label showing the player's live Cash), `Inventory` (the custom hotbar:
 shown only during a job). The client controllers bind to these instances by name and re-bind
 on each respawn (the `ScreenGui` is re-cloned).
 
-Every button in the `Buttons` frame shares the same polish, wired in `JobUiController.bind`:
-a center hover-grow (`UiAnimations.hoverGrowInGrid`) that, because a `UIGridLayout` can't
-reflow on its own, also widens the grid's `CellPadding` by exactly how far the grown edge
-reaches so the row-neighbour is pushed aside and the gap stays constant; the left-edge button
-additionally tweens the frame's `UIPadding.PaddingLeft` so it grows *into* that new room
-rather than off the screen edge. Click/hover SFX come from `UiSoundController` (click on any
-`GuiButton`, hover on anything under the `Buttons` frame). `JobUiController` hides the whole
-`Buttons` frame — not just `JobButton` — while a job is active, so no HUD buttons show mid-job. `UiPreloader` warms these assets' images up
+Every button in the HUD cluster frames (`Button1` + `Buttons2`) shares the same polish, wired
+in `JobUiController.bind` via `UiAnimations.hoverGrowCluster` per frame: a center hover-grow
+(`UiAnimations.hoverGrowInGrid`) that, because a `UIGridLayout` can't reflow on its own, also
+widens the grid's `CellPadding` by exactly how far the grown edge reaches so the row-neighbour
+is pushed aside and the gap stays constant; the left-edge button additionally tweens the frame's
+`UIPadding.PaddingLeft` so it grows *into* that new room rather than off the screen edge. The
+stacked clusters (`Button1` / `Buttons2` / `Buttons3`) open up via `UiAnimations.spreadStackOnHover`:
+hovering a button in one pushes the others away from it -- clusters above slide up, those below
+slide down, the hovered one holds -- so they don't crowd. Click/hover SFX come from `UiSoundController` (click on any
+`GuiButton`, hover on anything under a cluster frame). `JobUiController` hides the whole
+`Button1` frame — not just `JobButton` — while a job is active, so no HUD buttons show mid-job. `UiPreloader` warms these assets' images up
 front (via `ContentProvider:PreloadAsync` on the `StarterGui` templates, in a background task)
 so they don't first render blurry.
 

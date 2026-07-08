@@ -16,6 +16,15 @@
 --     on leave. Attach once per button (re-attach on each respawn):
 --         UiAnimations.hoverGrow(someButton)
 --
+--   * UiAnimations.hoverGrowCluster(frame) -- attaches the grid-aware hover-grow to every
+--     button in a HUD button-cluster frame at once (re-attach on each respawn):
+--         UiAnimations.hoverGrowCluster(someButtonsFrame)
+--
+--   * UiAnimations.spreadStackOnHover(frames, amount) -- for a top-to-bottom stack of frames,
+--     pushes the others away from whichever has a hovered button (above up, below down), easing
+--     back on leave (re-attach each respawn):
+--         UiAnimations.spreadStackOnHover({ top, middle, bottom }, 0.003)
+--
 -- Purely tween helpers -- they never touch game state, and only the hover events for input.
 
 local TweenService = game:GetService("TweenService")
@@ -318,6 +327,100 @@ function UiAnimations.hoverGrowInGrid(button: GuiButton, grid: UIGridLayout, lef
 			TweenService:Create(leftEdgePadding, HOVER_TWEEN, { PaddingLeft = basePaddingLeft }):Play()
 		end
 	end)
+end
+
+-- Attach the cluster hover-grow to every GuiButton in a HUD button cluster frame -- one that
+-- lays its buttons out in a row via a UIGridLayout. Resolves the grid and the frame's own
+-- UIPadding itself, and hands that padding only to the leftmost button (whose leftward grow
+-- would otherwise spill toward the screen edge the cluster hugs -- see hoverGrowInGrid). Falls
+-- back to a plain hoverGrow per button if the frame has no grid. Call once per frame per bind
+-- (a fresh clone each respawn, so nothing stacks).
+function UiAnimations.hoverGrowCluster(frame: GuiObject)
+	local grid = frame:FindFirstChildOfClass("UIGridLayout")
+	local framePadding = frame:FindFirstChildOfClass("UIPadding")
+
+	-- Leftmost = smallest LayoutOrder (the grid lays the row out left-to-right in that order).
+	local leftEdgeButton: GuiButton? = nil
+	for _, child in frame:GetChildren() do
+		if child:IsA("GuiButton") and (leftEdgeButton == nil or child.LayoutOrder < leftEdgeButton.LayoutOrder) then
+			leftEdgeButton = child
+		end
+	end
+
+	for _, child in frame:GetChildren() do
+		if child:IsA("GuiButton") then
+			if grid then
+				local edgePadding = if child == leftEdgeButton then framePadding else nil
+				UiAnimations.hoverGrowInGrid(child, grid, edgePadding)
+			else
+				UiAnimations.hoverGrow(child)
+			end
+		end
+	end
+end
+
+-- Given a vertical stack of frames (passed top-to-bottom), push the others away from whichever
+-- one has a hovered button: frames above the hovered one slide up by `amount` (a Y scale), frames
+-- below slide down, and the hovered frame itself holds -- so a stack of HUD clusters opens up
+-- around the one you're pointing at, easing back once the pointer leaves them all. Hooks the
+-- individual buttons rather than the frames, so the pointer over a frame's gaps/padding (but not a
+-- button) doesn't trigger it. Tracks a per-frame hover count and only re-tweens when the hovered
+-- frame actually changes, so moving between buttons within one frame doesn't restart the tweens,
+-- and a button-to-button move across frames lands its leave + enter the same frame so the later
+-- one wins with no flicker. Captures each frame's resting Position on attach, so call while they
+-- sit at rest (a fresh clone each respawn). Reuses the hover tween feel.
+function UiAnimations.spreadStackOnHover(frames: { GuiObject }, amount: number)
+	local restPositions: { UDim2 } = {}
+	for i, frame in frames do
+		restPositions[i] = frame.Position
+	end
+	local counts = table.create(#frames, 0)
+	local shift = UDim2.new(0, 0, amount, 0)
+
+	-- Index of the frame currently hovered (only one cluster is hoverable at a time), or nil.
+	local function activeIndex(): number?
+		for i, count in counts do
+			if count > 0 then
+				return i
+			end
+		end
+		return nil
+	end
+
+	local currentActive: number? = nil
+	local function refresh()
+		local active = activeIndex()
+		if active == currentActive then
+			return
+		end
+		currentActive = active
+		for i, frame in frames do
+			local goal = restPositions[i]
+			if active then
+				if i < active then
+					goal = restPositions[i] - shift -- above the hovered frame: up
+				elseif i > active then
+					goal = restPositions[i] + shift -- below the hovered frame: down
+				end
+			end
+			TweenService:Create(frame, HOVER_TWEEN, { Position = goal }):Play()
+		end
+	end
+
+	for i, frame in frames do
+		for _, child in frame:GetChildren() do
+			if child:IsA("GuiButton") then
+				child.MouseEnter:Connect(function()
+					counts[i] += 1
+					refresh()
+				end)
+				child.MouseLeave:Connect(function()
+					counts[i] = math.max(0, counts[i] - 1)
+					refresh()
+				end)
+			end
+		end
+	end
 end
 
 return UiAnimations

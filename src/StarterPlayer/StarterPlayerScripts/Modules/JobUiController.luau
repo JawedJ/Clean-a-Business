@@ -43,13 +43,19 @@ local TOGGLE_KEY = Enum.KeyCode.B
 -- UI click sound played for the keyboard shortcut (the JobButton gets it automatically
 -- from UiSoundController's per-GuiButton wiring; the key press doesn't).
 local CLICK_SOUND = "UIClick"
+-- The stacked HUD clusters (top-to-bottom: Button1, Buttons2, Buttons3) open up around whichever
+-- one a button is hovered in: frames above it slide up by this much, frames below slide down, and
+-- the hovered one holds. Y scale, so it tracks the screen at any resolution.
+local CLUSTER_HOVER_SPREAD = 0.003
 
 local JobUiController = {}
 
--- Current top-level UI elements, refreshed each time the ScreenGui is (re)bound. The whole
--- Buttons frame (JobButton + UpgradesButton) is what hides during a job, so no HUD buttons
--- show mid-job.
+-- Current top-level UI elements, refreshed each time the ScreenGui is (re)bound. All HUD
+-- cluster frames (Button1: JobButton + UpgradesButton; Buttons2; Buttons3) hide during a job, so
+-- no HUD buttons show mid-job.
 local buttonsFrame: Frame? = nil
+local buttons2Frame: Frame? = nil
+local buttons3Frame: Frame? = nil
 local jobFrame: Frame? = nil
 -- Drives the board's open/close (slide + expand) animation; rebuilt per bind alongside
 -- jobFrame since the ScreenGui is re-cloned each respawn.
@@ -88,9 +94,18 @@ end
 -- anything is bound.
 local function applyActiveJobState()
 	local active = hasActiveJob()
+	local visible = not active and not summaryHold
 	local buttons = buttonsFrame
 	if buttons and buttons.Parent then
-		buttons.Visible = not active and not summaryHold
+		buttons.Visible = visible
+	end
+	local buttons2 = buttons2Frame
+	if buttons2 and buttons2.Parent then
+		buttons2.Visible = visible
+	end
+	local buttons3 = buttons3Frame
+	if buttons3 and buttons3.Parent then
+		buttons3.Visible = visible
 	end
 	local frame = jobFrame
 	local panel = jobPanel
@@ -162,14 +177,18 @@ end
 -- Resolve one ScreenGui's job elements, wire the buttons + rows, then apply current
 -- state (lock rows + active-job visibility). Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)
-	local buttons = screenGui:WaitForChild("Buttons")
-	local button = buttons:WaitForChild("JobButton") :: ImageButton
+	local button1 = screenGui:WaitForChild("Button1")
+	local buttons2 = screenGui:WaitForChild("Buttons2")
+	local buttons3 = screenGui:WaitForChild("Buttons3")
+	local button = button1:WaitForChild("JobButton") :: ImageButton
 	local frame = screenGui:WaitForChild("JobFrame") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton
 	local scroll = frame:WaitForChild("ScrollingFrame")
 
 	local panel = UiAnimations.Panel.new(frame)
-	buttonsFrame = buttons :: Frame
+	buttonsFrame = button1 :: Frame
+	buttons2Frame = buttons2 :: Frame
+	buttons3Frame = buttons3 :: Frame
 	jobFrame = frame
 	jobPanel = panel
 	frame.Visible = false
@@ -180,28 +199,20 @@ local function bind(screenGui: Instance)
 
 	button.Activated:Connect(toggleBoard)
 
-	-- Every button in the Buttons frame gets the same hover polish as the JobButton: a center
+	-- Every button in every HUD cluster gets the same hover polish as the JobButton: a center
 	-- grow that also pushes its row-neighbours aside (via the shared grid's padding) so the
 	-- growing button keeps a constant gap instead of overlapping them.
-	local grid = buttons:WaitForChild("UIGridLayout") :: UIGridLayout
-	-- The frame's UIPadding compensates the leftmost button's grow so it doesn't spill toward
-	-- the screen edge (the frame hugs it); only that button gets it -- see hoverGrowInGrid.
-	local framePadding = buttons:WaitForChild("UIPadding") :: UIPadding
+	UiAnimations.hoverGrowCluster(button1 :: GuiObject)
+	UiAnimations.hoverGrowCluster(buttons2 :: GuiObject)
+	UiAnimations.hoverGrowCluster(buttons3 :: GuiObject)
 
-	-- Leftmost = smallest LayoutOrder (the grid lays the row out left-to-right in that order).
-	local leftEdgeButton: GuiButton? = nil
-	for _, child in buttons:GetChildren() do
-		if child:IsA("GuiButton") and (leftEdgeButton == nil or child.LayoutOrder < leftEdgeButton.LayoutOrder) then
-			leftEdgeButton = child
-		end
-	end
-
-	for _, child in buttons:GetChildren() do
-		if child:IsA("GuiButton") then
-			local edgePadding = if child == leftEdgeButton then framePadding else nil
-			UiAnimations.hoverGrowInGrid(child, grid, edgePadding)
-		end
-	end
+	-- While a button in one cluster is hovered, push the others away from it (clusters above slide
+	-- up, those below slide down) so the stack opens up around the hovered one.
+	UiAnimations.spreadStackOnHover({
+		button1 :: GuiObject,
+		buttons2 :: GuiObject,
+		buttons3 :: GuiObject,
+	}, CLUSTER_HOVER_SPREAD)
 
 	-- Grow the close button on hover, like the cluster buttons above (its hover sound is wired
 	-- centrally in UiSoundController).

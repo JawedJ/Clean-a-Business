@@ -319,8 +319,8 @@ end
 -- Resolve one ScreenGui's upgrades elements, wire the buttons, then paint the slots + apply
 -- current state. Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)
-	local buttons = screenGui:WaitForChild("Buttons")
-	local upgradesButton = buttons:WaitForChild("UpgradesButton") :: ImageButton
+	local button1 = screenGui:WaitForChild("Button1")
+	local upgradesButton = button1:WaitForChild("UpgradesButton") :: ImageButton
 	local frame = screenGui:WaitForChild("UpgradesFrame") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton
 	local slots = frame:WaitForChild("Slots")

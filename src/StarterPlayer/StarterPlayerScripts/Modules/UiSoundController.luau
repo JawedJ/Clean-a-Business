@@ -3,7 +3,7 @@
 -- Plays the shared UI sound effects for the local player:
 --   * UIClick   on every GuiButton press, anywhere in PlayerGui -- except the shop's
 --     InteractButton, which plays its own purchase/fail SFX (so it isn't doubled up).
---   * UIHOVER_2 when the pointer enters any button in the HUD's "Buttons" frame, or any panel
+--   * UIHOVER_2 when the pointer enters any button in the HUD's cluster frames, or any panel
 --     ExitButton (the job board / upgrades close buttons).
 -- Buttons are discovered by scanning PlayerGui once and then watching DescendantAdded,
 -- so UI cloned in later (e.g. the ScreenGui re-added on each respawn, or dynamically
@@ -20,9 +20,9 @@ local CLICK_SOUND = "UIClick"
 local HOVER_SOUND = "UIHover"
 -- Skip past the hover sound's quiet lead-in so it reads instantly on hover.
 local HOVER_START = 0.140
--- Buttons under a frame with this name (the HUD's main button cluster) play the hover sound;
--- every button still plays the click.
-local HOVER_FRAME_NAME = "Buttons"
+-- Buttons under a frame with one of these names (the HUD's main button clusters) play the
+-- hover sound; every button still plays the click.
+local HOVER_FRAME_NAMES = { Button1 = true, Buttons2 = true, Buttons3 = true }
 -- Panel close buttons (job board, upgrades shop) also play the hover sound, even though they
 -- sit outside the button cluster. Matched by name so any panel's ExitButton is covered.
 local EXIT_BUTTON_NAME = "ExitButton"
@@ -46,12 +46,12 @@ local function isTouchControl(button: GuiButton): boolean
 	return false
 end
 
--- Whether the button sits under a frame named HOVER_FRAME_NAME -- the HUD's main button
--- cluster, whose buttons all get the hover sound.
+-- Whether the button sits under one of the HOVER_FRAME_NAMES frames -- the HUD's main button
+-- clusters, whose buttons all get the hover sound.
 local function isInHoverFrame(button: GuiButton): boolean
 	local ancestor = button.Parent
 	while ancestor do
-		if ancestor.Name == HOVER_FRAME_NAME and ancestor:IsA("GuiObject") then
+		if HOVER_FRAME_NAMES[ancestor.Name] and ancestor:IsA("GuiObject") then
 			return true
 		end
 		ancestor = ancestor.Parent
