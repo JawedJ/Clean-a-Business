@@ -204,10 +204,16 @@ local function show(data: SummaryData)
 		completionText.Text = formatDuration(data.duration)
 	end
 	-- Bounce the frame down from the top-center of the screen into place (see UiAnimations).
+	-- The buttons unlock as soon as the frame lands (drop-in Completed), so the player can act
+	-- during the money/XP count-up rather than waiting it out. Without an animation there's no
+	-- landing to wait for, so unlock right away.
 	if dropIn then
-		dropIn:play()
+		dropIn:play().Completed:Once(function()
+			setButtonsInteractable(true)
+		end)
 	else
 		root.Visible = true
+		setButtonsInteractable(true)
 	end
 
 	-- We're held in first person over the summary (the camera doesn't zoom out and the
