@@ -15,6 +15,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
 
@@ -172,6 +173,13 @@ function JobServer.complete(self: JobServer)
 	end
 	self.completed = true
 
+	-- Mastery stars are earned off the LIFETIME Completions count, so read it BEFORE we tally
+	-- this run. The XP boost applied here therefore matches the star level the player already
+	-- had (and the board's Rewards line already showed) when they started the job -- crossing a
+	-- milestone rewards the NEXT job, not the one that crossed it.
+	local completions = DataService:get(self.player, { "BusinessList", self.businessId, "Completions" }) or 0
+	local masteryMultiplier = Mastery.xpMultiplier(Mastery.starsForCompletions(completions))
+
 	-- Tally this completion in the player's business record. The record is guaranteed to
 	-- exist -- a job can't start (let alone complete) unless the business was Unlocked --
 	-- but default the count anyway so a missing field can't error the write.
@@ -180,14 +188,15 @@ function JobServer.complete(self: JobServer)
 	end)
 
 	-- Completion pays the business's BaseReward (Cash) and XpReward (XP) as a lump bonus on
-	-- top of the per-clean rewards, scaled by the replay multiplier. Paid silently via
-	-- awardCash/awardXp (not reward), so no floating popup is fired to the client -- the
-	-- balances/XP bar just tick up, and the JobSummary reports the totals instead.
+	-- top of the per-clean rewards, scaled by the replay multiplier. XP is additionally scaled
+	-- by the compounding mastery multiplier (see Mastery). Paid silently via awardCash/awardXp
+	-- (not reward), so no floating popup is fired to the client -- the balances/XP bar just
+	-- tick up, and the JobSummary reports the totals instead.
 	local def = BusinessConfig[self.businessId]
 	local cash, xp = 0, 0
 	if def then
 		cash = math.floor(def.BaseReward * self.rewardMultiplier)
-		xp = math.floor(def.XpReward * self.rewardMultiplier)
+		xp = math.floor(def.XpReward * self.rewardMultiplier * masteryMultiplier)
 		ProgressionService.awardCash(self.player, cash)
 		ProgressionService.awardXp(self.player, xp)
 	end
@@ -208,12 +217,18 @@ function JobServer.finishEarly(self: JobServer)
 	end
 	self.completed = true
 
+	-- XP carries the same compounding mastery boost as a full completion (see complete). A
+	-- finish-early never tallies a Completions, so the star level is simply whatever the player
+	-- currently holds on this business.
+	local completions = DataService:get(self.player, { "BusinessList", self.businessId, "Completions" }) or 0
+	local masteryMultiplier = Mastery.xpMultiplier(Mastery.starsForCompletions(completions))
+
 	local fraction = self:getCompletion()
 	local def = BusinessConfig[self.businessId]
 	local cash, xp = 0, 0
 	if def then
 		cash = math.floor(def.BaseReward * fraction * self.rewardMultiplier)
-		xp = math.floor(def.XpReward * fraction * self.rewardMultiplier)
+		xp = math.floor(def.XpReward * fraction * self.rewardMultiplier * masteryMultiplier)
 		ProgressionService.awardCash(self.player, cash)
 		ProgressionService.awardXp(self.player, xp)
 	end

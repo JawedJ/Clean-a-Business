@@ -7,6 +7,10 @@
 -- LockedButton if not. Pressing Wash accepts that business's job (AcceptJob), which the
 -- server confirms by publishing the businessId on the ActiveJob attribute.
 --
+-- Each row also shows the business's mastery progress (StarAmount / MasteryRequirements) and a
+-- Rewards line whose XP figure includes the current mastery boost, all driven off the player's
+-- lifetime Completions on that business (see Mastery, and JobServer.complete which pays the boost).
+--
 -- While a job is active the whole job UI hides (the Buttons frame + JobFrame) -- you can't
 -- start another until this one finishes. When the job completes the server clears ActiveJob
 -- and the Buttons frame returns. So visibility of the job UI is driven off that one attribute,
@@ -23,6 +27,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
+local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
@@ -47,6 +54,10 @@ local CLICK_SOUND = "UIClick"
 -- one a button is hovered in: frames above it slide up by this much, frames below slide down, and
 -- the hovered one holds. Y scale, so it tracks the screen at any resolution.
 local CLUSTER_HOVER_SPREAD = 0.003
+-- Requirements label colors: green once the player meets the business's level gate, the authored
+-- red-orange (matching the Studio-authored default) while they're still below it.
+local REQ_MET_COLOR = Color3.fromRGB(78, 214, 94)
+local REQ_UNMET_COLOR = Color3.fromRGB(225, 62, 30)
 
 local JobUiController = {}
 
@@ -80,6 +91,39 @@ local function isUnlocked(businessId: string): boolean
 	local list = DataService:get({ "BusinessList" })
 	local record = if type(list) == "table" then list[businessId] else nil
 	return type(record) == "table" and record.Unlocked == true
+end
+
+-- Lifetime completions the player has on a business, read the same defensive way as isUnlocked
+-- (BusinessList only holds records for businesses they have). 0 if there's no record yet.
+local function completionsFor(businessId: string): number
+	local list = DataService:get({ "BusinessList" })
+	local record = if type(list) == "table" then list[businessId] else nil
+	local count = if type(record) == "table" then record.Completions else nil
+	return if type(count) == "number" then count else 0
+end
+
+-- The local player's current level (defaults to 1 before Level data is available).
+local function playerLevel(): number
+	local level = DataService:get({ "Level" })
+	local current = if type(level) == "table" then level.CurrentLevel else nil
+	return if type(current) == "number" then current else 1
+end
+
+-- Minimum level a business needs to be accepted (BusinessConfig.RequiredLevel, defaulting to 1).
+local function requiredLevelFor(businessId: string): number
+	local def = BusinessConfig[businessId]
+	return (def and def.RequiredLevel) or 1
+end
+
+-- Render a mastery boost percent for the requirement label: whole numbers stay bare (5 -> "5"),
+-- otherwise up to two decimals with trailing zeros trimmed (5.25 -> "5.25", 5.5125 -> "5.51").
+local function formatBoost(percent: number): string
+	local s = string.format("%.2f", percent)
+	if string.find(s, "%.") then
+		s = (string.gsub(s, "0+$", ""))
+		s = (string.gsub(s, "%.$", ""))
+	end
+	return s
 end
 
 local function refreshTasks()
@@ -155,14 +199,80 @@ local function bindTask(row: Instance): (() -> ())?
 	end
 	local washButton, lockedButton = wash, locked
 
+	-- Mastery labels (optional -- a row without them just skips the mastery display): the stars
+	-- earned, the requirement/next-boost line, and the Rewards line we rewrite so its XP figure
+	-- reflects the current mastery boost.
+	local starAmount = row:FindFirstChild("StarAmount") :: TextLabel?
+	local masteryRequirements = row:FindFirstChild("MasteryRequirements") :: TextLabel?
+	local rewards = row:FindFirstChild("Rewards") :: TextLabel?
+	-- The level-gate line ("REQUIRED: Level N"), turned green once the gate is met.
+	local requirements = row:FindFirstChild("Requirements") :: TextLabel?
+
+	-- Redraw the mastery stars, the Rewards line's boosted XP, and the next-milestone
+	-- requirement from the player's lifetime completions on this business.
+	local function refreshMastery()
+		local def = BusinessConfig[businessId]
+		local completions = completionsFor(businessId)
+		local stars = Mastery.starsForCompletions(completions)
+		local multiplier = Mastery.xpMultiplier(stars)
+
+		if starAmount then
+			starAmount.Text = string.rep("⭐", stars)
+		end
+
+		-- Rewards line: base cash (unboosted) plus the mastery-boosted XP, matching what a
+		-- completion at this star level will actually pay (see JobServer.complete).
+		if rewards and def then
+			local xp = math.floor(def.XpReward * multiplier)
+			rewards.Text = string.format("$%s    +%s EXP", NumberFormat.commas(def.BaseReward), NumberFormat.commas(xp))
+		end
+
+		-- Requirement line: once every star is earned there's nothing left to unlock, so hide it;
+		-- otherwise show the next tier's completion goal, tier progress, and the boost it grants.
+		if masteryRequirements then
+			local boost = Mastery.nextBoostPercent(stars)
+			if boost == nil then
+				masteryRequirements.Visible = false
+			else
+				local requirement = Mastery.nextTierRequirement(stars)
+				local progress = Mastery.tierProgress(completions, stars)
+				masteryRequirements.Visible = true
+				masteryRequirements.Text = string.format(
+					"Achieve 100%% %d times to Unlock: +%s%% EXP (%d/%d)",
+					requirement,
+					formatBoost(boost),
+					progress,
+					requirement
+				)
+			end
+		end
+	end
+
+	-- Paint the level-gate line: text from the business's RequiredLevel, green when the player
+	-- meets it and red-orange while they're still short. Returns whether the gate is met so the
+	-- caller can fold it into the button visibility.
+	local function refreshRequirement(): boolean
+		local required = requiredLevelFor(businessId)
+		local met = playerLevel() >= required
+		if requirements then
+			requirements.Text = string.format("REQUIRED: Level %d", required)
+			requirements.TextColor3 = if met then REQ_MET_COLOR else REQ_UNMET_COLOR
+		end
+		return met
+	end
+
 	local function refresh()
-		local unlocked = isUnlocked(businessId)
-		washButton.Visible = unlocked
-		lockedButton.Visible = not unlocked
+		-- A row offers its Wash button only when the business is both unlocked AND the player is
+		-- high enough level; otherwise it shows the Locked button. The server enforces the same
+		-- gate in JobService.accept.
+		local playable = isUnlocked(businessId) and refreshRequirement()
+		washButton.Visible = playable
+		lockedButton.Visible = not playable
+		refreshMastery()
 	end
 
 	washButton.Activated:Connect(function()
-		if not isUnlocked(businessId) or hasActiveJob() then
+		if not isUnlocked(businessId) or playerLevel() < requiredLevelFor(businessId) or hasActiveJob() then
 			return
 		end
 		-- On success the server sets ActiveJob, which hides the whole job UI via
@@ -238,6 +348,8 @@ function JobUiController.init()
 	-- Persistent subscriptions; each reads whichever elements/rows are currently bound.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(onActiveJobChanged)
 	DataService:getChangedSignal({ "BusinessList" }):Connect(refreshTasks)
+	-- Leveling up can clear a business's level gate, so re-run the rows when Level changes.
+	DataService:getChangedSignal({ "Level" }):Connect(refreshTasks)
 
 	-- TOGGLE_KEY opens/closes the board just like the JobButton. Ignore it when the
 	-- keystroke was already consumed by the game (e.g. typing in a TextBox).

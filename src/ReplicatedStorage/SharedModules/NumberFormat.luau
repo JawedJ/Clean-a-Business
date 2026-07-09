@@ -46,4 +46,22 @@ function NumberFormat.abbreviate(n: number): string
 	return sign .. string.format("%d", abs)
 end
 
+-- Full number with thousands separators, no abbreviation: 2500 -> "2,500", 250 -> "250".
+-- Used where a label wants the exact figure (e.g. the job board's Rewards line) rather than
+-- the compact "2.5k" form. Fractions are floored first.
+function NumberFormat.commas(n: number): string
+	local sign = if n < 0 then "-" else ""
+	local out = string.format("%d", math.abs(math.floor(n)))
+	-- Walk in 3-digit groups from the right, inserting a comma before each group that still has
+	-- digits ahead of it, until no more can be inserted.
+	while true do
+		local next, count = string.gsub(out, "^(%d+)(%d%d%d)", "%1,%2")
+		out = next
+		if count == 0 then
+			break
+		end
+	end
+	return sign .. out
+end
+
 return NumberFormat

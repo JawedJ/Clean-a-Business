@@ -8,8 +8,10 @@
 --
 -- If the open panel is still mid-animation (e.g. it's only just springing in) when another is
 -- requested, we don't interrupt it: the swap is queued and runs the moment that animation
--- settles, so the old one plays its close as the new one springs in (a later request supersedes
--- an earlier queued one). See queueSwap.
+-- settles, so the old one plays its close as the new one springs in. Up to MAX_PENDING further
+-- panels can be queued behind the open one and are shown in press order, each swapping in as the
+-- previous settles; presses past that (or repeats of the last-queued one) are ignored. See
+-- queueSwap.
 --
 -- Each panel registers under a stable name on every bind (HUD ScreenGuis are re-cloned each
 -- respawn, so the UiAnimations.Panel is rebuilt and must be re-registered). All open/close goes
@@ -35,9 +37,10 @@ type Entry = {
 local entries: { [string]: Entry } = {}
 -- The name of the panel currently open (or mid-open, while another is animating out), or nil.
 local openName: string? = nil
--- A switch requested while the open panel was still mid-animation: performed the moment it
--- settles. Only the latest such request stands (a newer press supersedes it); nil when none.
-local pendingName: string? = nil
+-- Panels requested while an animation was in flight, shown in this (press) order as each in-flight
+-- animation settles. Capped at MAX_PENDING so a mash of clicks can't stack up an endless run.
+local pendingQueue: { string } = {}
+local MAX_PENDING = 2
 
 -- (Re)register a panel under a stable name; call on every bind. A freshly cloned panel starts
 -- hidden, so if this name was the open one that state no longer holds -- clear it.
@@ -94,35 +97,41 @@ end
 -- Is a swap watcher already looping? Keeps queueSwap from spawning more than one at a time.
 local swapWatching = false
 
--- Queue a switch to `name` for when the open panel finishes its in-flight animation, then swap.
--- A single watcher loop drains the latest pendingName, so rapid presses collapse to whichever
--- panel was asked for last.
-local function queueSwap(name: string)
-	pendingName = name
+-- Queue a switch to `name` for when the in-flight animation settles, then drain the queue in
+-- order (one swap per settle). Returns false -- the press is dropped -- when the queue is already
+-- full or `name` is already the last one queued (a repeat that would just re-run the same swap).
+-- A single watcher loop drains the queue, so at most one runs at a time.
+local function queueSwap(name: string): boolean
+	if pendingQueue[#pendingQueue] == name or #pendingQueue >= MAX_PENDING then
+		return false
+	end
+	table.insert(pendingQueue, name)
 	if swapWatching then
-		return
+		return true
 	end
 	swapWatching = true
 	task.spawn(function()
-		while pendingName do
-			local target = pendingName
+		while #pendingQueue > 0 do
 			local current = if openName then entries[openName] else nil
 			if current and current.panel:isAnimating() then
-				-- Don't interrupt the open panel's animation; wait it out, then swap.
+				-- Don't interrupt the in-flight animation; wait it out, then swap.
 				task.wait()
 			else
-				pendingName = nil
-				doOpen(target)
+				local target = table.remove(pendingQueue, 1)
+				if target then
+					doOpen(target)
+				end
 			end
 		end
 		swapWatching = false
 	end)
+	return true
 end
 
 -- Open `name`, closing any other open panel at the same moment so the two animate together. If
 -- that other panel is still mid-animation, the swap is queued to run the instant it settles
--- (see queueSwap) rather than interrupting it. Returns true (the request was accepted) except
--- when `name` isn't registered.
+-- (see queueSwap) rather than interrupting it. Returns true when the request was accepted; false
+-- if `name` isn't registered or the queue is full.
 local function openExclusive(name: string): boolean
 	local entry = entries[name]
 	if not entry then
@@ -133,8 +142,7 @@ local function openExclusive(name: string): boolean
 	if other and other ~= name then
 		local closing = entries[other]
 		if closing and closing.panel:isAnimating() then
-			queueSwap(name)
-			return true
+			return queueSwap(name)
 		end
 	end
 
@@ -162,7 +170,7 @@ function ExclusivePanels.toggle(name: string): boolean
 		end
 		entry.panel:close()
 		openName = nil
-		pendingName = nil -- an explicit close cancels any swap that was queued behind this panel
+		table.clear(pendingQueue) -- an explicit close cancels any swaps queued behind this panel
 		return true
 	end
 
@@ -178,17 +186,17 @@ function ExclusivePanels.close(name: string)
 	end
 	if openName == name then
 		openName = nil
-		pendingName = nil
+		table.clear(pendingQueue)
 	end
 end
 
 -- `name` was hidden without animation (e.g. a job started, snapping it away): drop it as the
--- open panel so the coordinator's state stays in sync, and cancel any queued swap so a panel
+-- open panel so the coordinator's state stays in sync, and cancel any queued swaps so a panel
 -- doesn't pop up after the forced hide.
 function ExclusivePanels.markHidden(name: string)
 	if openName == name then
 		openName = nil
-		pendingName = nil
+		table.clear(pendingQueue)
 	end
 end
 

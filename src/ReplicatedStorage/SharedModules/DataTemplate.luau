@@ -57,6 +57,10 @@ export type Business = {
 	-- CleaningConfig.DefaultDecalWeight. Only meaningful on the static BusinessConfig
 	-- catalog, not the per-player record.
 	DecalWeight: number?,
+	-- Minimum player level required to accept this business's job. Optional -- omitted
+	-- businesses default to level 1 (no gate). Like DecalWeight this is a static catalog
+	-- property (BusinessConfig), not a per-player record field.
+	RequiredLevel: number?,
 }
 
 
@@ -79,13 +83,25 @@ local DataTemplate = {
 	} :: Settings,
 
 	BusinessList = {
+		-- Every business starts LOCKED; BusinessService grants unlocks as requirements are met
+		-- when the player joins (see ServerScriptService.BusinessService). Keep this list in sync
+		-- with the BusinessConfig catalog -- one entry per business.
 		["mcDonalds"] = {
 			BaseReward = 2500,
-			Unlocked = true,
+			Unlocked = false,
 			Name = "McDonalds",
 			UniqueID = "mcDonalds",
 			Completions = 0,
 			XpReward = 250
+		},
+
+		["starbucks"] = {
+			BaseReward = 5000,
+			Unlocked = false,
+			Name = "Starbucks",
+			UniqueID = "starbucks",
+			Completions = 0,
+			XpReward = 500
 		},
 
 

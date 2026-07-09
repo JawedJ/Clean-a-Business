@@ -20,6 +20,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local JobServer = require(script.Parent.JobServer)
 local PlotService = require(script.Parent.PlotService)
@@ -75,6 +76,16 @@ local function isUnlocked(player: Player, businessId: string): boolean
 	return DataService:get(player, { "BusinessList", businessId, "Unlocked" }) == true
 end
 
+-- Whether the player is high enough level to accept this business (BusinessConfig.RequiredLevel,
+-- defaulting to 1 -- no gate -- when the business declares none). Mirrors the client's board gate
+-- in JobUiController; enforced here so the server is the authority, not just the hidden button.
+local function meetsLevel(player: Player, businessId: string): boolean
+	local def = BusinessConfig[businessId]
+	local required = (def and def.RequiredLevel) or 1
+	local level = DataService:get(player, { "Level", "CurrentLevel" })
+	return type(level) == "number" and level >= required
+end
+
 -- End a player's current job: drop the JobServer and clear the ActiveJob attribute (which
 -- tears the job state down on their client). Safe to call with no active job.
 function JobService.endJob(player: Player)
@@ -108,6 +119,9 @@ local function accept(player: Player, businessId: any)
 	end
 	if not isUnlocked(player, businessId) then
 		return -- not unlocked: ignore (button shouldn't have been offered)
+	end
+	if not meetsLevel(player, businessId) then
+		return -- below the business's RequiredLevel: ignore (button is hidden client-side too)
 	end
 	local building = buildingFor(businessId)
 	if not building then
