@@ -109,7 +109,7 @@ local DataTemplate = {
 
 	Inventory = {
 		["startingBroom"] = {
-		Name = "Broom",
+		Name = "Brush",
 		Equipped = false,
 		Unlocked = true,
 		Cost = 0,

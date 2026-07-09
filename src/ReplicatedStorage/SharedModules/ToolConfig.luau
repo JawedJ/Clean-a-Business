@@ -9,7 +9,7 @@ local DataTemplate = require(game.ReplicatedStorage.SharedModules.DataTemplate)
 
 local ToolConfig: { [string]: DataTemplate.Item } = {
 	startingBroom = {
-		Name = "Broom",
+		Name = "Brush",
 		Equipped = false,
 		Unlocked = true,
 		Cost = 0,

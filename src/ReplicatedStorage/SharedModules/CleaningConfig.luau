@@ -46,7 +46,7 @@ local CleaningConfig = {
 	-- longer hold businesses -- cleaning happens at the shared buildings above, gated by
 	-- the player's accepted job rather than plot ownership.
 	PlotsFolderName = "Plots",
-	PlotCount = 8,
+	PlotCount = 6,
 	PlotAttribute = "Plot",
 
 	-- Part inside each plot folder the owner's character spawns on when assigned the

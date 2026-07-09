@@ -9,6 +9,7 @@ local DecalCleaningService = require(game.ServerScriptService.Modules.DecalClean
 local ToolService = require(game.ServerScriptService.Modules.ToolService)
 local ShopService = require(game.ServerScriptService.Modules.ShopService)
 local SettingsService = require(game.ServerScriptService.Modules.SettingsService)
+local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
 	template = DataTemplate,
@@ -27,4 +28,6 @@ DecalCleaningService.init()
 ToolService.init()
 ShopService.init()
 SettingsService.init()
+-- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
+AdminCommands.init()
 

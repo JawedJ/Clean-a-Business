@@ -9,8 +9,8 @@ Simulator-style Roblox game. Players clean businesses with tools (broom, pressur
 washer) and continuously unlock more content — tools, businesses, upgrades, plot
 expansions — as they progress.
 
-- **8 players per server** (target), each with their own **plot** (a personal
-  home/spawn base, assigned on join).
+- **6 players per server** (target), each with their own **plot** (a personal
+  home/spawn base, assigned on join). Set by `CleaningConfig.PlotCount`.
 - Businesses are **shared buildings** in the world, not owned. Players take **jobs**
   from a job board: accepting a job teleports them to that business and lets them
   clean it. Cleaning is **per-session** — nothing about cleaned state is saved.
@@ -63,7 +63,8 @@ report, so a player can only ever clean the one business they've accepted. Concr
   wall fraction — accepted so the payout can track the live % shown to the player. **Full**
   completion is unaffected: it still gates on the authoritative deduped counts only.
 - **Nothing about cleaning is saved.** Jobs are per-session; the only persisted business
-  data is the `Unlocked` flag that gates accepting a job.
+  data is the `Unlocked` flag (gates accepting a job) and the lifetime `Completions` tally
+  (drives **job mastery** — see below).
 
 ### Surfaces
 - A cleanable surface is any `BasePart` placed in a business's `CleanableWalls`
@@ -93,11 +94,13 @@ report, so a player can only ever clean the one business they've accepted. Concr
 - **Jobs** are how cleaning happens, modelled as a class on each side — one instance per
   active job. The job board UI (`JobUiController`) fires the `AcceptJob` remote with a
   `businessId`:
-  - `JobService` (server manager) checks the player has `Unlocked` that business, ends any
-    job they're already on, creates a fresh **`JobServer`**, publishes the `businessId` on
-    the **`ActiveJob`** player attribute, and teleports the character onto the building's
+  - `JobService` (server manager) checks the player has `Unlocked` that business **and meets
+    its `RequiredLevel`** (`BusinessConfig.RequiredLevel`, default 1), ends any job they're
+    already on, creates a fresh **`JobServer`**, publishes the `businessId` on the
+    **`ActiveJob`** player attribute, and teleports the character onto the building's
     **`TeleportPart`**. One job at a time. Exposes `getActiveJob`/`getJob` for the cleaning
-    services to authorize + report cleans.
+    services to authorize + report cleans. The level gate is enforced here (server authority),
+    not just by the hidden client button.
   - **`JobServer`** (class) is the authority on progress: it counts the business's
     cleanables from the shared building, records validated cleans (`markWallCleaned` /
     `markDecalCleaned`, deduped), and exposes `getCompletion`/`isComplete`. When every wall
@@ -107,6 +110,10 @@ report, so a player can only ever clean the one business they've accepted. Concr
     share of that bonus for the fraction cleaned and ends the job **without** counting a
     completion — its wall fraction comes from `reportWallProgress` (client-reported, clamped),
     its stain count from the authoritative server total (see the hybrid note above).
+  - **Job mastery boost.** Both payouts scale their **XP** by the business's mastery
+    multiplier (`Mastery.xpMultiplier`), read from the lifetime `Completions` **before** this
+    run is tallied — so crossing a milestone rewards the *next* job, matching the boost the
+    board already showed. Cash is unaffected. See *Job mastery* below.
   - **`JobClient`** (class), spun up by `JobController` when `ActiveJob` is set, builds the
     per-client wall **EditableImage overlays** (via the `SurfaceManager` engine) and tracks
     local completion for the UI. Completion is **smooth** — it sums each wall's live erased
@@ -131,6 +138,39 @@ report, so a player can only ever clean the one business they've accepted. Concr
 - The shared buildings and their `Cleanables` (`CleanableWalls` + `CleanableDecals`) are
   authored in the Workspace and already replicated, so accepting a job spawns nothing
   server-side. The only per-job "loading" is the client's overlays + stain restore.
+
+### Business unlocking (implemented)
+Businesses live in the **`BusinessConfig`** catalog and are **unlocked per player**, resolved
+server-side by **`BusinessService`**:
+- Every business starts **locked** (`DataTemplate.BusinessList` seeds all with `Unlocked =
+  false`). DataService reconcile only fills template-defined keys, so the template lists **one
+  entry per catalog business** to keep them all present on every profile.
+- On join (after `waitForData`), `BusinessService.resolve()` seeds any still-missing catalog
+  business into the profile (locked) and then **grants** any whose requirements are met.
+  **Requirements today = `RequiredLevel`** (`meetsRequirements`), the single spot to extend for
+  future gates (e.g. an owned tool). Resolution is **one-way — it only ever unlocks, never
+  revokes** — so a business stays unlocked forever once earned.
+- Resolution **re-runs on every `Level` change**, so reaching a business's `RequiredLevel`
+  unlocks it live; the client board refreshes off the `BusinessList` changed signal.
+- The job board row (`JobUiController`) shows the **`WashButton`** only when the business is
+  `Unlocked` **and** the player meets `RequiredLevel`, otherwise the **`LockedButton`**. Its
+  **`Requirements`** label reads `REQUIRED: Level N` and turns **green** once the level is met
+  (red-orange while short).
+
+### Job mastery (implemented)
+Per-business progression driven off the lifetime `Completions`, shared by client + server via
+the **`Mastery`** module so payout and display can't drift:
+- **Stars (0→5).** One star per milestone. Tier N asks for `STEP × N` completions **within its
+  tier** (`STEP = 5`), so the cumulative thresholds are **5, 15, 30, 50, 75**. The board shows
+  progress relative to the current tier (it "resets" to `(0/req)` after each star); the real
+  `Completions` count never resets.
+- **XP boost (compounding).** Each star multiplies the completion's XP by `(1 + BOOST)^stars`
+  (`BOOST = 0.05`): +5%, +10.25%, +15.76%, +21.55%, +27.63%. Applied to full completions **and**
+  finish-early payouts (see `JobServer`). Cash is never boosted.
+- **Board display** (`JobUiController` per row): `StarAmount` = one ⭐ per star; the `Rewards`
+  line's XP figure is rewritten to the boosted value; `MasteryRequirements` shows the next
+  star's completion goal, tier progress, and the **incremental** boost it unlocks
+  (`Achieve 100% N times to Unlock: +X% EXP (progress/N)`), and hides once all 5 stars are earned.
 
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
@@ -201,8 +241,9 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
 
 ### Persistence
 **Cleaning is not persisted.** Jobs are per-session: accepting a job is always a fresh
-clean, and nothing about cleaned walls/stains is written to DataService. The only
-business data saved per player is the **`Unlocked`** flag (which gates accepting a job).
+clean, and nothing about cleaned walls/stains is written to DataService. The business data
+saved per player is the **`Unlocked`** flag (gates accepting a job, resolved by
+`BusinessService`) and the lifetime **`Completions`** tally (drives job mastery).
 
 ### `CleaningConfig` (shared)
 Single source of truth for cleaning tunables, consumed by client and server:
@@ -287,8 +328,10 @@ no server state or remotes.
 ReplicatedStorage/SharedModules/
   DataTemplate.luau     saved-data shape + defaults
   ToolConfig.luau       tool definitions catalog
-  BusinessConfig.luau   business definitions catalog
+  BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/DecalWeight)
   CleaningConfig.luau   cleaning tunables (shared by client + server)
+  Mastery.luau          job-mastery rules: stars from Completions, compounding XP multiplier
+  NumberFormat.luau     number -> display string (abbreviate "2.5k"; commas "2,500")
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
   UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow; hoverGrowInGrid pushes grid neighbours + left-edge padding; hoverGrowCluster wires a whole cluster frame; spreadStackOnHover pushes a stack of frames apart around the hovered one)
@@ -303,9 +346,10 @@ ReplicatedStorage/Remotes/
   RewardPopup           RemoteEvent (server → client: show floating +XP/+Cash)
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + Plot/Job/Cleaning/DecalCleaning/Tool services
-  Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob
-  Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion + finish-early reward
+  Main.server.luau      inits DataService (useMock) + Plot/Business/Job/Cleaning/DecalCleaning/Tool services
+  Modules/BusinessService.luau       seeds the catalog into each profile + resolves unlocks (level now, permanent, re-runs on level change)
+  Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob; gates accept on Unlocked + RequiredLevel
+  Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion + finish-early reward (XP scaled by mastery)
   Modules/CleaningService.luau       wall wash reward + WallCleaned→job, gated by active job (no saving)
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; per-client hide via DecalCleaned
   Modules/PlotService.luau           plot (home base) assignment + spawn
@@ -318,7 +362,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/JobController.luau       watches ActiveJob, owns the JobClient, routes DecalCleaned→hide, onProgressChanged signal
   Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %
   Modules/CashUiController.luau    cash HUD: writes Cash into CashDisplay.MoneyAmt as a "$"-prefixed abbreviated number (e.g. "$1.1k"), re-renders on Cash change
-  Modules/JobUiController.luau     job board UI: toggle (Buttons.JobButton/B key), per-business rows, AcceptJob; hides the whole Buttons frame while on a job; wires the Buttons-frame hover polish
+  Modules/JobUiController.luau     job board UI: toggle (Buttons.JobButton/B key), per-business rows, AcceptJob; gates Wash/Locked on Unlocked + RequiredLevel (green Requirements when met); draws mastery stars/boost + boosted Rewards; hides the whole Buttons frame while on a job; wires the Buttons-frame hover polish
   Modules/UiSoundController.luau   plays shared UI SFX: click on every GuiButton, hover on buttons under the Buttons frame
   Modules/JobCompletionController.luau  completion HUD: live progress bar + %, FinishEarly button/H key
   Modules/SurfaceManager.luau      wall-overlay engine, driven by JobClient (buildWalls/clear)
@@ -360,9 +404,11 @@ so they don't first render blurry.
 
 ## Not yet implemented / planned
 
-- **Progression** — the unlock flow (spend Cash / reach a Level to unlock more
-  businesses & tools) and plot growth. Rewards themselves are wired: per-clean Cash/XP, a
-  completion bonus (`BaseReward` + `XpReward`), and a prorated finish-early payout.
+- **Progression** — **business unlocking by Level is now implemented** (`BusinessService`,
+  permanent once earned via `RequiredLevel`); still planned are **Cash-priced** business
+  unlocks, **tool** unlock requirements (the next `meetsRequirements` gate), and **plot
+  growth**. Rewards are wired: per-clean Cash/XP, a completion bonus (`BaseReward` +
+  `XpReward`, XP boosted by job mastery), and a prorated finish-early payout.
   `InventoryManager` exists but isn't initialized or used yet.
 - **StreamingEnabled** handling — the tag-added signal already builds surfaces on
   stream-in and applies saved state correctly, but the broader streaming model below is
@@ -382,8 +428,9 @@ even where the feature itself isn't implemented yet.
 3. On job start the hotbar appears with slot 1 auto-equipped; the player swaps tools
    (button / number key) and cleans the business's surfaces / stains, earning Cash + XP
    per clean (per-session — nothing is saved). The hotbar hides again when the job ends.
-4. Player spends Cash / reaches Levels to **unlock** more businesses (and tools,
-   upgrades), which makes their jobs available on the board.
+4. Player reaches Levels to **unlock** more businesses (implemented, permanent — via each
+   business's `RequiredLevel`), and spends Cash to unlock tools/upgrades (planned), which
+   makes their jobs available on the board.
 5. Repeat against a steadily expanding catalog of businesses and tools.
 
 ## Replication model (target)
@@ -410,10 +457,12 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
 - `Cash: number`
 - `Level: { CurrentLevel: number, XP: number }` — XP-to-next-level via a formula (TBD).
 - `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
-  `BaseReward`, `XpReward`, `Unlocked`, `Name`, `UniqueID`, `Completions`. **`Unlocked`** is
-  the only field that gates gameplay — it decides whether the player may accept that
-  business's job; `Completions` is a lifetime tally bumped on each full completion. Per-clean
-  *surface* state is **not** stored (jobs are per-session).
+  `BaseReward`, `XpReward`, `Unlocked`, `Name`, `UniqueID`, `Completions`, and optional
+  catalog-only `DecalWeight?` / `RequiredLevel?`. **`Unlocked`** gates whether the player may
+  accept that business's job (resolved per player by `BusinessService`); **`RequiredLevel`**
+  (catalog, `BusinessConfig`) is the level needed to unlock/accept it; `Completions` is a
+  lifetime tally bumped on each full completion, which also drives **job mastery** (stars + a
+  compounding XP boost). Per-clean *surface* state is **not** stored (jobs are per-session).
 - `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
   `Unlocked`, `Cost`, `UniqueID`, and optional `Range?` (max cleaning distance, studs),
   `Power?`, `UseTime?` (broom seconds-per-stain), `Radius?` (washer brush radius), and
