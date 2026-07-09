@@ -69,6 +69,8 @@ local DataTemplate = {
 
 	Cash = 100,
 
+	Gems = 0,
+
 	Level = {
 		CurrentLevel = 1,
 		XP = 0
