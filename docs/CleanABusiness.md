@@ -164,13 +164,14 @@ the **`Mastery`** module so payout and display can't drift:
   tier** (`STEP = 5`), so the cumulative thresholds are **5, 15, 30, 50, 75**. The board shows
   progress relative to the current tier (it "resets" to `(0/req)` after each star); the real
   `Completions` count never resets.
-- **XP boost (compounding).** Each star multiplies the completion's XP by `(1 + BOOST)^stars`
-  (`BOOST = 0.05`): +5%, +10.25%, +15.76%, +21.55%, +27.63%. Applied to full completions **and**
-  finish-early payouts (see `JobServer`). Cash is never boosted.
+- **XP boost (linear).** Each star adds a flat 5% of the base to the completion's XP:
+  multiplier `1 + BOOST*stars` (`BOOST = 0.05`) → +5%, +10%, +15%, +20%, +25%. Applied to full
+  completions **and** finish-early payouts (see `JobServer`). Cash is never boosted.
 - **Board display** (`JobUiController` per row): `StarAmount` = one ⭐ per star; the `Rewards`
   line's XP figure is rewritten to the boosted value; `MasteryRequirements` shows the next
-  star's completion goal, tier progress, and the **incremental** boost it unlocks
-  (`Achieve 100% N times to Unlock: +X% EXP (progress/N)`), and hides once all 5 stars are earned.
+  star's completion goal, tier progress, and the **total** boost that star grants (cumulative,
+  e.g. the 2nd star reads `+10%`): `Achieve 100% N times to Unlock: +X% EXP (progress/N)`, and
+  hides once all 5 stars are earned.
 
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
@@ -330,7 +331,7 @@ ReplicatedStorage/SharedModules/
   ToolConfig.luau       tool definitions catalog
   BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/DecalWeight)
   CleaningConfig.luau   cleaning tunables (shared by client + server)
-  Mastery.luau          job-mastery rules: stars from Completions, compounding XP multiplier
+  Mastery.luau          job-mastery rules: stars from Completions, linear +5%/star XP multiplier
   NumberFormat.luau     number -> display string (abbreviate "2.5k"; commas "2,500")
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
@@ -462,7 +463,7 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   accept that business's job (resolved per player by `BusinessService`); **`RequiredLevel`**
   (catalog, `BusinessConfig`) is the level needed to unlock/accept it; `Completions` is a
   lifetime tally bumped on each full completion, which also drives **job mastery** (stars + a
-  compounding XP boost). Per-clean *surface* state is **not** stored (jobs are per-session).
+  linear XP boost, +5% of base per star). Per-clean *surface* state is **not** stored (jobs are per-session).
 - `Inventory: { [string]: Item }` keyed by `UniqueID`. Each `Item`: `Name`, `Equipped`,
   `Unlocked`, `Cost`, `UniqueID`, and optional `Range?` (max cleaning distance, studs),
   `Power?`, `UseTime?` (broom seconds-per-stain), `Radius?` (washer brush radius), and

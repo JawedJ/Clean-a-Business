@@ -189,7 +189,7 @@ function JobServer.complete(self: JobServer)
 
 	-- Completion pays the business's BaseReward (Cash) and XpReward (XP) as a lump bonus on
 	-- top of the per-clean rewards, scaled by the replay multiplier. XP is additionally scaled
-	-- by the compounding mastery multiplier (see Mastery). Paid silently via awardCash/awardXp
+	-- by the mastery multiplier (+5% of base per star -- see Mastery). Paid silently via awardCash/awardXp
 	-- (not reward), so no floating popup is fired to the client -- the balances/XP bar just
 	-- tick up, and the JobSummary reports the totals instead.
 	local def = BusinessConfig[self.businessId]
@@ -217,9 +217,9 @@ function JobServer.finishEarly(self: JobServer)
 	end
 	self.completed = true
 
-	-- XP carries the same compounding mastery boost as a full completion (see complete). A
-	-- finish-early never tallies a Completions, so the star level is simply whatever the player
-	-- currently holds on this business.
+	-- XP carries the same mastery boost as a full completion (see complete). A finish-early never
+	-- tallies a Completions, so the star level is simply whatever the player currently holds on
+	-- this business.
 	local completions = DataService:get(self.player, { "BusinessList", self.businessId, "Completions" }) or 0
 	local masteryMultiplier = Mastery.xpMultiplier(Mastery.starsForCompletions(completions))
 

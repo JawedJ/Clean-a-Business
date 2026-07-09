@@ -228,9 +228,10 @@ local function bindTask(row: Instance): (() -> ())?
 		end
 
 		-- Requirement line: once every star is earned there's nothing left to unlock, so hide it;
-		-- otherwise show the next tier's completion goal, tier progress, and the boost it grants.
+		-- otherwise show the next tier's completion goal, tier progress, and the total boost that
+		-- star grants (cumulative: +5% per star -> +5/+10/+15/...).
 		if masteryRequirements then
-			local boost = Mastery.nextBoostPercent(stars)
+			local boost = Mastery.nextTotalBoostPercent(stars)
 			if boost == nil then
 				masteryRequirements.Visible = false
 			else

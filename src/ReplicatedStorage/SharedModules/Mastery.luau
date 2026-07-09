@@ -10,8 +10,8 @@
 -- board shows progress relative to the current tier (it "resets" to 0 after each star), but the
 -- underlying Completions count is never reset -- we just subtract the previous tiers.
 --
--- Every star compounds a BOOST onto the business's XP reward: the multiplier is (1 + BOOST)^stars,
--- so star 2 adds 5% of the already-boosted 105% (an extra 5.25%), not a flat 5% of the base.
+-- Every star adds a flat BOOST of the BASE XP reward: the multiplier is 1 + BOOST*stars, so the
+-- boost grows 5% per star (star 1 -> +5%, star 2 -> +10%, ... star 5 -> +25%).
 
 local Mastery = {}
 
@@ -19,7 +19,7 @@ local Mastery = {}
 Mastery.MAX_STARS = 5
 -- Extra completions each successive tier asks for over the previous one (tier N wants STEP*N).
 Mastery.STEP = 5
--- Fractional XP boost each star compounds onto the reward (0.05 = +5% per star).
+-- Fractional XP boost each star adds to the reward, relative to base (0.05 = +5% per star).
 Mastery.BOOST = 0.05
 
 -- Cumulative completions needed to have reached exactly `stars` stars (0 -> 0, 1 -> 5, 2 -> 15,
@@ -41,10 +41,10 @@ function Mastery.starsForCompletions(completions: number): number
 	return stars
 end
 
--- Compounding XP multiplier applied to the reward at a given star count: (1 + BOOST)^stars.
--- 0 stars -> 1.0 (no change), 1 -> 1.05, 2 -> 1.1025, ...
+-- XP multiplier applied to the reward at a given star count: 1 + BOOST*stars (flat 5% of base
+-- per star). 0 stars -> 1.0 (no change), 1 -> 1.05, 2 -> 1.10, ... 5 -> 1.25.
 function Mastery.xpMultiplier(stars: number): number
-	return (1 + Mastery.BOOST) ^ stars
+	return 1 + Mastery.BOOST * stars
 end
 
 -- Completions the NEXT tier asks for (STEP*(stars+1)); also the denominator the board shows.
@@ -58,15 +58,15 @@ function Mastery.tierProgress(completions: number, stars: number): number
 	return completions - Mastery.cumulativeFor(stars)
 end
 
--- The EXTRA XP boost (in whole-percent units) the next star unlocks: the difference between the
--- multiplier at stars+1 and at stars, as a percent of the base reward. 0 stars -> 5, 1 -> 5.25,
--- 2 -> 5.5125, ... (each is 5% of the previous tier's already-boosted total). Returned as a
--- number so callers format it; nil once MAX_STARS is reached (no further star to unlock).
-function Mastery.nextBoostPercent(stars: number): number?
+-- The TOTAL XP boost (in whole-percent units) the player will have once the NEXT star is earned:
+-- BOOST*(stars+1) as a percent of the base reward. 0 stars -> 5, 1 -> 10, 2 -> 15, ... This is
+-- the cumulative figure the requirement label shows ("the 2nd star gives +10% EXP"), not the
+-- per-star increment. Returned as a number so callers format it; nil once MAX_STARS is reached.
+function Mastery.nextTotalBoostPercent(stars: number): number?
 	if stars >= Mastery.MAX_STARS then
 		return nil
 	end
-	return (Mastery.xpMultiplier(stars + 1) - Mastery.xpMultiplier(stars)) * 100
+	return Mastery.BOOST * (stars + 1) * 100
 end
 
 return Mastery
