@@ -188,9 +188,10 @@ function SoundManager.createSustained(soundName: string, config: SustainedConfig
 			end
 		end,
 		stop = function()
-			if sound.IsPlaying then
-				sound:Stop()
-			end
+			-- Always Stop(): IsPlaying can still read false in the same frame Play() was
+			-- called, so guarding on it here would skip the stop and leave a looped sound
+			-- running forever. Stop() on an already-stopped sound is a harmless no-op.
+			sound:Stop()
 			stopMaintain()
 		end,
 		destroy = function()

@@ -44,6 +44,15 @@ local boundTools: { [Tool]: boolean } = {}
 -- Only one stain can be cleaned at a time; clicks are ignored until it finishes.
 local busy = false
 
+-- Stains this client has already begun cleaning on the CURRENT job. A stain is cleaned
+-- once per job (the server enforces this too), then hidden -- but there's a brief window
+-- after our cosmetic timer ends (busy clears) and before the server's DecalCleaned arrives
+-- where the stain is still clickable. Re-clicking it there would start a phantom clean
+-- (bar + looping audio + a full UseTime lockout) on a doomed stain. Tracking what we've
+-- started, and refusing to restart it, closes that window. Cleared whenever the active job
+-- changes, since re-accepting a job restores -- and makes cleanable again -- the same models.
+local startedClean: { [Model]: boolean } = {}
+
 -- Looping brush sound played for the duration of a clean. Built in init so its
 -- clone is preloaded during the startup window.
 local brushSound: SoundManager.SustainedSound? = nil
@@ -101,10 +110,11 @@ end
 -- decides if/when the stain is actually cleaned. The local `busy` gate only stops
 -- the player from stacking bars; the server independently enforces one-at-a-time.
 local function startClean(model: Model, hitbox: BasePart)
-	if busy then
+	if busy or startedClean[model] then
 		return
 	end
 	busy = true
+	startedClean[model] = true
 
 	CleanDecal:FireServer(model)
 
@@ -192,6 +202,12 @@ end
 
 function BroomController.init()
 	brushSound = SoundManager.createSustained("BrushAudio")
+
+	-- Re-accepting a job restores its stains (the same model instances) as cleanable
+	-- again, so forget which stains we've cleaned whenever the active job changes.
+	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(function()
+		table.clear(startedClean)
+	end)
 
 	watch(localPlayer)
 	localPlayer.CharacterAdded:Connect(watch)
