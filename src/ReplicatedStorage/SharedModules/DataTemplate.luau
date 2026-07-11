@@ -69,7 +69,7 @@ local DataTemplate = {
 
 	Cash = 100,
 
-	Gems = 0,
+	Gems = 200,
 
 	-- Per-plot purchase progression (see PlotButtonService). A set of the button names the
 	-- player has bought (e.g. { Button1 = true, Button2 = true }). Layout-agnostic: buttons and

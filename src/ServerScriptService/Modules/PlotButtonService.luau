@@ -23,11 +23,17 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
 local PlotService = require(script.Parent.PlotService)
+
+-- Fired to the plot owner when they step on a button: true if the purchase went through, false if
+-- they couldn't afford it. The client plays the buy / fail SFX off this (see PlotButtonSoundController).
+local PlotButtonSound = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("PlotButtonSound") :: RemoteEvent
 
 local PlotButtonService = {}
 
@@ -234,8 +240,121 @@ local function hideAll(state: PlotState)
 	end
 end
 
--- Make a spawnable visible/unlocked (idempotent). Warns on an unknown UnlockID.
-local function unlockSpawnable(state: PlotState, unlockId: string)
+-- Spawn-in drop animation tunables: how long it takes, how far above its resting spot it starts,
+-- and how transparent it starts before fading to its authored look.
+local SPAWN_ANIM_DURATION = 1
+local SPAWN_ANIM_HEIGHT = 8
+local SPAWN_ANIM_START_TRANSPARENCY = 0.9
+
+-- Build the invisible collision blocker that reserves a spawnable's final footprint during its
+-- drop-in, so a player standing where it lands isn't trapped by the falling (non-colliding) model.
+-- Sized/placed from the model's bounding box; parented OUTSIDE the model so moving the model doesn't
+-- drag it. Named "Hitbox" per spec; removed when the drop finishes.
+local function makeLandingHitbox(model: Instance, cframe: CFrame, size: Vector3): BasePart
+	local hitbox = Instance.new("Part")
+	hitbox.Name = "Hitbox"
+	hitbox.Size = size
+	hitbox.CFrame = cframe
+	hitbox.Anchored = true
+	hitbox.CanCollide = true
+	hitbox.CanTouch = false
+	hitbox.CanQuery = false
+	hitbox.Transparency = 1
+	hitbox.Parent = model.Parent
+	return hitbox
+end
+
+-- Drop a spawnable in over SPAWN_ANIM_DURATION: it starts SPAWN_ANIM_HEIGHT studs up and nearly
+-- transparent, then eases (Quad-out) down to its authored spot and fades to its authored look. A
+-- "Hitbox" reserves the landing footprint for the duration so the falling model (parts set
+-- non-colliding for the drop) can't trap a player. Runs in its own task so purchases don't block on
+-- it, and cancels cleanly (restoring the resting pose) if the plot is reset mid-drop.
+local function animateSpawnIn(state: PlotState, model: Instance)
+	-- Resting pose is wherever the model is authored -- it hasn't been moved, so its current pivot
+	-- IS the target. Fall back to a plain show for anything without geometry.
+	local finalPivot: CFrame
+	local boxCFrame: CFrame
+	local boxSize: Vector3
+	if model:IsA("Model") then
+		finalPivot = model:GetPivot()
+		boxCFrame, boxSize = model:GetBoundingBox()
+	elseif model:IsA("BasePart") then
+		local part = model :: BasePart
+		finalPivot, boxCFrame, boxSize = part.CFrame, part.CFrame, part.Size
+	else
+		setVisible(model, true)
+		return
+	end
+
+	local hitbox = makeLandingHitbox(model, boxCFrame, boxSize)
+
+	-- Everything we fade, with its authored (target) transparency captured at build in originalProps.
+	-- Start each a fixed amount MORE transparent than its target (never less, so a semi-transparent
+	-- part doesn't briefly turn opaque).
+	local fades: { { inst: any, from: number, to: number } } = {}
+	local function collectFade(inst: Instance)
+		if inst:IsA("BasePart") or inst:IsA("Decal") or inst:IsA("Texture") then
+			local o = originalProps[inst]
+			local target = if o and type(o.Transparency) == "number" then o.Transparency else inst.Transparency
+			table.insert(fades, { inst = inst, from = math.max(target, SPAWN_ANIM_START_TRANSPARENCY), to = target })
+		end
+	end
+	if model:IsA("BasePart") then
+		collectFade(model)
+	end
+	for _, d in model:GetDescendants() do
+		collectFade(d)
+	end
+
+	-- Reveal the structure, then override for the drop: faded, non-colliding (the Hitbox holds the
+	-- space), lifted up by SPAWN_ANIM_HEIGHT.
+	setVisible(model, true)
+	for _, f in fades do
+		f.inst.Transparency = f.from
+	end
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+		end
+	end
+	if model:IsA("BasePart") then
+		(model :: BasePart).CanCollide = false
+	end
+
+	local startPivot = finalPivot + Vector3.new(0, SPAWN_ANIM_HEIGHT, 0)
+	model:PivotTo(startPivot)
+
+	task.spawn(function()
+		local elapsed = 0
+		while elapsed < SPAWN_ANIM_DURATION do
+			local dt = RunService.Heartbeat:Wait()
+			-- Cancelled (plot reset or this spawnable no longer active): restore the resting pose,
+			-- match the plot's hidden state, and drop the reservation.
+			if stateByPlot[state.plot] ~= state or not state.active[model.Name] then
+				model:PivotTo(finalPivot)
+				setVisible(model, false)
+				hitbox:Destroy()
+				return
+			end
+			elapsed += dt
+			local alpha = math.min(elapsed / SPAWN_ANIM_DURATION, 1)
+			local eased = TweenService:GetValue(alpha, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+			model:PivotTo(startPivot:Lerp(finalPivot, eased))
+			for _, f in fades do
+				f.inst.Transparency = f.from + (f.to - f.from) * eased
+			end
+		end
+		-- Landed: snap to the exact authored pose + visuals (restores collision/particles/etc) and
+		-- remove the footprint reservation.
+		model:PivotTo(finalPivot)
+		setVisible(model, true)
+		hitbox:Destroy()
+	end)
+end
+
+-- Make a spawnable visible/unlocked (idempotent). Warns on an unknown UnlockID. `animate` plays the
+-- drop-in (used on a live purchase); a rebuild from save reveals it instantly (animate = false).
+local function unlockSpawnable(state: PlotState, unlockId: string, animate: boolean)
 	if unlockId == "" or state.active[unlockId] then
 		return
 	end
@@ -245,7 +364,11 @@ local function unlockSpawnable(state: PlotState, unlockId: string)
 		return
 	end
 	state.active[unlockId] = true
-	setVisible(model, true)
+	if animate then
+		animateSpawnIn(state, model)
+	else
+		setVisible(model, true)
+	end
 end
 
 -- Make a button (by index) visible + touchable, unless it doesn't exist or is already available.
@@ -292,7 +415,7 @@ local function applyPurchase(state: PlotState, entry: ButtonEntry)
 	state.available[entry.name] = nil
 	setVisible(entry.model, false)
 
-	unlockSpawnable(state, entry.unlockId)
+	unlockSpawnable(state, entry.unlockId, true)
 
 	revealButton(state, entry.index + 1)
 	if entry.unlockTwo then
@@ -313,7 +436,8 @@ local function tryPurchase(state: PlotState, entry: ButtonEntry)
 
 	local player = state.player
 	local cash = DataService:get(player, { "Cash" })
-	if type(cash) == "number" and cash >= entry.cost and state.available[entry.name] then
+	local purchased = type(cash) == "number" and cash >= entry.cost and state.available[entry.name] == true
+	if purchased then
 		-- Deduct then record + apply. Neither DataService call yields and the button is removed
 		-- from `available` inside applyPurchase, so a second touch can't double-charge.
 		DataService:update(player, { "Cash" }, function(current: number?)
@@ -322,6 +446,9 @@ local function tryPurchase(state: PlotState, entry: ButtonEntry)
 		DataService:set(player, { "PlotButtonsBought", entry.name }, true)
 		applyPurchase(state, entry)
 	end
+
+	-- Tell the owner's client to play the buy SFX on success, the fail SFX if they couldn't afford it.
+	PlotButtonSound:FireClient(player, purchased)
 
 	-- Short cooldown so a failed (too-poor) attempt can be retried without spamming touches.
 	task.delay(0.5, function()
@@ -359,7 +486,7 @@ local function replayFromSave(state: PlotState, bought: { [string]: boolean })
 		if isBought then
 			local entry = state.buttons[name]
 			if entry then
-				unlockSpawnable(state, entry.unlockId)
+				unlockSpawnable(state, entry.unlockId, false)
 				revealed[entry.index + 1] = true
 				if entry.unlockTwo then
 					revealed[entry.index + 2] = true

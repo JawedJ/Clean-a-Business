@@ -22,6 +22,7 @@
         "FinishEarly": { "$className": "RemoteEvent" },
         "GoHome": { "$className": "RemoteEvent" },
         "JobSummary": { "$className": "RemoteEvent" },
+        "PlotButtonSound": { "$className": "RemoteEvent" },
         "RewardPopup": { "$className": "RemoteEvent" },
         "UpdateSetting": { "$className": "RemoteEvent" },
         "WallCleaned": { "$className": "RemoteEvent" },
