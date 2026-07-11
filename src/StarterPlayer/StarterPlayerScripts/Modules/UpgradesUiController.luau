@@ -8,7 +8,7 @@
 -- attribute (== the Item's UniqueID). Each slot is painted from the player's own copy of that
 -- item (DataService.Inventory) when they own it, otherwise from the static catalog
 -- (ToolConfig) so not-yet-owned tools still show their stats. Per slot we set:
---   * Cost   -- "Cost: $<abbrev>" (the item's price / upgrade price)
+--   * Cost   -- "Cost: 💎<abbrev>" (the item's price / upgrade price, in Gems; purple if affordable)
 --   * Range  -- "Range: <studs>"  (optional label; hidden if the item has no Range)
 --   * Radius -- "Radius: <n.n>"   (optional label; hidden if the item has no Radius)
 --   * UseTime -- "Time: <n.n>s"     (optional label; hidden if the item has no UseTime)
@@ -51,9 +51,13 @@ local INTERACT_BUTTON_NAME = "InteractButton"
 local BUY_IMAGE = "rbxassetid://110464713650126"
 local UPGRADE_IMAGE = "rbxassetid://135186205507719"
 local MAX_IMAGE = "rbxassetid://107751883089715"
--- Cost label tint when the player can't currently afford the buy/upgrade. Affordable (and
--- MAXED) slots keep the label's authored colour -- see setCostAffordable.
+-- Cost label tints (the shop is priced in GEMS): purple when the player can afford the
+-- buy/upgrade, red when they can't. MAXED slots aren't a purchase and keep the authored colour.
+-- See applyCostGradient.
+local AFFORDABLE_COLOR = Color3.fromRGB(170, 85, 255)
 local UNAFFORDABLE_COLOR = Color3.fromRGB(255, 76, 76)
+-- Gem emoji prefixed to every cost amount (the shop costs Gems, not Cash) -- e.g. "Cost: 💎1.2k".
+local GEM_ICON = "💎"
 -- Feedback SFX played on the interact click, predicted client-side from the player's cash: a
 -- buy/upgrade the client expects to succeed plays PURCHASE_SOUND, one it can't afford plays
 -- PURCHASE_FAILED_SOUND. Only one plays at a time (see playFeedback).
@@ -102,28 +106,30 @@ local function playFeedback(soundName: string)
 	end
 end
 
--- Whether the player can currently afford `cost`, read fresh from their replicated Cash.
+-- Whether the player can currently afford `cost`, read fresh from their replicated Gems (the
+-- shop is priced in Gems, not Cash).
 local function canAfford(cost: number): boolean
-	local cash = DataService:get({ "Cash" })
-	return type(cash) == "number" and cash >= cost
+	local gems = DataService:get({ "Gems" })
+	return type(gems) == "number" and gems >= cost
 end
 
--- Solid-red gradient swapped in when a slot is unaffordable. The cost text is coloured by a
--- UIGradient (a 2-colour ColorSequence), so tinting TextColor3 would do nothing -- we replace
--- the whole gradient with this flat red instead.
+-- Flat gradients swapped onto a cost label by affordability. The cost text is coloured by a
+-- UIGradient (a 2-colour ColorSequence), so tinting TextColor3 would do nothing -- we replace the
+-- whole gradient instead: purple when the player can afford the slot, red when they can't.
+local PURPLE_GRADIENT = ColorSequence.new(AFFORDABLE_COLOR)
 local RED_GRADIENT = ColorSequence.new(UNAFFORDABLE_COLOR)
 
--- Authored gradient of each cost label's UIGradient, captured the first time we tint it so we
--- can restore the designer's colours when the player can afford the slot again -- never baking
--- red in permanently. Strong-keyed and cleared at the start of every bind: a weak table would let
--- a live (but only-weakly-referenced) gradient's entry GC mid-session, after which the next
--- capture would read the RED colour back as the "original" and stick it red forever. Clearing per
--- bind drops the previous respawn's clones instead, and the fresh clone is captured pristine.
+-- Authored gradient of each cost label's UIGradient, captured the first time we tint it so we can
+-- restore the designer's colours on a MAXED slot (not a purchase) -- never baking a tint in
+-- permanently. Strong-keyed and cleared at the start of every bind: a weak table would let a live
+-- (but only-weakly-referenced) gradient's entry GC mid-session, after which the next capture would
+-- read the tinted colour back as the "original" and stick it forever. Clearing per bind drops the
+-- previous respawn's clones instead, and the fresh clone is captured pristine.
 local originalGradients: { [Instance]: ColorSequence } = {}
 
--- Tint a cost label red when the player can't afford it, restoring its authored gradient when
--- they can. No-op if the label has no UIGradient (nothing meaningful to tint).
-local function setCostAffordable(costLabel: TextLabel, affordable: boolean)
+-- Force a cost label's gradient to `forced`, or restore its authored gradient when `forced` is nil
+-- (MAXED slots). No-op if the label has no UIGradient (nothing meaningful to tint).
+local function applyCostGradient(costLabel: TextLabel, forced: ColorSequence?)
 	local gradient = costLabel:FindFirstChildOfClass("UIGradient")
 	if not gradient then
 		return
@@ -131,7 +137,7 @@ local function setCostAffordable(costLabel: TextLabel, affordable: boolean)
 	if not originalGradients[gradient] then
 		originalGradients[gradient] = gradient.Color
 	end
-	gradient.Color = if affordable then originalGradients[gradient] else RED_GRADIENT
+	gradient.Color = forced or originalGradients[gradient]
 end
 
 -- Whether the local player currently holds a job (the whole Buttons frame -- including the
@@ -164,20 +170,20 @@ local function renderSlot(slot: Instance)
 	local level = if owned and type(item.Level) == "number" then item.Level else 0
 
 	-- Cost: the purchase price when unowned, the next upgrade's price when owned + upgradeable,
-	-- or "MAXED" once at the cap. "Cost: $1.2k" style.
+	-- or "MAXED" once at the cap. Priced in Gems -- "Cost: 💎1.2k" style, purple when affordable.
 	local costLabel = slot:FindFirstChild("Cost")
 	if costLabel and costLabel:IsA("TextLabel") then
 		if not owned then
-			costLabel.Text = "Cost: $" .. NumberFormat.abbreviate(item.Cost)
-			setCostAffordable(costLabel, canAfford(item.Cost))
+			costLabel.Text = "Cost: " .. GEM_ICON .. NumberFormat.abbreviate(item.Cost)
+			applyCostGradient(costLabel, if canAfford(item.Cost) then PURPLE_GRADIENT else RED_GRADIENT)
 		elseif ItemUpgrades.canUpgrade(item) then
 			local cost = ItemUpgrades.getUpgradeCost(item)
-			costLabel.Text = "Cost: $" .. NumberFormat.abbreviate(cost)
-			setCostAffordable(costLabel, canAfford(cost))
+			costLabel.Text = "Cost: " .. GEM_ICON .. NumberFormat.abbreviate(cost)
+			applyCostGradient(costLabel, if canAfford(cost) then PURPLE_GRADIENT else RED_GRADIENT)
 		else
 			costLabel.Text = "MAXED"
-			-- Maxed slots aren't a purchase; keep the authored colour, never red.
-			setCostAffordable(costLabel, true)
+			-- Maxed slots aren't a purchase; restore the authored colour (never purple/red).
+			applyCostGradient(costLabel, nil)
 		end
 	end
 
@@ -393,11 +399,11 @@ end
 function UpgradesUiController.init()
 	local playerGui = localPlayer:WaitForChild("PlayerGui")
 
-	-- Persistent subscriptions; each reads whichever elements are currently bound. Cash is
-	-- watched too so the cost labels re-tint (red/normal) the moment the player can or can't
+	-- Persistent subscriptions; each reads whichever elements are currently bound. Gems is
+	-- watched too so the cost labels re-tint (purple/red) the moment the player can or can't
 	-- afford a slot, without needing an Inventory change.
 	DataService:getChangedSignal({ "Inventory" }):Connect(renderSlots)
-	DataService:getChangedSignal({ "Cash" }):Connect(renderSlots)
+	DataService:getChangedSignal({ "Gems" }):Connect(renderSlots)
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(applyActiveJobState)
 
 	local function onChild(child: Instance)

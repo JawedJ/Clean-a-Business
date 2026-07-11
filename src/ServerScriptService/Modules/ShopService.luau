@@ -12,8 +12,9 @@
 --     upgrade math (cost curve, stat steps, cap) lives in the shared ItemUpgrades module so the
 --     client's display and this authority can't disagree.
 --
--- All state changes go through DataService so they replicate to the client, which repaints the
--- slot (button image + labels) off the Inventory/Cash change.
+-- The shop is priced in GEMS (not Cash): both actions charge the cost against the player's Gems
+-- balance. All state changes go through DataService so they replicate to the client, which repaints
+-- the slot (button image + labels) off the Inventory/Gems change.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -55,14 +56,14 @@ local function onPurchase(player: Player, uniqueId: unknown)
 	end
 
 	local cost = def.Cost
-	local cash = DataService:get(player, { "Cash" })
-	if type(cash) ~= "number" or cash < cost then
+	local gems = DataService:get(player, { "Gems" })
+	if type(gems) ~= "number" or gems < cost then
 		return -- can't afford it
 	end
 
 	-- Deduct the cost, then grant the item. The server handles one remote event at a time and
 	-- neither call yields, so there's no partial-purchase race between the two.
-	DataService:update(player, { "Cash" }, function(current: number?)
+	DataService:update(player, { "Gems" }, function(current: number?)
 		return (current or 0) - cost
 	end)
 
@@ -95,14 +96,14 @@ local function onUpgrade(player: Player, uniqueId: unknown)
 	end
 
 	local cost = ItemUpgrades.getUpgradeCost(item)
-	local cash = DataService:get(player, { "Cash" })
-	if type(cash) ~= "number" or cash < cost then
+	local gems = DataService:get(player, { "Gems" })
+	if type(gems) ~= "number" or gems < cost then
 		return -- can't afford it
 	end
 
 	-- Deduct the cost, then write the upgraded item (level + stat steps). Neither call yields
 	-- and the server handles one event at a time, so there's no partial-upgrade race.
-	DataService:update(player, { "Cash" }, function(current: number?)
+	DataService:update(player, { "Gems" }, function(current: number?)
 		return (current or 0) - cost
 	end)
 	DataService:update(player, { "Inventory", uniqueId }, function(current)

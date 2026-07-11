@@ -71,9 +71,29 @@ local CleaningConfig = {
 	PlotButtonUnlockIdAttribute = "UnlockID",
 	PlotButtonUnlockTwoAttribute = "UnlockTwo",
 
-	-- Optional number attribute on a Spawnables Model: Gems awarded to the plot owner per
-	-- second while that spawnable is unlocked/visible. Absent or 0 = generates nothing (the
-	-- gem-generation loop is live but inert until you set rates on your spawnables).
+	-- === Gem generation (see PlotButtonService) ===
+	-- Gem income is a WORKER + BUFF model. "Workers" are the base generators; every other
+	-- unlocked spawnable is a buff that scales what each worker produces. Per plot, per second:
+	--   perWorker = (PlotWorkerBaseGemRate + sum(flat buffs)) * product(multiplier buffs)
+	--   gems      = perWorker * (active worker count)   [+ any standalone GemRate generators]
+	-- So a flat buff gives every worker +N/s, and a multiplier buff makes every worker earn xN.
+	-- With no workers unlocked, buffs produce nothing (there's nothing to scale).
+
+	-- The worker spawnables: unlocked, each contributes PlotWorkerBaseGemRate to the base before
+	-- buffs. Identified by Model name (they carry NO attributes). Add more workers here as needed.
+	PlotWorkerSpawnables = { Car1 = true, Car2 = true } :: { [string]: boolean },
+	PlotWorkerBaseGemRate = 1,
+
+	-- Buff attributes on a (non-worker) Spawnables Model, applied to EVERY active worker:
+	--   GemFlatPerWorker (number) -- adds this many Gems/sec to each worker (before the multiplier)
+	--   GemMultiplier    (number) -- multiplies each worker's Gems/sec (e.g. 1.2 = +20%); buffs
+	--                                stack multiplicatively across spawnables
+	PlotSpawnableGemFlatAttribute = "GemFlatPerWorker",
+	PlotSpawnableGemMultiplierAttribute = "GemMultiplier",
+
+	-- Optional number attribute for a STANDALONE gem generator (a spawnable that just emits Gems
+	-- on its own, independent of the worker/buff model above). Added on top of worker income.
+	-- Absent or 0 = nothing. Workers use PlotWorkerBaseGemRate instead, not this.
 	PlotSpawnableGemRateAttribute = "GemRate",
 
 	-- The player's currently accepted job (a businessId) is published to their own

@@ -183,10 +183,17 @@ Cash earned from jobs is spent here to unlock **Spawnables**, which in turn gene
   owner's live **`Cash`** changed signal, so the colour flips the instant their balance crosses a
   button's cost. Authored label text is captured once (`baseTextByLabel`) so rebuilds never stack
   the price onto an already-appended value.
-- **Gem generation.** A single **1 Hz** loop sums every unlocked spawnable's `GemRate` per plot and
-  awards that many **Gems** to the owner via `ProgressionService.awardGems`; fractional rates carry
-  over (`gemAccum`) so sub-1/s rates still eventually pay out. Absent/0 rate = inert — the loop is
-  live but generates nothing until rates are authored on the spawnables.
+- **Gem generation (worker + buff model).** A single **1 Hz** loop
+  (`computeGemsPerSecond`) awards **Gems** to the owner via `ProgressionService.awardGems`;
+  fractional totals carry over (`gemAccum`) so sub-1/s income still eventually pays out.
+  - **Workers** are the base generators: `CleaningConfig.PlotWorkerSpawnables` (`Car1`, `Car2`)
+    — identified by **name** (case-sensitive; must match the Spawnable Model names exactly),
+    carrying **no attributes** — each contribute `PlotWorkerBaseGemRate` (**1**/s) to the base.
+  - **Buffs** are every other unlocked spawnable, applied to **each** worker: `GemFlatPerWorker`
+    adds flat Gems/s to a worker's base, `GemMultiplier` scales it (stacking multiplicatively).
+  - Per plot: `perWorker = (PlotWorkerBaseGemRate + Σ flat) × Π multiplier`, and
+    `gems/s = perWorker × activeWorkerCount` (+ any standalone `GemRate` generators, which live
+    outside the worker model). With no workers unlocked, buffs scale nothing.
 - **Hooks + races.** `PlotService` exposes `onAssigned`/`onReleased(fn)`, registered by
   `PlotButtonService.init` **before** `PlotService.init` so the join sweep builds each plot. A
   per-plot **generation token** (`plotGen`) makes an in-flight build (which yields on `waitForData`)
@@ -305,8 +312,10 @@ the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`
 `DecalsFolderName`/`InteriorFolderName` (props/windows the cleaning ray ignores),
 `HitboxName`/`SurfaceIdAttribute`, `PlotCount`/`PlotAttribute`/
 `PlotSpawnPartName`, the plot-progression names `PlotButtonsFolderName`/
-`PlotSpawnablesFolderName`/`PlotButtonInteractPartName` and the button/spawnable attribute
-names `PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`/
+`PlotSpawnablesFolderName`/`PlotButtonInteractPartName`, the button attribute names
+`PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`, the
+gem-income config `PlotWorkerSpawnables`/`PlotWorkerBaseGemRate` and the spawnable buff/generator
+attributes `PlotSpawnableGemFlatAttribute`/`PlotSpawnableGemMultiplierAttribute`/
 `PlotSpawnableGemRateAttribute`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
 `DirtAsset`, `ImageSize`, `BrushWorldRadius`, `MaxBridgeWorldDistance`,
 `CompletionThreshold`, brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot

@@ -435,6 +435,44 @@ end
 
 -- Award Gems once per second for every unlocked spawnable, summed per plot (GemRate attribute;
 -- absent/0 = nothing). Fractional rates accumulate so they eventually pay out whole gems.
+-- Gems/second a plot currently produces under the worker + buff model:
+--   * WORKERS (Config.PlotWorkerSpawnables) each contribute PlotWorkerBaseGemRate to the base.
+--   * Every active spawnable's GemFlatPerWorker adds to each worker's base (before the multiplier);
+--     every GemMultiplier scales each worker's output (stacking multiplicatively). Workers have no
+--     attributes, so buffs come purely from the other unlocked spawnables.
+--   * Standalone GemRate generators (if any) are added on top, outside the worker model.
+-- With no workers active, buffs scale nothing and only standalone GemRate income remains.
+local function computeGemsPerSecond(state: PlotState): number
+	local workerCount = 0
+	local flatPerWorker = 0
+	local multiplier = 1
+	local standalone = 0
+
+	for name in state.active do
+		local model = state.spawnables[name]
+		if model then
+			if Config.PlotWorkerSpawnables[name] then
+				workerCount += 1
+			end
+			local flat = model:GetAttribute(Config.PlotSpawnableGemFlatAttribute)
+			if type(flat) == "number" then
+				flatPerWorker += flat
+			end
+			local mult = model:GetAttribute(Config.PlotSpawnableGemMultiplierAttribute)
+			if type(mult) == "number" then
+				multiplier *= mult
+			end
+			local rate = model:GetAttribute(Config.PlotSpawnableGemRateAttribute)
+			if type(rate) == "number" then
+				standalone += rate
+			end
+		end
+	end
+
+	local perWorker = (Config.PlotWorkerBaseGemRate + flatPerWorker) * multiplier
+	return perWorker * workerCount + standalone
+end
+
 local function startGemLoop()
 	task.spawn(function()
 		while true do
@@ -445,14 +483,7 @@ local function startGemLoop()
 				table.insert(states, state)
 			end
 			for _, state in states do
-				local total = 0
-				for name in state.active do
-					local model = state.spawnables[name]
-					local rate = model and model:GetAttribute(Config.PlotSpawnableGemRateAttribute)
-					if type(rate) == "number" then
-						total += rate
-					end
-				end
+				local total = computeGemsPerSecond(state)
 				if total > 0 and stateByPlot[state.plot] == state then
 					local acc = (gemAccum[state.plot] or 0) + total
 					local whole = math.floor(acc)
