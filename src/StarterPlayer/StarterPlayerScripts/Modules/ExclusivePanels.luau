@@ -6,12 +6,14 @@
 -- animation together, the old one swooping out while the new one springs in. The opening panel
 -- is raised above the one sliding out (see bringToFront) so it's never masked mid-animation.
 --
--- If the open panel is still mid-animation (e.g. it's only just springing in) when another is
--- requested, we don't interrupt it: the swap is queued and runs the moment that animation
--- settles, so the old one plays its close as the new one springs in. Up to MAX_PENDING further
--- panels can be queued behind the open one and are shown in press order, each swapping in as the
--- previous settles; presses past that (or repeats of the last-queued one) are ignored. See
--- queueSwap.
+-- If the open panel is still mid-animation (e.g. it's only just springing in) when another
+-- open or close is requested, we don't interrupt it: the action is queued and runs the moment
+-- that animation settles, so the old one plays its close as the new one springs in. This covers
+-- closes too -- a panel asked to close before its own open finished (e.g. walking out of a
+-- proximity hitbox mid-open) still closes the instant that open settles, rather than the request
+-- being dropped. Up to MAX_PENDING actions can be queued, run in request order; the latest
+-- request for a given panel supersedes any earlier queued one for it (a walk out then back in
+-- collapses to just the final state). See queueAction.
 --
 -- Each panel registers under a stable name on every bind (HUD ScreenGuis are re-cloned each
 -- respawn, so the UiAnimations.Panel is rebuilt and must be re-registered). All open/close goes
@@ -37,9 +39,13 @@ type Entry = {
 local entries: { [string]: Entry } = {}
 -- The name of the panel currently open (or mid-open, while another is animating out), or nil.
 local openName: string? = nil
--- Panels requested while an animation was in flight, shown in this (press) order as each in-flight
--- animation settles. Capped at MAX_PENDING so a mash of clicks can't stack up an endless run.
-local pendingQueue: { string } = {}
+-- Actions requested while an animation was in flight, run in this (request) order as each
+-- in-flight animation settles: each opens or closes a panel. Both opens and closes queue here,
+-- so a close asked for mid-open-animation (e.g. walking out of a proximity hitbox before the
+-- board finished opening) still fires the instant that open settles, instead of being dropped.
+-- Capped at MAX_PENDING so a mash of requests can't stack up an endless run.
+type PendingAction = { name: string, close: boolean }
+local pendingQueue: { PendingAction } = {}
 local MAX_PENDING = 2
 
 -- (Re)register a panel under a stable name; call on every bind. A freshly cloned panel starts
@@ -69,7 +75,7 @@ end
 
 -- Perform the swap to `name`: start the close of any other open panel at the same moment so the
 -- two animate together (old out, new in), layering the opener above so it's never masked. Assumes
--- any panel it has to close has already settled (queueSwap guarantees this); a no-op if `name`
+-- any panel it has to close has already settled (the queue guarantees this); a no-op if `name`
 -- isn't registered.
 local function doOpen(name: string)
 	local entry = entries[name]
@@ -94,18 +100,37 @@ local function doOpen(name: string)
 	entry.panel:open()
 end
 
--- Is a swap watcher already looping? Keeps queueSwap from spawning more than one at a time.
+-- Close `name` now: play its close animation and drop it as the open panel. Assumes it has
+-- already settled (the queue guarantees this); a no-op if `name` isn't registered.
+local function doClose(name: string)
+	local entry = entries[name]
+	if entry then
+		entry.panel:close()
+	end
+	if openName == name then
+		openName = nil
+	end
+end
+
+-- Is a drain loop already running? Keeps queueAction from spawning more than one at a time.
 local swapWatching = false
 
--- Queue a switch to `name` for when the in-flight animation settles, then drain the queue in
--- order (one swap per settle). Returns false -- the press is dropped -- when the queue is already
--- full or `name` is already the last one queued (a repeat that would just re-run the same swap).
--- A single watcher loop drains the queue, so at most one runs at a time.
-local function queueSwap(name: string): boolean
-	if pendingQueue[#pendingQueue] == name or #pendingQueue >= MAX_PENDING then
+-- Queue an open (close=false) or close (close=true) of `name` for when the in-flight animation
+-- settles, then drain the queue in order (one action per settle). The latest request for a panel
+-- supersedes any earlier queued one for it -- so a walk out then back in collapses to just the
+-- final open/close rather than replaying both. Returns false -- the request is dropped -- when
+-- the queue is already full. A single watcher loop drains the queue, so at most one runs at a time.
+local function queueAction(name: string, close: boolean): boolean
+	-- Drop any earlier queued action for this same panel; the newest intent wins.
+	for i = #pendingQueue, 1, -1 do
+		if pendingQueue[i].name == name then
+			table.remove(pendingQueue, i)
+		end
+	end
+	if #pendingQueue >= MAX_PENDING then
 		return false
 	end
-	table.insert(pendingQueue, name)
+	table.insert(pendingQueue, { name = name, close = close })
 	if swapWatching then
 		return true
 	end
@@ -114,12 +139,16 @@ local function queueSwap(name: string): boolean
 		while #pendingQueue > 0 do
 			local current = if openName then entries[openName] else nil
 			if current and current.panel:isAnimating() then
-				-- Don't interrupt the in-flight animation; wait it out, then swap.
+				-- Don't interrupt the in-flight animation; wait it out, then act.
 				task.wait()
 			else
-				local target = table.remove(pendingQueue, 1)
-				if target then
-					doOpen(target)
+				local action = table.remove(pendingQueue, 1)
+				if action then
+					if action.close then
+						doClose(action.name)
+					else
+						doOpen(action.name)
+					end
 				end
 			end
 		end
@@ -129,8 +158,8 @@ local function queueSwap(name: string): boolean
 end
 
 -- Open `name`, closing any other open panel at the same moment so the two animate together. If
--- that other panel is still mid-animation, the swap is queued to run the instant it settles
--- (see queueSwap) rather than interrupting it. Returns true when the request was accepted; false
+-- that other panel is still mid-animation, the open is queued to run the instant it settles
+-- (see queueAction) rather than interrupting it. Returns true when the request was accepted; false
 -- if `name` isn't registered or the queue is full.
 local function openExclusive(name: string): boolean
 	local entry = entries[name]
@@ -142,7 +171,7 @@ local function openExclusive(name: string): boolean
 	if other and other ~= name then
 		local closing = entries[other]
 		if closing and closing.panel:isAnimating() then
-			return queueSwap(name)
+			return queueAction(name, false)
 		end
 	end
 
@@ -151,19 +180,24 @@ local function openExclusive(name: string): boolean
 end
 
 -- Open `name` (closing any other open panel), without the toggle-closed behaviour: if it's
--- already the open one this is a no-op rather than closing it. Used by non-toggle triggers
--- (e.g. walking into the job board's proximity hitbox). Returns true if the request was
--- accepted; false if `name` isn't registered, it's mid-animation, or the queue is full.
+-- already the settled open one this is a no-op rather than closing it. Used by non-toggle
+-- triggers (e.g. walking into a warehouse board's proximity hitbox). If this panel (or the
+-- currently-open one) is mid-animation the open is queued to run once things settle, superseding
+-- any close queued for this panel -- so walking back into a hitbox before the close fired keeps
+-- the panel open. Returns true if the request was accepted; false if `name` isn't registered or
+-- the queue is full.
 function ExclusivePanels.open(name: string): boolean
 	local entry = entries[name]
 	if not entry then
 		return false
 	end
-	if entry.panel:isAnimating() then
+	-- Already open and settled: nothing to do (don't re-trigger its open animation).
+	if openName == name and not entry.panel:isAnimating() then
 		return false
 	end
-	if openName == name then
-		return false
+	local current = if openName then entries[openName] else nil
+	if entry.panel:isAnimating() or (current and current.panel:isAnimating()) then
+		return queueAction(name, false)
 	end
 	return openExclusive(name)
 end
@@ -195,13 +229,21 @@ function ExclusivePanels.toggle(name: string): boolean
 	return openExclusive(name)
 end
 
--- Close `name` if it's registered (e.g. its own exit button). Clears it as the open panel, and
--- cancels any swap queued behind it -- an explicit close means the user is done with the panels.
+-- Close `name` if it's registered (e.g. its own exit button, or walking out of a proximity
+-- hitbox). If it's mid-animation (typically asked to close before its open finished) the close
+-- can't play yet, so it's queued to fire the instant the animation settles -- superseding any
+-- open queued for this panel. openName is kept pointing at it meanwhile so the drain loop waits
+-- on the right panel. Otherwise it closes now and cancels any actions queued behind it.
 function ExclusivePanels.close(name: string)
 	local entry = entries[name]
-	if entry then
-		entry.panel:close()
+	if not entry then
+		return
 	end
+	if entry.panel:isAnimating() then
+		queueAction(name, true)
+		return
+	end
+	entry.panel:close()
 	if openName == name then
 		openName = nil
 		table.clear(pendingQueue)

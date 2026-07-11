@@ -29,7 +29,17 @@ local function spawnCharacterAt(character: Model, plot: Instance)
 		return
 	end
 	character:WaitForChild("HumanoidRootPart")
-	character:PivotTo(CFrame.new(spawnPart.Position + SPAWN_OFFSET))
+	local position = spawnPart.Position + SPAWN_OFFSET
+	-- Face the direction the spawn part's front points (its LookVector), flattened to the
+	-- horizontal so the character stands upright even if the part is tilted. If the part
+	-- happens to face straight up/down there's no horizontal facing to use, so just drop in.
+	local look = spawnPart.CFrame.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude > 1e-4 then
+		character:PivotTo(CFrame.lookAt(position, position + flat.Unit))
+	else
+		character:PivotTo(CFrame.new(position))
+	end
 end
 
 -- First plot (in Plot1..PlotN order) that nobody currently owns. Plots live under

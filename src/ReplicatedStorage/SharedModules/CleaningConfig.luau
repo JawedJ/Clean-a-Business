@@ -58,6 +58,11 @@ local CleaningConfig = {
 	-- business it names and tears them down when it changes. Cleared (nil) = no job.
 	ActiveJobAttribute = "ActiveJob",
 
+	-- Walk speed the owner's character is pinned to for the duration of a job (reasserted if
+	-- anything changes it, and reapplied on a mid-job respawn). This is Roblox's default, so
+	-- it just holds the line against speed boosts while on the clock. See JobServer.
+	JobWalkSpeed = 16,
+
 	-- Part inside each shared business building the player is teleported onto when
 	-- they accept that business's job. (Respawns always go back to the player's plot,
 	-- never the job.) Lifted by TeleportOffset so the character drops in upright.

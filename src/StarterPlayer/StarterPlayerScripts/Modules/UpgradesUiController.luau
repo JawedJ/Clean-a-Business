@@ -316,6 +316,30 @@ local function togglePanel()
 	ExclusivePanels.toggle(PANEL_NAME)
 end
 
+-- Open the shop from a non-button trigger (the warehouse UpgradesBoard proximity hitbox),
+-- routed through the same coordinator as the UpgradesButton so it still closes the job board
+-- first. No-op (returns false) while on a job, matching togglePanel's gating. Unlike togglePanel
+-- this never closes an already-open shop -- re-entering the hitbox shouldn't flap it shut.
+function UpgradesUiController.openShop(): boolean
+	if hasActiveJob() then
+		return false
+	end
+	return ExclusivePanels.open(PANEL_NAME)
+end
+
+-- Close the shop from the same proximity trigger (walking out of the hitbox), routed through
+-- the coordinator so its open-panel bookkeeping stays in sync.
+function UpgradesUiController.closeShop()
+	ExclusivePanels.close(PANEL_NAME)
+end
+
+-- Whether the shop frame is currently shown -- lets the proximity trigger skip a redundant
+-- close when the shop isn't up (e.g. the player closed it via Exit and is still inside).
+function UpgradesUiController.isShopVisible(): boolean
+	local frame = upgradesFrame
+	return frame ~= nil and frame.Parent ~= nil and frame.Visible
+end
+
 -- Resolve one ScreenGui's upgrades elements, wire the buttons, then paint the slots + apply
 -- current state. Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)

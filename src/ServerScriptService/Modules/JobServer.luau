@@ -50,6 +50,11 @@ export type JobServer = typeof(setmetatable(
 		-- completion still comes from cleanedWallCount (deduped WallCleaned events).
 		reportedWallAmount: number,
 		completed: boolean,
+		-- False once destroy() has run: guards the async walk-speed binding from wiring up a
+		-- humanoid after the job has already ended.
+		alive: boolean,
+		-- Every connection this job holds (walk-speed pinning), all dropped in destroy.
+		connections: { RBXScriptConnection },
 	},
 	JobServer
 ))
@@ -91,7 +96,41 @@ function JobServer.new(
 	self.cleanedDecalCount = 0
 	self.reportedWallAmount = 0
 	self.completed = false
+	self.alive = true
+	self.connections = {}
+	self:_pinWalkSpeed()
 	return self
+end
+
+-- Pin the owner's walk speed to Config.JobWalkSpeed for the life of the job: apply it to the
+-- current character, reassert it whenever anything changes it, and reapply to any character the
+-- player respawns into while still on the job. All connections are torn down in destroy.
+function JobServer._pinWalkSpeed(self: JobServer)
+	local target = Config.JobWalkSpeed
+
+	local function bind(character: Model)
+		task.spawn(function()
+			local humanoid = character:WaitForChild("Humanoid", 10)
+			-- The job may have ended (or the character been replaced) while we waited.
+			if not self.alive or not humanoid or not humanoid:IsA("Humanoid") then
+				return
+			end
+			local function apply()
+				-- Guard the reassign so setting it back to target doesn't re-fire us in a loop
+				-- (a same-value write wouldn't fire Changed anyway, but this is explicit).
+				if humanoid.WalkSpeed ~= target then
+					humanoid.WalkSpeed = target
+				end
+			end
+			apply()
+			table.insert(self.connections, humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(apply))
+		end)
+	end
+
+	table.insert(self.connections, self.player.CharacterAdded:Connect(bind))
+	if self.player.Character then
+		bind(self.player.Character)
+	end
 end
 
 function JobServer.isWallCleaned(self: JobServer, surfaceId: string): boolean
@@ -269,7 +308,11 @@ function JobServer.markDecalCleaned(self: JobServer, surfaceId: string): boolean
 end
 
 function JobServer.destroy(self: JobServer)
-	-- Nothing to disconnect yet; here for symmetry + future cleanup.
+	self.alive = false
+	for _, conn in self.connections do
+		conn:Disconnect()
+	end
+	table.clear(self.connections)
 end
 
 return JobServer
