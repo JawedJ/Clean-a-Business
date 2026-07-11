@@ -53,6 +53,29 @@ local CleaningConfig = {
 	-- plot and on every respawn (unless they currently hold a job, see ActiveJob).
 	PlotSpawnPartName = "spawnPart",
 
+	-- Per-plot purchase progression (see PlotButtonService). Each plot holds two folders:
+	--   Plot(i).<PlotButtonsFolderName>     -- purchase buttons, named "Button1".."ButtonN"
+	--   Plot(i).<PlotSpawnablesFolderName>  -- the things buttons unlock, one Model per UnlockID
+	-- Every button Model carries three attributes:
+	--   Cost (number)      -- Cash charged when the owner steps on the button's Interact part
+	--   UnlockID (string)  -- name of the Spawnables Model this button makes visible
+	--   UnlockTwo (boolean)-- if true, buying this button reveals the NEXT TWO buttons instead
+	--                         of just the next one (still destroys this button either way)
+	-- The button is triggered when the owner steps on its child BasePart named
+	-- PlotButtonInteractPartName. Progress persists per player (DataTemplate.PlotButtonsBought),
+	-- and each plot is fully hidden on release and rebuilt from the next owner's save data.
+	PlotButtonsFolderName = "Buttons",
+	PlotSpawnablesFolderName = "Spawnables",
+	PlotButtonInteractPartName = "Interact",
+	PlotButtonCostAttribute = "Cost",
+	PlotButtonUnlockIdAttribute = "UnlockID",
+	PlotButtonUnlockTwoAttribute = "UnlockTwo",
+
+	-- Optional number attribute on a Spawnables Model: Gems awarded to the plot owner per
+	-- second while that spawnable is unlocked/visible. Absent or 0 = generates nothing (the
+	-- gem-generation loop is live but inert until you set rates on your spawnables).
+	PlotSpawnableGemRateAttribute = "GemRate",
+
 	-- The player's currently accepted job (a businessId) is published to their own
 	-- client through this attribute. The client builds wall overlays for whichever
 	-- business it names and tears them down when it changes. Cleared (nil) = no job.

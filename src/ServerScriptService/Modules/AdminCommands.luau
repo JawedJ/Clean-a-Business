@@ -10,12 +10,17 @@
 --     what drives job mastery (stars + the compounding XP boost -- see Mastery/BusinessService),
 --     so mastery can be tested without grinding the clean. Bumps the tally only; it does NOT pay
 --     the per-completion Cash/XP.
+--   /addcash <amount>
+--     Adds `amount` (default 1) Cash to the owner's balance for testing.
+--   /addcash <amount>
+--     Adds `amount` (default 1) Cash to the owner's balance for testing.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local ProgressionService = require(script.Parent.ProgressionService)
 
 local AdminCommands = {}
 
@@ -39,6 +44,17 @@ local function completeJob(player: Player, businessId: string?, amountText: stri
 	print(string.format("[AdminCommands] +%d completions on %s for %s", amount, businessId, player.Name))
 end
 
+-- /addcash <amount>: add `amount` Cash to the owner's balance.
+local function addCash(player: Player, amountText: string?)
+	local amount = math.floor(tonumber(amountText) or 1)
+	amount = math.clamp(amount, 1, MAX_AMOUNT)
+
+	DataService:update(player, { "Cash" }, function(current: number?)
+		return (current or 0) + amount
+	end)
+	print(string.format("[AdminCommands] +%d cash for %s", amount, player.Name))
+end
+
 local function onChatted(player: Player, message: string)
 	if player.UserId ~= OWNER_ID then
 		return
@@ -53,6 +69,8 @@ local function onChatted(player: Player, message: string)
 	local command = string.lower(tokens[1] or "")
 	if command == "/completejob" then
 		completeJob(player, tokens[2], tokens[3])
+	elseif command == "/addcash" then
+		addCash(player, tokens[2])
 	end
 end
 

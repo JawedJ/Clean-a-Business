@@ -21,6 +21,22 @@ local ownerByPlot: { [Instance]: Player } = {}
 local plotByPlayer: { [Player]: Instance } = {}
 local characterConns: { [Player]: RBXScriptConnection } = {}
 
+-- Listeners notified when a plot is handed to / taken from a player. PlotButtonService uses
+-- these to build the plot from the new owner's save data and to reset it on release. Registered
+-- via onAssigned/onReleased before init() so the join sweep and every future assignment fire them.
+local assignedListeners: { (Player, Instance) -> () } = {}
+local releasedListeners: { (Player, Instance) -> () } = {}
+
+-- Register a callback fired (player, plot) whenever a plot is assigned to a player. Call before init().
+function PlotService.onAssigned(fn: (Player, Instance) -> ())
+	table.insert(assignedListeners, fn)
+end
+
+-- Register a callback fired (player, plot) whenever a player's plot is released. Call before init().
+function PlotService.onReleased(fn: (Player, Instance) -> ())
+	table.insert(releasedListeners, fn)
+end
+
 -- Teleport a character onto its plot's spawn part (upright, slightly above it).
 local function spawnCharacterAt(character: Model, plot: Instance)
 	local spawnPart = plot:FindFirstChild(Config.PlotSpawnPartName)
@@ -76,6 +92,10 @@ local function assign(player: Player)
 	if player.Character then
 		task.spawn(spawnCharacterAt, player.Character, plot)
 	end
+
+	for _, fn in assignedListeners do
+		task.spawn(fn, player, plot)
+	end
 end
 
 local function release(player: Player)
@@ -87,6 +107,10 @@ local function release(player: Player)
 
 	local plot = plotByPlayer[player]
 	if plot then
+		-- Notify listeners while we still know the plot so they can reset it (hide everything).
+		for _, fn in releasedListeners do
+			task.spawn(fn, player, plot)
+		end
 		ownerByPlot[plot] = nil
 		plotByPlayer[player] = nil
 	end

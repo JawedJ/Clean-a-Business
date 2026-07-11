@@ -10,7 +10,9 @@ washer) and continuously unlock more content — tools, businesses, upgrades, pl
 expansions — as they progress.
 
 - **6 players per server** (target), each with their own **plot** (a personal
-  home/spawn base, assigned on join). Set by `CleaningConfig.PlotCount`.
+  home/spawn base, assigned on join). Set by `CleaningConfig.PlotCount`. Each plot hosts a
+  per-player **purchase progression** — step-on `Buttons` bought with **Cash** reveal
+  `Spawnables` that generate **Gems** (see *Plot purchase progression*).
 - Businesses are **shared buildings** in the world, not owned. Players take **jobs**
   from a job board: accepting a job teleports them to that business and lets them
   clean it. Cleaning is **per-session** — nothing about cleaned state is saved.
@@ -90,7 +92,9 @@ report, so a player can only ever clean the one business they've accepted. Concr
   the `Plots` folder in Workspace, with a `spawnPart`. `PlotService` (server) assigns each joining player a free plot,
   publishes its name via the `Plot` player attribute, spawns the character on the
   `spawnPart` (on assignment and **every** respawn), and frees it on leave. Plots no
-  longer hold businesses.
+  longer hold businesses, but they **do** host the per-player **purchase progression**
+  (`Buttons` / `Spawnables`) — see *Plot purchase progression*. `PlotService` also exposes
+  `onAssigned`/`onReleased` hooks that `PlotButtonService` uses to build/reset the plot.
 - **Jobs** are how cleaning happens, modelled as a class on each side — one instance per
   active job. The job board UI (`JobUiController`) fires the `AcceptJob` remote with a
   `businessId`:
@@ -138,6 +142,55 @@ report, so a player can only ever clean the one business they've accepted. Concr
 - The shared buildings and their `Cleanables` (`CleanableWalls` + `CleanableDecals`) are
   authored in the Workspace and already replicated, so accepting a job spawns nothing
   server-side. The only per-job "loading" is the client's overlays + stain restore.
+
+### Plot purchase progression (implemented)
+A per-player, per-plot **buy-and-unlock chain authored right on the plot** — the core progression
+on the plot itself, distinct from the job/business unlocks. Owned by **`PlotButtonService`**
+(server), built off `PlotService`'s assign/release hooks. This is a **core gameplay-loop system**:
+Cash earned from jobs is spent here to unlock **Spawnables**, which in turn generate **Gems**.
+
+- **Authoring (Studio, per plot).** Each `Plot(i)` holds two folders:
+  - **`Buttons`** — purchase buttons named `Button1..ButtonN`. Each is a `Model` with attributes
+    **`Cost`** (number, charged in **Cash**), **`UnlockID`** (string — the Spawnables Model it
+    reveals), **`UnlockTwo`** (bool), a child `BasePart` named **`Interact`** (the step-on
+    trigger), and optionally a billboard **`TextLabel`** (its price display).
+  - **`Spawnables`** — one `Model` per `UnlockID` (what a button reveals). Optional **`GemRate`**
+    number attribute = Gems/second it generates for the owner while unlocked.
+- **The chain.** A fresh player sees only **`Button1`**; every other button and every spawnable
+  starts hidden. When the plot **owner's** character steps on a visible button's `Interact` part,
+  **if they can afford its `Cost` in Cash**, the server deducts the Cash, hides ("buys") that
+  button, makes its `UnlockID` spawnable visible, and reveals the **next** button — or the **next
+  two** if `UnlockTwo` is checked. Not enough Cash → **nothing happens** (a 0.5s debounce lets a
+  failed attempt be retried without spamming touches). Only the **owner** can trigger their own
+  plot's buttons (`GetPlayerFromCharacter` == owner).
+- **Persistence + plot reuse.** Purchases persist per player in **`DataTemplate.PlotButtonsBought`**
+  (a `{ [buttonName]: true }` set). Plots are **shared and reused across owners**, so buttons are
+  **never `Instance:Destroy()`'d** — "buying" a button just hides it. On the owner **leaving**, the
+  plot is fully reset (everything hidden, connections dropped); when the **next** player is assigned
+  that plot it is rebuilt from **their** save data. `replayFromSave` unlocks each bought button's
+  spawnable and re-reveals the not-yet-bought frontier buttons (`Button1` is the baseline entry
+  point). It's **layout-agnostic** — button/spawnable **names are identical across every plot**, so
+  one saved set replays onto whichever plot the player is assigned.
+- **Visibility engine.** `setVisible(model, visible)` toggles a whole Model: BaseParts
+  (`Transparency`/`CanCollide`/`CanTouch`/`CanQuery`), `Decal`/`Texture`,
+  particles/beams/trails/lights, **and `BillboardGui`/`SurfaceGui` `.Enabled`** (so a hidden
+  button's billboard is hidden with it). Authored props are **snapshotted once** (`originalProps`,
+  the first time each instance is seen) so a later hide can never overwrite the true values and
+  restore is exact — critical because plots are hidden/shown repeatedly over the server's life.
+- **Price billboard.** Each button's `TextLabel` shows its **authored text plus a `" $<cost>"`
+  price**. The price is drawn with **RichText** so only the amount is coloured — **green** when the
+  owner can afford it, **red** when not. Repainted on build, after each purchase, and off the
+  owner's live **`Cash`** changed signal, so the colour flips the instant their balance crosses a
+  button's cost. Authored label text is captured once (`baseTextByLabel`) so rebuilds never stack
+  the price onto an already-appended value.
+- **Gem generation.** A single **1 Hz** loop sums every unlocked spawnable's `GemRate` per plot and
+  awards that many **Gems** to the owner via `ProgressionService.awardGems`; fractional rates carry
+  over (`gemAccum`) so sub-1/s rates still eventually pay out. Absent/0 rate = inert — the loop is
+  live but generates nothing until rates are authored on the spawnables.
+- **Hooks + races.** `PlotService` exposes `onAssigned`/`onReleased(fn)`, registered by
+  `PlotButtonService.init` **before** `PlotService.init` so the join sweep builds each plot. A
+  per-plot **generation token** (`plotGen`) makes an in-flight build (which yields on `waitForData`)
+  bail if the plot was reassigned while it waited, so a plot is never painted for the wrong owner.
 
 ### Business unlocking (implemented)
 Businesses live in the **`BusinessConfig`** catalog and are **unlocked per player**, resolved
@@ -251,7 +304,10 @@ Single source of truth for cleaning tunables, consumed by client and server:
 the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`/
 `DecalsFolderName`/`InteriorFolderName` (props/windows the cleaning ray ignores),
 `HitboxName`/`SurfaceIdAttribute`, `PlotCount`/`PlotAttribute`/
-`PlotSpawnPartName`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
+`PlotSpawnPartName`, the plot-progression names `PlotButtonsFolderName`/
+`PlotSpawnablesFolderName`/`PlotButtonInteractPartName` and the button/spawnable attribute
+names `PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`/
+`PlotSpawnableGemRateAttribute`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
 `DirtAsset`, `ImageSize`, `BrushWorldRadius`, `MaxBridgeWorldDistance`,
 `CompletionThreshold`, brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
 appears mirrored from where you aim).
@@ -327,7 +383,7 @@ no server state or remotes.
 
 ```
 ReplicatedStorage/SharedModules/
-  DataTemplate.luau     saved-data shape + defaults
+  DataTemplate.luau     saved-data shape + defaults (Cash, Gems, Level, Settings, BusinessList, Inventory, PlotButtonsBought)
   ToolConfig.luau       tool definitions catalog
   BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/DecalWeight)
   CleaningConfig.luau   cleaning tunables (shared by client + server)
@@ -347,16 +403,20 @@ ReplicatedStorage/Remotes/
   RewardPopup           RemoteEvent (server → client: show floating +XP/+Cash)
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + Plot/Business/Job/Cleaning/DecalCleaning/Tool services
+  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Job/Cleaning/DecalCleaning/Tool/Shop/Settings/Admin services
+  Modules/PlotButtonService.luau     per-plot purchase progression: step-on Buttons buy Spawnables with Cash, reveal next 1-2 buttons, persist per player (PlotButtonsBought), rebuild plot on reassign, price billboards + gem generation
   Modules/BusinessService.luau       seeds the catalog into each profile + resolves unlocks (level now, permanent, re-runs on level change)
   Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob; gates accept on Unlocked + RequiredLevel
   Modules/JobServer.luau             one active job (class): counts cleanables, tracks progress, completion + finish-early reward (XP scaled by mastery)
   Modules/CleaningService.luau       wall wash reward + WallCleaned→job, gated by active job (no saving)
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; per-client hide via DecalCleaned
-  Modules/PlotService.luau           plot (home base) assignment + spawn
-  Modules/ProgressionService.luau    awards Cash/XP + reward popups
+  Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService
+  Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups
   Modules/ToolService.luau           grants owned+Unlocked items as Backpack Tools (clones from ReplicatedStorage.Items by ToolId), per spawn + on inventory change
-  Modules/InventoryManager.luau      present but NOT yet wired into Main
+  Modules/ShopService.luau           upgrades shop authority: PurchaseItem / UpgradeItem (re-validated, Cash-charged)
+  Modules/SettingsService.luau       persists client preferences (volumes, HidePlayers) via UpdateSetting
+  Modules/AdminCommands.luau         owner-only dev chat commands: /completejob <id> <amt>, /addcash <amt>
+  Modules/InventoryManager.luau      addItem helper used by ShopService (present; not init'd on its own)
 
 StarterPlayer/StarterPlayerScripts/
   Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI + MissingHighlight + UiPreloader
@@ -380,6 +440,10 @@ Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
 `ReplicatedStorage.Items.Broom` (each with a `ToolId` attribute; `StarterPack` is empty),
 and the shared `Workspace.Businesses` buildings — each with a `TeleportPart` and a
 `Cleanables` folder (`CleanableWalls` + `CleanableDecals`) authored right in the building.
+The **plots** (`Workspace.Plots.Plot1..N`) are Studio-authored too — each with a `spawnPart`
+and, for the purchase progression, a **`Buttons`** folder (`Button1..N` Models with
+`Cost`/`UnlockID`/`UnlockTwo` attributes, an `Interact` part, and a price `TextLabel`) and a
+**`Spawnables`** folder (one Model per `UnlockID`, optional `GemRate` attribute).
 The **HUD `ScreenGui`** is also Studio-authored (not Rojo): a `Buttons` frame holding the
 main HUD buttons (`JobButton` opens the board; `UpgradesButton` is a placeholder, no click
 wired yet), laid out side by side by a `UIGridLayout`; plus `JobFrame` (board),
@@ -405,12 +469,13 @@ so they don't first render blurry.
 
 ## Not yet implemented / planned
 
-- **Progression** — **business unlocking by Level is now implemented** (`BusinessService`,
-  permanent once earned via `RequiredLevel`); still planned are **Cash-priced** business
-  unlocks, **tool** unlock requirements (the next `meetsRequirements` gate), and **plot
-  growth**. Rewards are wired: per-clean Cash/XP, a completion bonus (`BaseReward` +
-  `XpReward`, XP boosted by job mastery), and a prorated finish-early payout.
-  `InventoryManager` exists but isn't initialized or used yet.
+- **Progression** — **business unlocking by Level** is implemented (`BusinessService`,
+  permanent once earned via `RequiredLevel`), and **Cash-priced plot progression** is implemented
+  (`PlotButtonService` — step-on buttons unlock spawnables that generate Gems, persisted per
+  player). Still planned: **Cash-priced business** unlocks, **tool** unlock requirements (the next
+  `meetsRequirements` gate), and spending the **Gems** the spawnables now generate. Rewards are
+  wired: per-clean Cash/XP, a completion bonus (`BaseReward` + `XpReward`, XP boosted by job
+  mastery), and a prorated finish-early payout.
 - **StreamingEnabled** handling — the tag-added signal already builds surfaces on
   stream-in and applies saved state correctly, but the broader streaming model below is
   a target, not a guarantee.
@@ -430,9 +495,10 @@ even where the feature itself isn't implemented yet.
    (button / number key) and cleans the business's surfaces / stains, earning Cash + XP
    per clean (per-session — nothing is saved). The hotbar hides again when the job ends.
 4. Player reaches Levels to **unlock** more businesses (implemented, permanent — via each
-   business's `RequiredLevel`), and spends Cash to unlock tools/upgrades (planned), which
-   makes their jobs available on the board.
-5. Repeat against a steadily expanding catalog of businesses and tools.
+   business's `RequiredLevel`), spends Cash to unlock tools/upgrades (implemented via
+   `ShopService`), and spends Cash on their **plot's purchase buttons** (implemented via
+   `PlotButtonService`) to reveal **Spawnables** that passively generate **Gems**.
+5. Repeat against a steadily expanding catalog of businesses, tools, and plot unlockables.
 
 ## Replication model (target)
 
@@ -455,7 +521,9 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
 ### Saved-data shape (`DataTemplate`)
 `src/ReplicatedStorage/SharedModules/DataTemplate.luau`:
 
-- `Cash: number`
+- `Cash: number` — primary currency (jobs; spent on tool upgrades and plot buttons).
+- `Gems: number` — secondary currency, generated per-second by unlocked plot spawnables
+  (`GemRate`); awarded via `ProgressionService.awardGems`.
 - `Level: { CurrentLevel: number, XP: number }` — XP-to-next-level via a formula (TBD).
 - `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
   `BaseReward`, `XpReward`, `Unlocked`, `Name`, `UniqueID`, `Completions`, and optional
@@ -472,6 +540,10 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   **`Power`** is a tool tier that will gate **which floor/surface types a tool can clean**
   (a tool cleans a surface only if its `Power` ≥ the surface's required power) — defined in
   `ToolConfig` now, not yet enforced in cleaning logic.
+- `PlotButtonsBought: { [string]: boolean }` — set of plot **purchase buttons** the player has
+  bought (e.g. `{ Button1 = true }`). Layout-agnostic (button names are the same on every plot),
+  so `PlotButtonService` replays it onto whichever plot the player is assigned. Empty on a fresh
+  player → only `Button1` visible. See *Plot purchase progression*.
 
 **Why string-id maps, not Instance refs:** saved data is JSON-only (no Instances), and
 an Instance is a new object every session anyway. A stable `SurfaceId` string survives

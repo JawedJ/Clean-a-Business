@@ -71,6 +71,12 @@ local DataTemplate = {
 
 	Gems = 0,
 
+	-- Per-plot purchase progression (see PlotButtonService). A set of the button names the
+	-- player has bought (e.g. { Button1 = true, Button2 = true }). Layout-agnostic: buttons and
+	-- spawnables share the same names across every plot, so this replays onto whichever plot the
+	-- player is assigned. Empty for a fresh player -> only Button1 visible on their plot.
+	PlotButtonsBought = {} :: { [string]: boolean },
+
 	Level = {
 		CurrentLevel = 1,
 		XP = 0
