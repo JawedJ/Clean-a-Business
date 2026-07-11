@@ -150,6 +150,24 @@ local function openExclusive(name: string): boolean
 	return true
 end
 
+-- Open `name` (closing any other open panel), without the toggle-closed behaviour: if it's
+-- already the open one this is a no-op rather than closing it. Used by non-toggle triggers
+-- (e.g. walking into the job board's proximity hitbox). Returns true if the request was
+-- accepted; false if `name` isn't registered, it's mid-animation, or the queue is full.
+function ExclusivePanels.open(name: string): boolean
+	local entry = entries[name]
+	if not entry then
+		return false
+	end
+	if entry.panel:isAnimating() then
+		return false
+	end
+	if openName == name then
+		return false
+	end
+	return openExclusive(name)
+end
+
 -- Toggle `name`: close it if it's the open one, otherwise open it (closing any other first).
 -- Returns true if it acted, false if the click was ignored (mid-animation / pending open), so
 -- callers can gate side effects (e.g. a click sound) on the result.

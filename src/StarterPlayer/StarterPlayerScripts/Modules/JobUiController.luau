@@ -185,6 +185,31 @@ local function toggleBoard(): boolean
 	return ExclusivePanels.toggle(PANEL_NAME)
 end
 
+-- Open the board from a non-button trigger (the warehouse proximity hitbox), routed through
+-- the same coordinator as the JobButton so it still closes the upgrades shop first. No-op
+-- (returns false) while on a job or during the summary hold, matching toggleBoard's gating.
+-- Unlike toggleBoard this never closes an already-open board -- re-entering the hitbox while
+-- it's up shouldn't flap it shut.
+function JobUiController.openBoard(): boolean
+	if hasActiveJob() or summaryHold then
+		return false
+	end
+	return ExclusivePanels.open(PANEL_NAME)
+end
+
+-- Close the board from the same proximity trigger (walking out of the hitbox). Routed through
+-- the coordinator so its open-panel bookkeeping stays in sync.
+function JobUiController.closeBoard()
+	ExclusivePanels.close(PANEL_NAME)
+end
+
+-- Whether the board frame is currently shown -- lets the proximity trigger skip a redundant
+-- close when the board isn't up (e.g. the player closed it via Exit and is still inside).
+function JobUiController.isBoardVisible(): boolean
+	local frame = jobFrame
+	return frame ~= nil and frame.Parent ~= nil and frame.Visible
+end
+
 -- Wire one TaskDesign row and return its refresher, or nil if it isn't a real row
 -- (skips the UIListLayout/constraints, which carry no BusinessId + buttons).
 local function bindTask(row: Instance): (() -> ())?
