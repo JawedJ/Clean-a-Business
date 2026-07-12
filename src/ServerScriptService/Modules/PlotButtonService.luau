@@ -35,6 +35,10 @@ local PlotService = require(script.Parent.PlotService)
 -- they couldn't afford it. The client plays the buy / fail SFX off this (see PlotButtonSoundController).
 local PlotButtonSound = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("PlotButtonSound") :: RemoteEvent
 
+-- Fired to the plot owner each time their workers pay out gems, with (workerModels, perWorkerAmount).
+-- The client floats a "💎N" popup above each worker's GUIPart (see WorkerGemPopupController).
+local WorkerGemPopup = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("WorkerGemPopup") :: RemoteEvent
+
 local PlotButtonService = {}
 
 type ButtonEntry = {
@@ -569,8 +573,10 @@ end
 --     attributes, so buffs come purely from the other unlocked spawnables.
 --   * Standalone GemRate generators (if any) are added on top, outside the worker model.
 -- With no workers active, buffs scale nothing and only standalone GemRate income remains.
-local function computeGemsPerSecond(state: PlotState): number
-	local workerCount = 0
+-- Returns the plot's total gems/sec, the per-worker gems/sec (what each worker contributes, for
+-- the floating popup), and the list of active worker models.
+local function computeGemsPerSecond(state: PlotState): (number, number, { Instance })
+	local workers: { Instance } = {}
 	local flatPerWorker = 0
 	local multiplier = 1
 	local standalone = 0
@@ -579,7 +585,7 @@ local function computeGemsPerSecond(state: PlotState): number
 		local model = state.spawnables[name]
 		if model then
 			if Config.PlotWorkerSpawnables[name] then
-				workerCount += 1
+				table.insert(workers, model)
 			end
 			local flat = model:GetAttribute(Config.PlotSpawnableGemFlatAttribute)
 			if type(flat) == "number" then
@@ -597,7 +603,7 @@ local function computeGemsPerSecond(state: PlotState): number
 	end
 
 	local perWorker = (Config.PlotWorkerBaseGemRate + flatPerWorker) * multiplier
-	return perWorker * workerCount + standalone
+	return perWorker * #workers + standalone, perWorker, workers
 end
 
 local function startGemLoop()
@@ -610,13 +616,17 @@ local function startGemLoop()
 				table.insert(states, state)
 			end
 			for _, state in states do
-				local total = computeGemsPerSecond(state)
+				local total, perWorker, workers = computeGemsPerSecond(state)
 				if total > 0 and stateByPlot[state.plot] == state then
 					local acc = (gemAccum[state.plot] or 0) + total
 					local whole = math.floor(acc)
 					gemAccum[state.plot] = acc - whole
 					if whole > 0 then
 						ProgressionService.awardGems(state.player, whole)
+						-- Float a per-worker "💎N" popup above each worker on the owner's client.
+						if perWorker > 0 and #workers > 0 then
+							WorkerGemPopup:FireClient(state.player, workers, perWorker)
+						end
 					end
 				end
 			end

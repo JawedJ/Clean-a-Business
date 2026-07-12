@@ -14,7 +14,7 @@ local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
 	template = DataTemplate,
-	useMock = true,
+	useMock = false,
 })
 
 

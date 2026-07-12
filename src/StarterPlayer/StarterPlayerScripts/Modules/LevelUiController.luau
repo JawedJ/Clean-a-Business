@@ -18,12 +18,16 @@ local DataService = require(ReplicatedStorage.Packages.DataService).client
 local Leveling = require(ReplicatedStorage.SharedModules.Leveling)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local DataTemplate = require(ReplicatedStorage.SharedModules.DataTemplate)
+local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 
 type Level = DataTemplate.Level
 
 local localPlayer = Players.LocalPlayer
 
 local SCREEN_GUI_NAME = "ScreenGui"
+
+-- One-shot played when CurrentLevel rises (not on plain XP gains).
+local LEVEL_UP_SOUND = "LvlUp"
 
 -- Quick, simple slide of the fill bar toward its new position on each XP update.
 local FILL_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -38,6 +42,10 @@ local xpLabel: TextLabel? = nil
 
 -- The fill tween currently in flight, so a newer update can supersede it.
 local fillTween: Tween? = nil
+
+-- Last CurrentLevel we've seen, so a Level change that raised it plays the level-up
+-- sound. Seeded on first render so the initial bind never counts as a level-up.
+local lastLevel: number? = nil
 
 -- Move the fill bar to `target`. When animating, the newest call always wins: we
 -- cancel any in-flight tween (leaving the bar at its current position) and tween
@@ -72,6 +80,13 @@ local function render(animate: boolean)
 	local level: Level = DataService:get({ "Level" })
 	local needed = Leveling.xpForLevel(level.CurrentLevel)
 	local progress = if needed > 0 then math.clamp(level.XP / needed, 0, 1) else 0
+
+	-- Play the level-up sound only when CurrentLevel actually rose. lastLevel starts
+	-- nil, so the initial bind seeds it silently rather than sounding on join.
+	if lastLevel ~= nil and level.CurrentLevel > lastLevel then
+		SoundManager.playOneShot(LEVEL_UP_SOUND)
+	end
+	lastLevel = level.CurrentLevel
 
 	setFill(UDim2.new(progress, 0, 1, 0), animate)
 

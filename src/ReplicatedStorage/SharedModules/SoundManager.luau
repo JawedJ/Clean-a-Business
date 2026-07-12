@@ -56,12 +56,19 @@ export type OneShotConfig = {
 
 local SoundManager = {}
 
+-- How long findTemplate waits for a not-yet-replicated Sound before giving up. On join the
+-- Audios folder can stream in a beat after the first sound is requested (e.g. a purchase SFX
+-- fired the instant the player acts), so we WaitForChild rather than FindFirstChild -- otherwise
+-- the lookup silently no-ops and the sound is randomly missing right after load.
+local TEMPLATE_WAIT = 10
+
 -- Resolves a Sound template by name under ReplicatedStorage.Audios.SFX, warning (and
--- returning nil) if it's missing so a typo can't crash the caller.
+-- returning nil) if it's missing so a typo can't crash the caller. Waits (up to TEMPLATE_WAIT)
+-- for replication; a present template resolves instantly, so this only ever yields on a cold join.
 local function findTemplate(soundName: string): Sound?
-	local audios = ReplicatedStorage:FindFirstChild(AUDIOS_FOLDER)
-	local sfx = audios and audios:FindFirstChild(SFX_FOLDER)
-	local template = sfx and sfx:FindFirstChild(soundName)
+	local audios = ReplicatedStorage:WaitForChild(AUDIOS_FOLDER, TEMPLATE_WAIT)
+	local sfx = audios and audios:WaitForChild(SFX_FOLDER, TEMPLATE_WAIT)
+	local template = sfx and sfx:WaitForChild(soundName, TEMPLATE_WAIT)
 	if not template or not template:IsA("Sound") then
 		warn(`SoundManager: no Sound named '{soundName}' under ReplicatedStorage.{AUDIOS_FOLDER}.{SFX_FOLDER}`)
 		return nil

@@ -51,10 +51,10 @@ local INTERACT_BUTTON_NAME = "InteractButton"
 local BUY_IMAGE = "rbxassetid://110464713650126"
 local UPGRADE_IMAGE = "rbxassetid://135186205507719"
 local MAX_IMAGE = "rbxassetid://107751883089715"
--- Cost label tints (the shop is priced in GEMS): purple when the player can afford the
+-- Cost label tints (the shop is priced in GEMS): pink when the player can afford the
 -- buy/upgrade, red when they can't. MAXED slots aren't a purchase and keep the authored colour.
 -- See applyCostGradient.
-local AFFORDABLE_COLOR = Color3.fromRGB(170, 85, 255)
+local AFFORDABLE_COLOR = Color3.fromRGB(255, 90, 200)
 local UNAFFORDABLE_COLOR = Color3.fromRGB(255, 76, 76)
 -- Gem emoji prefixed to every cost amount (the shop costs Gems, not Cash) -- e.g. "Cost: 💎1.2k".
 local GEM_ICON = "💎"
@@ -115,8 +115,8 @@ end
 
 -- Flat gradients swapped onto a cost label by affordability. The cost text is coloured by a
 -- UIGradient (a 2-colour ColorSequence), so tinting TextColor3 would do nothing -- we replace the
--- whole gradient instead: purple when the player can afford the slot, red when they can't.
-local PURPLE_GRADIENT = ColorSequence.new(AFFORDABLE_COLOR)
+-- whole gradient instead: pink when the player can afford the slot, red when they can't.
+local AFFORDABLE_GRADIENT = ColorSequence.new(AFFORDABLE_COLOR)
 local RED_GRADIENT = ColorSequence.new(UNAFFORDABLE_COLOR)
 
 -- Authored gradient of each cost label's UIGradient, captured the first time we tint it so we can
@@ -175,14 +175,14 @@ local function renderSlot(slot: Instance)
 	if costLabel and costLabel:IsA("TextLabel") then
 		if not owned then
 			costLabel.Text = "Cost: " .. GEM_ICON .. NumberFormat.abbreviate(item.Cost)
-			applyCostGradient(costLabel, if canAfford(item.Cost) then PURPLE_GRADIENT else RED_GRADIENT)
+			applyCostGradient(costLabel, if canAfford(item.Cost) then AFFORDABLE_GRADIENT else RED_GRADIENT)
 		elseif ItemUpgrades.canUpgrade(item) then
 			local cost = ItemUpgrades.getUpgradeCost(item)
 			costLabel.Text = "Cost: " .. GEM_ICON .. NumberFormat.abbreviate(cost)
-			applyCostGradient(costLabel, if canAfford(cost) then PURPLE_GRADIENT else RED_GRADIENT)
+			applyCostGradient(costLabel, if canAfford(cost) then AFFORDABLE_GRADIENT else RED_GRADIENT)
 		else
 			costLabel.Text = "MAXED"
-			-- Maxed slots aren't a purchase; restore the authored colour (never purple/red).
+			-- Maxed slots aren't a purchase; restore the authored colour (never pink/red).
 			applyCostGradient(costLabel, nil)
 		end
 	end
