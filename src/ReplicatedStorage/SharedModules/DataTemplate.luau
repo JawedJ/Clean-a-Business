@@ -67,9 +67,9 @@ export type Business = {
 
 local DataTemplate = {
 
-	Cash = 100,
+	Cash = 1000,
 
-	Gems = 200,
+	Gems = 100,
 
 	-- Per-plot purchase progression (see PlotButtonService). A set of the button names the
 	-- player has bought (e.g. { Button1 = true, Button2 = true }). Layout-agnostic: buttons and

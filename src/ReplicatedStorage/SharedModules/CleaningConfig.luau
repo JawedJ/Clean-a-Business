@@ -85,11 +85,11 @@ local CleaningConfig = {
 	PlotWorkerBaseGemRate = 1,
 
 	-- Buff attributes on a (non-worker) Spawnables Model, applied to EVERY active worker:
-	--   GemFlatPerWorker (number) -- adds this many Gems/sec to each worker (before the multiplier)
-	--   GemMultiplier    (number) -- multiplies each worker's Gems/sec (e.g. 1.2 = +20%); buffs
-	--                                stack multiplicatively across spawnables
-	PlotSpawnableGemFlatAttribute = "GemFlatPerWorker",
-	PlotSpawnableGemMultiplierAttribute = "GemMultiplier",
+	--   BaseAdd        (number) -- adds this many Gems/sec to each worker (before the multiplier)
+	--   BaseMultiplier (number) -- multiplies each worker's Gems/sec (e.g. 1.2 = +20%); buffs
+	--                              stack multiplicatively across spawnables
+	PlotSpawnableGemFlatAttribute = "BaseAdd",
+	PlotSpawnableGemMultiplierAttribute = "BaseMultiplier",
 
 	-- Optional number attribute for a STANDALONE gem generator (a spawnable that just emits Gems
 	-- on its own, independent of the worker/buff model above). Added on top of worker income.

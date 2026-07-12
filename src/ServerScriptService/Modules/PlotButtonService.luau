@@ -568,8 +568,8 @@ end
 -- absent/0 = nothing). Fractional rates accumulate so they eventually pay out whole gems.
 -- Gems/second a plot currently produces under the worker + buff model:
 --   * WORKERS (Config.PlotWorkerSpawnables) each contribute PlotWorkerBaseGemRate to the base.
---   * Every active spawnable's GemFlatPerWorker adds to each worker's base (before the multiplier);
---     every GemMultiplier scales each worker's output (stacking multiplicatively). Workers have no
+--   * Every active spawnable's BaseAdd adds to each worker's base (before the multiplier);
+--     every BaseMultiplier scales each worker's output (stacking multiplicatively). Workers have no
 --     attributes, so buffs come purely from the other unlocked spawnables.
 --   * Standalone GemRate generators (if any) are added on top, outside the worker model.
 -- With no workers active, buffs scale nothing and only standalone GemRate income remains.
