@@ -138,7 +138,13 @@ local function queueAction(name: string, close: boolean): boolean
 	task.spawn(function()
 		while #pendingQueue > 0 do
 			local current = if openName then entries[openName] else nil
-			if current and current.panel:isAnimating() then
+			-- The next action's OWN panel must be settled too: doOpen/doClose call
+			-- panel:open()/close(), which silently no-op while that panel is mid-animation. If we
+			-- only waited on the currently-open panel, a re-open of a panel still playing its close
+			-- (walk out then back in) would fire a no-op open, leaving openName set but the frame
+			-- hidden -- a stuck panel that never reopens. So wait on both.
+			local nextEntry = entries[pendingQueue[1].name]
+			if (current and current.panel:isAnimating()) or (nextEntry and nextEntry.panel:isAnimating()) then
 				-- Don't interrupt the in-flight animation; wait it out, then act.
 				task.wait()
 			else

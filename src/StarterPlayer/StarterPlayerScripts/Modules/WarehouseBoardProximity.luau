@@ -27,6 +27,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local JobUiController = require(script.Parent.JobUiController)
 local UpgradesUiController = require(script.Parent.UpgradesUiController)
 
@@ -43,6 +44,8 @@ type Board = {
 	open: () -> boolean,
 	close: () -> (),
 	isVisible: () -> boolean,
+	-- Optional SoundManager sound to one-shot when the player walks in and this board opens.
+	openSound: string?,
 	-- Cached hitbox for the player's current plot, held until it (or the plot) goes away.
 	hitbox: BasePart?,
 	-- Whether the character was inside this hitbox last frame, so we act only on the edges.
@@ -56,6 +59,7 @@ local boards: { Board } = {
 		open = JobUiController.openBoard,
 		close = JobUiController.closeBoard,
 		isVisible = JobUiController.isBoardVisible,
+		openSound = "UIClick",
 		hitbox = nil,
 		inside = false,
 	},
@@ -120,7 +124,10 @@ local function stepBoard(board: Board, rootPosition: Vector3?)
 	local nowInside = rootPosition ~= nil and pointInPart(rootPosition, box)
 	if nowInside and not board.inside then
 		board.inside = true
-		board.open()
+		-- Only chime if the panel actually opened (open() is a no-op while on a job, etc.).
+		if board.open() and board.openSound then
+			SoundManager.playOneShot(board.openSound)
+		end
 	elseif not nowInside and board.inside then
 		board.inside = false
 		-- Only bother closing if it's actually up (it may have been Exit-closed while inside).

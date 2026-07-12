@@ -27,7 +27,7 @@ local AdminCommands = {}
 -- Roblox UserId permitted to run commands. Everyone else's chat is ignored.
 local OWNER_ID = 168921043
 -- Cap a single command so a typo can't balloon the tally.
-local MAX_AMOUNT = 100000
+local MAX_AMOUNT = 10000000
 
 -- /completejob <businessId> <amount>: add `amount` completions to the business's tally.
 local function completeJob(player: Player, businessId: string?, amountText: string?)

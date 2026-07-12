@@ -27,6 +27,7 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
 local PlotService = require(script.Parent.PlotService)
@@ -62,6 +63,7 @@ type PlotState = {
 	buttonsByIndex: { [number]: ButtonEntry },
 	spawnables: { [string]: Instance }, -- by Model name (== a button's UnlockID)
 	available: { [string]: boolean }, -- button names currently visible + touchable
+	bought: { [string]: boolean }, -- button names already purchased (never reveal these again)
 	active: { [string]: boolean }, -- spawnable names currently unlocked/visible
 	debounce: { [string]: boolean }, -- per-button touch debounce
 	conns: { RBXScriptConnection }, -- touch listeners + the owner's Cash-changed listener
@@ -228,6 +230,7 @@ local function buildRegistry(plot: Instance): PlotState?
 		buttonsByIndex = buttonsByIndex,
 		spawnables = spawnables,
 		available = {},
+		bought = {},
 		active = {},
 		debounce = {},
 		conns = {},
@@ -378,7 +381,10 @@ end
 -- Make a button (by index) visible + touchable, unless it doesn't exist or is already available.
 local function revealButton(state: PlotState, index: number)
 	local entry = state.buttonsByIndex[index]
-	if not entry or state.available[entry.name] then
+	-- Skip if there's no such button, it's already showing, or it's already been bought -- a bought
+	-- button is cleared from `available`, so without the bought guard a later neighbour's reveal
+	-- (e.g. Button2 revealing index+1=Button3 after Button3 was already purchased) resurrects it.
+	if not entry or state.available[entry.name] or state.bought[entry.name] then
 		return
 	end
 	state.available[entry.name] = true
@@ -395,7 +401,7 @@ local function updateButtonPrice(entry: ButtonEntry, cash: number)
 	end
 	label.RichText = true
 	local color = if cash >= entry.cost then AFFORD_COLOR else DENY_COLOR
-	local price = string.format('<font color="%s">$%d</font>', color, entry.cost)
+	local price = string.format('<font color="%s">$%s</font>', color, NumberFormat.abbreviate(entry.cost))
 	local base = entry.baseText
 	label.Text = if base == "" then price else base .. " " .. price
 end
@@ -417,6 +423,7 @@ end
 -- caller so a rebuild can replay it.
 local function applyPurchase(state: PlotState, entry: ButtonEntry)
 	state.available[entry.name] = nil
+	state.bought[entry.name] = true
 	setVisible(entry.model, false)
 
 	unlockSpawnable(state, entry.unlockId, true)
@@ -490,6 +497,7 @@ local function replayFromSave(state: PlotState, bought: { [string]: boolean })
 		if isBought then
 			local entry = state.buttons[name]
 			if entry then
+				state.bought[name] = true
 				unlockSpawnable(state, entry.unlockId, false)
 				revealed[entry.index + 1] = true
 				if entry.unlockTwo then
