@@ -160,9 +160,12 @@ Cash earned from jobs is spent here to unlock **Spawnables**, which in turn gene
   starts hidden. When the plot **owner's** character steps on a visible button's `Interact` part,
   **if they can afford its `Cost` in Cash**, the server deducts the Cash, hides ("buys") that
   button, makes its `UnlockID` spawnable visible, and reveals the **next** button — or the **next
-  two** if `UnlockTwo` is checked. Not enough Cash → **nothing happens** (a 0.5s debounce lets a
-  failed attempt be retried without spamming touches). Only the **owner** can trigger their own
-  plot's buttons (`GetPlayerFromCharacter` == owner).
+  two** if `UnlockTwo` is checked. A reveal **skips any button already bought** (tracked in the
+  plot's runtime `bought` set, seeded on rebuild): with `UnlockTwo` layouts a lower button's
+  `index+1` reveal can point at a neighbour bought out of order, and without this guard it would
+  reappear. Not enough Cash → **nothing happens** (a 0.5s debounce lets a failed attempt be retried
+  without spamming touches). Only the **owner** can trigger their own plot's buttons
+  (`GetPlayerFromCharacter` == owner).
 - **Persistence + plot reuse.** Purchases persist per player in **`DataTemplate.PlotButtonsBought`**
   (a `{ [buttonName]: true }` set). Plots are **shared and reused across owners**, so buttons are
   **never `Instance:Destroy()`'d** — "buying" a button just hides it. On the owner **leaving**, the
@@ -178,8 +181,9 @@ Cash earned from jobs is spent here to unlock **Spawnables**, which in turn gene
   the first time each instance is seen) so a later hide can never overwrite the true values and
   restore is exact — critical because plots are hidden/shown repeatedly over the server's life.
 - **Price billboard.** Each button's `TextLabel` shows its **authored text plus a `" $<cost>"`
-  price**. The price is drawn with **RichText** so only the amount is coloured — **green** when the
-  owner can afford it, **red** when not. Repainted on build, after each purchase, and off the
+  price**, the cost run through **`NumberFormat.abbreviate`** (e.g. `$2.5k`, `$1.5m`). The price is
+  drawn with **RichText** so only the amount is coloured — **green** when the owner can afford it,
+  **red** when not (the affordability test uses the raw `cost`, so only the display is abbreviated). Repainted on build, after each purchase, and off the
   owner's live **`Cash`** changed signal, so the colour flips the instant their balance crosses a
   button's cost. Authored label text is captured once (`baseTextByLabel`) so rebuilds never stack
   the price onto an already-appended value.
@@ -189,8 +193,8 @@ Cash earned from jobs is spent here to unlock **Spawnables**, which in turn gene
   - **Workers** are the base generators: `CleaningConfig.PlotWorkerSpawnables` (`Car1`, `Car2`)
     — identified by **name** (case-sensitive; must match the Spawnable Model names exactly),
     carrying **no attributes** — each contribute `PlotWorkerBaseGemRate` (**1**/s) to the base.
-  - **Buffs** are every other unlocked spawnable, applied to **each** worker: `GemFlatPerWorker`
-    adds flat Gems/s to a worker's base, `GemMultiplier` scales it (stacking multiplicatively).
+  - **Buffs** are every other unlocked spawnable, applied to **each** worker: `BaseAdd`
+    adds flat Gems/s to a worker's base, `BaseMultiplier` scales it (stacking multiplicatively).
   - Per plot: `perWorker = (PlotWorkerBaseGemRate + Σ flat) × Π multiplier`, and
     `gems/s = perWorker × activeWorkerCount` (+ any standalone `GemRate` generators, which live
     outside the worker model). With no workers unlocked, buffs scale nothing.
