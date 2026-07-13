@@ -69,6 +69,7 @@ local boards: { Board } = {
 		open = UpgradesUiController.openShop,
 		close = UpgradesUiController.closeShop,
 		isVisible = UpgradesUiController.isShopVisible,
+		openSound = "UIClick",
 		hitbox = nil,
 		inside = false,
 	},

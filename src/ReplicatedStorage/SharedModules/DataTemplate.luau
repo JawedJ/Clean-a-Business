@@ -104,7 +104,7 @@ local DataTemplate = {
 		},
 
 		["starbucks"] = {
-			BaseReward = 5000,
+			BaseReward = 1000,
 			Unlocked = false,
 			Name = "Starbucks",
 			UniqueID = "starbucks",
@@ -119,8 +119,8 @@ local DataTemplate = {
 		["startingBroom"] = {
 		Name = "Brush",
 		Equipped = false,
-		Unlocked = true,
-		Cost = 0,
+		Unlocked = false,
+		Cost = 500,
 		UniqueID = "startingBroom",
 		Level = 0,
 		UseTime = 2.5,
