@@ -251,7 +251,13 @@ local function bindTask(row: Instance): (() -> ())?
 		local multiplier = Mastery.xpMultiplier(stars)
 
 		if starAmount then
-			starAmount.Text = string.rep("⭐", stars)
+			-- No stars yet: show "0/MAX" so the row still communicates the mastery track
+			-- exists and how many stars it holds, rather than rendering blank.
+			if stars <= 0 then
+				starAmount.Text = string.format("0/%d", Mastery.MAX_STARS)
+			else
+				starAmount.Text = string.rep("⭐", stars)
+			end
 		end
 
 		-- Rewards line: cash boosted by the Greed skill, and XP boosted by both the mastery star

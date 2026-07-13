@@ -58,11 +58,20 @@ local function updateStroke(stroke: UIStroke, factor: number)
 	stroke.Thickness = math.max(baseThickness(stroke) * factor, MIN_THICKNESS)
 end
 
+-- Trees we scan for strokes: the player's screen UI, plus the workspace so
+-- BillboardGui/SurfaceGui strokes on in-world signs and labels scale too (their
+-- Thickness is absolute pixels just like screen UI, so it needs the same treatment).
+local function roots(): { Instance }
+	return { localPlayer.PlayerGui, workspace }
+end
+
 local function updateAll()
 	local factor = scaleFactor()
-	for _, inst in localPlayer.PlayerGui:GetDescendants() do
-		if inst:IsA("UIStroke") then
-			updateStroke(inst, factor)
+	for _, root in roots() do
+		for _, inst in root:GetDescendants() do
+			if inst:IsA("UIStroke") then
+				updateStroke(inst, factor)
+			end
 		end
 	end
 end
@@ -80,12 +89,17 @@ function UiStrokeScaler.init()
 	end)
 
 	-- Catch strokes that appear after startup: HUD cloned on respawn, job frames,
-	-- popups, etc. DescendantAdded on PlayerGui covers every ScreenGui at once.
-	playerGui.DescendantAdded:Connect(function(inst)
-		if inst:IsA("UIStroke") then
-			updateStroke(inst, scaleFactor())
-		end
-	end)
+	-- popups, in-world billboards, etc. DescendantAdded on PlayerGui covers every
+	-- ScreenGui at once; on workspace it covers every in-world Billboard/SurfaceGui.
+	local function watch(root: Instance)
+		root.DescendantAdded:Connect(function(inst)
+			if inst:IsA("UIStroke") then
+				updateStroke(inst, scaleFactor())
+			end
+		end)
+	end
+	watch(playerGui)
+	watch(workspace)
 
 	updateAll()
 end
