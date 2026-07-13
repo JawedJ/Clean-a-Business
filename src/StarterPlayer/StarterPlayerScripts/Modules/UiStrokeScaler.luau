@@ -21,8 +21,12 @@ local Players = game:GetService("Players")
 -- render as authored on your screen and scale down on smaller devices.
 local REFERENCE_HEIGHT = 1080
 
--- Floor so strokes never scale away to nothing on very small screens.
-local MIN_THICKNESS = 0.5
+-- Floor so a stroke can't scale to a literal zero, but kept tiny on purpose: some UI is authored
+-- with near-invisible strokes (~0.05-0.07px, e.g. SkillsDisplay), and a larger floor would inflate
+-- those up to itself -- rendering a thick outline in-game that isn't there in the authored design.
+-- Genuine strokes (2px+) never approach this even on the smallest phones, so it only ever guards
+-- against a base of zero.
+local MIN_THICKNESS = 0.03
 
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera

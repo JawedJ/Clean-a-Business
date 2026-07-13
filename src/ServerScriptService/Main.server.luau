@@ -9,11 +9,13 @@ local CleaningService = require(game.ServerScriptService.Modules.CleaningService
 local DecalCleaningService = require(game.ServerScriptService.Modules.DecalCleaningService)
 local ToolService = require(game.ServerScriptService.Modules.ToolService)
 local ShopService = require(game.ServerScriptService.Modules.ShopService)
+local SkillsService = require(game.ServerScriptService.Modules.SkillsService)
 local SettingsService = require(game.ServerScriptService.Modules.SettingsService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
 	template = DataTemplate,
+	useMock = true
 })
 
 
@@ -31,6 +33,9 @@ CleaningService.init()
 DecalCleaningService.init()
 ToolService.init()
 ShopService.init()
+-- Gem-purchased passive skills (SkillsDisplay UI): purchase authority + gain/walk-speed
+-- multipliers other systems read. Init before SettingsService; order among these is not critical.
+SkillsService.init()
 SettingsService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()

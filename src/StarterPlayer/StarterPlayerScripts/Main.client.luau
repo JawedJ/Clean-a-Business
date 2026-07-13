@@ -18,6 +18,8 @@ local GemUiController = require(Modules:WaitForChild("GemUiController"))
 local JobUiController = require(Modules:WaitForChild("JobUiController"))
 local WarehouseBoardProximity = require(Modules:WaitForChild("WarehouseBoardProximity"))
 local UpgradesUiController = require(Modules:WaitForChild("UpgradesUiController"))
+local SkillsUiController = require(Modules:WaitForChild("SkillsUiController"))
+local PurchaseSoundController = require(Modules:WaitForChild("PurchaseSoundController"))
 local PlotButtonSoundController = require(Modules:WaitForChild("PlotButtonSoundController"))
 local WorkerGemPopupController = require(Modules:WaitForChild("WorkerGemPopupController"))
 local JobCompletionController = require(Modules:WaitForChild("JobCompletionController"))
@@ -81,6 +83,8 @@ safeInit("JobUiController", JobUiController.init)
 -- board hitboxes.
 safeInit("WarehouseBoardProximity", WarehouseBoardProximity.init)
 safeInit("UpgradesUiController", UpgradesUiController.init)
+safeInit("SkillsUiController", SkillsUiController.init)
+safeInit("PurchaseSoundController", PurchaseSoundController.init)
 -- PlotButtonSoundController (purchase SFX) and WorkerGemPopupController (worker popups) are
 -- connected first, up top, so their remote events aren't dropped during startup.
 safeInit("JobCompletionController", JobCompletionController.init)

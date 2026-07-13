@@ -18,6 +18,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(game.ReplicatedStorage.SharedModules.CleaningConfig)
 local ToolConfig = require(game.ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(game.ReplicatedStorage.Packages.DataService).client
+local SkillsConfig = require(game.ReplicatedStorage.SharedModules.SkillsConfig)
 local SoundManager = require(game.ReplicatedStorage.SharedModules.SoundManager)
 local CleanableSurface = require(script.Parent.CleanableSurface)
 
@@ -40,9 +41,12 @@ local function getRange(): number
 	return DataService:get({ "Inventory", TOOL_ID, "Range" }) or ToolConfig[TOOL_ID].Range
 end
 
--- Live brush radius (studs) for this player, same fresh-read + fallback as range.
+-- Live brush radius (studs) for this player, same fresh-read + fallback as range, then scaled by
+-- their RadiusMaster skill (+5%/level) so the boost applies on top of any tool upgrade.
 local function getRadius(): number
-	return DataService:get({ "Inventory", TOOL_ID, "Radius" }) or ToolConfig[TOOL_ID].Radius
+	local base = DataService:get({ "Inventory", TOOL_ID, "Radius" }) or ToolConfig[TOOL_ID].Radius
+	local skillLevel = DataService:get({ "Skills", "RadiusMaster" }) or 0
+	return base * SkillsConfig.multiplier("RadiusMaster", skillLevel)
 end
 
 -- Only this slice of PressureAudio is looped while firing (seconds).

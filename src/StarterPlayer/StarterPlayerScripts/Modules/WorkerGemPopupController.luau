@@ -11,7 +11,10 @@ local Debris = game:GetService("Debris")
 local ContentProvider = game:GetService("ContentProvider")
 
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
+local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
 local SoundGroups = require(ReplicatedStorage.SharedModules.SoundGroups)
+
+local DataService = require(ReplicatedStorage.Packages.DataService).client
 
 local WorkerGemPopup = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("WorkerGemPopup") :: RemoteEvent
 
@@ -146,6 +149,11 @@ function WorkerGemPopupController.init()
 		if type(workers) ~= "table" or type(amount) ~= "number" then
 			return
 		end
+		-- The server sends the raw per-worker gems/sec; the actual payout is boosted by the player's
+		-- Hoarding skill (applied in ProgressionService.awardGems), so boost the displayed rate to
+		-- match what they're really earning.
+		local hoardingLevel = DataService:get({ "Skills", "Hoarding" })
+		amount = amount * SkillsConfig.multiplier("Hoarding", if type(hoardingLevel) == "number" then hoardingLevel else 0)
 		for _, worker in workers do
 			if typeof(worker) == "Instance" then
 				-- Own thread per worker: popup may WaitForChild on a not-yet-replicated car, and one

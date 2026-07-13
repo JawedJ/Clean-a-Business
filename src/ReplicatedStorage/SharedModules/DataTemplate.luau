@@ -82,6 +82,17 @@ local DataTemplate = {
 		XP = 0
 	} :: Level,
 
+	-- Passive gem-purchased skill levels, keyed by SkillName (see SkillsConfig). Each starts at
+	-- level 0 and is bought up to SkillsConfig.MAX_LEVEL through the SkillsDisplay UI. Reconciled
+	-- onto existing profiles like the other tables.
+	Skills = {
+		RadiusMaster = 0,
+		Speedy = 0,
+		Inteligence = 0,
+		Greed = 0,
+		Hoarding = 0,
+	} :: { [string]: number },
+
 	-- Sliders start centered (0.5) on a first join; HidePlayers defaults off. Reconciled onto
 	-- existing profiles.
 	Settings = {

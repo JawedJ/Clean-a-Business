@@ -30,6 +30,7 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
+local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
@@ -100,6 +101,14 @@ local function completionsFor(businessId: string): number
 	local record = if type(list) == "table" then list[businessId] else nil
 	local count = if type(record) == "table" then record.Completions else nil
 	return if type(count) == "number" then count else 0
+end
+
+-- The player's current multiplier for a gem-purchased skill (1.0 with none bought), read from
+-- their replicated Skills data. Lets the board predict the boosted reward a completion will pay,
+-- matching what ProgressionService credits server-side.
+local function skillMultiplier(skillName: string): number
+	local level = DataService:get({ "Skills", skillName })
+	return SkillsConfig.multiplier(skillName, if type(level) == "number" then level else 0)
 end
 
 -- The local player's current level (defaults to 1 before Level data is available).
@@ -245,11 +254,13 @@ local function bindTask(row: Instance): (() -> ())?
 			starAmount.Text = string.rep("⭐", stars)
 		end
 
-		-- Rewards line: base cash (unboosted) plus the mastery-boosted XP, matching what a
-		-- completion at this star level will actually pay (see JobServer.complete).
+		-- Rewards line: cash boosted by the Greed skill, and XP boosted by both the mastery star
+		-- level and the Inteligence skill -- matching what a completion at this star level will
+		-- actually pay (see JobServer.complete + ProgressionService's skill boosts).
 		if rewards and def then
-			local xp = math.floor(def.XpReward * multiplier)
-			rewards.Text = string.format("$%s    +%s EXP", NumberFormat.commas(def.BaseReward), NumberFormat.commas(xp))
+			local cash = math.floor(def.BaseReward * skillMultiplier("Greed"))
+			local xp = math.floor(def.XpReward * multiplier * skillMultiplier("Inteligence"))
+			rewards.Text = string.format("$%s    +%s EXP", NumberFormat.commas(cash), NumberFormat.commas(xp))
 		end
 
 		-- Requirement line: once every star is earned there's nothing left to unlock, so hide it;
@@ -376,6 +387,9 @@ function JobUiController.init()
 	DataService:getChangedSignal({ "BusinessList" }):Connect(refreshTasks)
 	-- Leveling up can clear a business's level gate, so re-run the rows when Level changes.
 	DataService:getChangedSignal({ "Level" }):Connect(refreshTasks)
+	-- Buying the Greed/Inteligence skills changes the boosted reward the rows predict, so repaint
+	-- them when Skills change too.
+	DataService:getChangedSignal({ "Skills" }):Connect(refreshTasks)
 
 	-- TOGGLE_KEY opens/closes the board just like the JobButton. Ignore it when the
 	-- keystroke was already consumed by the game (e.g. typing in a TextBox).

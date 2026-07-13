@@ -18,6 +18,7 @@ local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
+local SkillsService = require(script.Parent.SkillsService)
 
 -- Fired to the owning player when the job ends (full completion OR finish-early) so their
 -- client can show the JobSummary screen. See JobSummaryController.
@@ -102,12 +103,13 @@ function JobServer.new(
 	return self
 end
 
--- Pin the owner's walk speed to Config.JobWalkSpeed for the life of the job: apply it to the
--- current character, reassert it whenever anything changes it, and reapply to any character the
--- player respawns into while still on the job. All connections are torn down in destroy.
+-- Pin the owner's walk speed for the life of the job: apply it to the current character, reassert
+-- it whenever anything changes it, and reapply to any character the player respawns into while
+-- still on the job. The pinned speed is Config.JobWalkSpeed scaled by the player's Speedy skill --
+-- recomputed on each apply so buying Speedy mid-job takes effect at once -- matching their free-roam
+-- speed, so ending the job leaves them at the right speed with nothing to restore. All connections
+-- are torn down in destroy.
 function JobServer._pinWalkSpeed(self: JobServer)
-	local target = Config.JobWalkSpeed
-
 	local function bind(character: Model)
 		task.spawn(function()
 			local humanoid = character:WaitForChild("Humanoid", 10)
@@ -116,6 +118,7 @@ function JobServer._pinWalkSpeed(self: JobServer)
 				return
 			end
 			local function apply()
+				local target = Config.JobWalkSpeed * SkillsService.getMultiplier(self.player, "Speedy")
 				-- Guard the reassign so setting it back to target doesn't re-fire us in a loop
 				-- (a same-value write wouldn't fire Changed anyway, but this is explicit).
 				if humanoid.WalkSpeed ~= target then
@@ -234,10 +237,10 @@ function JobServer.complete(self: JobServer)
 	local def = BusinessConfig[self.businessId]
 	local cash, xp = 0, 0
 	if def then
-		cash = math.floor(def.BaseReward * self.rewardMultiplier)
-		xp = math.floor(def.XpReward * self.rewardMultiplier * masteryMultiplier)
-		ProgressionService.awardCash(self.player, cash)
-		ProgressionService.awardXp(self.player, xp)
+		-- Award the base completion reward; the awards apply the player's Greed/Inteligence skill
+		-- boosts and return what they actually credited, so the summary reports the boosted totals.
+		cash = ProgressionService.awardCash(self.player, math.floor(def.BaseReward * self.rewardMultiplier))
+		xp = ProgressionService.awardXp(self.player, math.floor(def.XpReward * self.rewardMultiplier * masteryMultiplier))
 	end
 
 	self:_fireSummary(cash, xp, 1)
@@ -266,10 +269,10 @@ function JobServer.finishEarly(self: JobServer)
 	local def = BusinessConfig[self.businessId]
 	local cash, xp = 0, 0
 	if def then
-		cash = math.floor(def.BaseReward * fraction * self.rewardMultiplier)
-		xp = math.floor(def.XpReward * fraction * self.rewardMultiplier * masteryMultiplier)
-		ProgressionService.awardCash(self.player, cash)
-		ProgressionService.awardXp(self.player, xp)
+		-- As in complete(): award the prorated base reward and report the boosted amounts the
+		-- awards actually credited (Greed/Inteligence applied) on the summary.
+		cash = ProgressionService.awardCash(self.player, math.floor(def.BaseReward * fraction * self.rewardMultiplier))
+		xp = ProgressionService.awardXp(self.player, math.floor(def.XpReward * fraction * self.rewardMultiplier * masteryMultiplier))
 	end
 
 	self:_fireSummary(cash, xp, fraction)
