@@ -47,9 +47,13 @@ local GEM_ICON = "💎"
 local CIRCLE_COUNT = SkillsConfig.MAX_LEVEL
 -- Colour a Circle pip takes for each level the player has bought.
 local FILLED_COLOR = Color3.fromRGB(255, 221, 0)
--- Purple gradient painted on every price label (matches the gem styling elsewhere in the UI). The
--- GemAmt labels ship without a UIGradient, so we add one on first render (see ensureGradient).
-local PURPLE_GRADIENT = ColorSequence.new(Color3.fromRGB(198, 130, 255), Color3.fromRGB(138, 43, 226))
+-- Price-label tints by affordability, matching the upgrades shop: pink when the player can afford
+-- the next level, red when they can't. The gem icon + number share the tint (a UIGradient tints
+-- the whole label -- including the emoji, which a RichText TextColor does not). See applyPriceTint.
+local AFFORDABLE_COLOR = Color3.fromRGB(255, 90, 200)
+local UNAFFORDABLE_COLOR = Color3.fromRGB(255, 76, 76)
+local AFFORDABLE_GRADIENT = ColorSequence.new(AFFORDABLE_COLOR)
+local RED_GRADIENT = ColorSequence.new(UNAFFORDABLE_COLOR)
 -- Feedback SFX played on the buy click, predicted client-side from the player's Gems: a buy we
 -- expect to succeed plays PURCHASE_SOUND, one they can't afford plays PURCHASE_FAILED_SOUND.
 local PURCHASE_SOUND = "Purchase"
@@ -113,16 +117,22 @@ local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
 end
 
--- Ensure `label` carries the shared purple price gradient, adding one if it has none (the GemAmt
--- labels are authored without a UIGradient). Returns the gradient so the caller can set its colour.
-local function ensureGradient(label: TextLabel): UIGradient
+-- Tint a price label pink/red by affordability. The GemAmt labels ship without a UIGradient, so
+-- add one on first sight (a flat gradient tints emoji + number alike, unlike TextColor3). Passing
+-- nil leaves the label untinted (the MAX case isn't a purchase).
+local function applyPriceTint(label: TextLabel, forced: ColorSequence?)
 	local gradient = label:FindFirstChildOfClass("UIGradient")
 	if not gradient then
+		if forced == nil then
+			return
+		end
 		gradient = Instance.new("UIGradient")
-		gradient.Rotation = 90
 		gradient.Parent = label
 	end
-	return gradient
+	gradient.Enabled = forced ~= nil
+	if forced then
+		gradient.Color = forced
+	end
 end
 
 -- Paint one skill row (Skill ImageLabel) from the player's current level: price/label, the filled
@@ -134,14 +144,17 @@ local function renderSkill(row: Instance)
 	end
 	local level = getLevel(skillName)
 
-	-- Price of the next level (purple), or "MAXED" once at the cap.
+	-- Price of the next level, tinted pink when affordable / red when not (like the upgrades shop),
+	-- or "MAX" once at the cap.
 	local gemAmt = row:FindFirstChild("GemAmt")
 	if gemAmt and gemAmt:IsA("TextLabel") then
-		ensureGradient(gemAmt).Color = PURPLE_GRADIENT
 		if SkillsConfig.canUpgrade(level) then
-			gemAmt.Text = GEM_ICON .. NumberFormat.abbreviate(SkillsConfig.getCost(level))
+			local cost = SkillsConfig.getCost(level)
+			gemAmt.Text = GEM_ICON .. NumberFormat.abbreviate(cost)
+			applyPriceTint(gemAmt, if canAfford(cost) then AFFORDABLE_GRADIENT else RED_GRADIENT)
 		else
 			gemAmt.Text = "MAX"
+			applyPriceTint(gemAmt, nil)
 		end
 	end
 

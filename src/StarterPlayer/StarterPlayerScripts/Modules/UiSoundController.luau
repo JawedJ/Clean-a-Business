@@ -3,8 +3,8 @@
 -- Plays the shared UI sound effects for the local player:
 --   * UIClick   on every GuiButton press, anywhere in PlayerGui -- except the shop's
 --     InteractButton, which plays its own purchase/fail SFX (so it isn't doubled up).
---   * UIHOVER_2 when the pointer enters any button in the HUD's cluster frames, or any panel
---     ExitButton (the job board / upgrades close buttons).
+--   * UIHOVER_2 when the pointer enters any button in the HUD's cluster frames, or a standalone
+--     panel button (any ExitButton, the skills panel's UnlockAllButton).
 -- Buttons are discovered by scanning PlayerGui once and then watching DescendantAdded,
 -- so UI cloned in later (e.g. the ScreenGui re-added on each respawn, or dynamically
 -- built rows) is wired automatically -- no per-button hookup elsewhere.
@@ -23,9 +23,10 @@ local HOVER_START = 0.140
 -- Buttons under a frame with one of these names (the HUD's main button clusters) play the
 -- hover sound; every button still plays the click.
 local HOVER_FRAME_NAMES = { Button1 = true, Buttons2 = true, Buttons3 = true }
--- Panel close buttons (job board, upgrades shop) also play the hover sound, even though they
--- sit outside the button cluster. Matched by name so any panel's ExitButton is covered.
-local EXIT_BUTTON_NAME = "ExitButton"
+-- Standalone panel buttons that also play the hover sound even though they sit outside the HUD
+-- button clusters. Matched by name: any panel's ExitButton (job board, upgrades, skills close) and
+-- the skills panel's "unlock all" button.
+local HOVER_BUTTON_NAMES = { ExitButton = true, UnlockAllButton = true }
 -- The shop's InteractButton is skipped for the generic click sound: it already plays its own
 -- purchase/fail SFX (UpgradesUiController), so a click here would just overlap them.
 local INTERACT_BUTTON_NAME = "InteractButton"
@@ -70,7 +71,7 @@ local function wireButton(button: GuiButton)
 			SoundManager.playOneShot(CLICK_SOUND)
 		end)
 	end
-	if isInHoverFrame(button) or button.Name == EXIT_BUTTON_NAME then
+	if isInHoverFrame(button) or HOVER_BUTTON_NAMES[button.Name] then
 		button.MouseEnter:Connect(function()
 			SoundManager.playOneShot(HOVER_SOUND, { startTime = HOVER_START })
 		end)
