@@ -1,7 +1,8 @@
 --!strict
 
 -- The job board MANAGER. Owns the per-player active JobServer instances and the AcceptJob
--- flow: validate the player has Unlocked the business, end any job they're already on,
+-- flow: validate the player has Unlocked the business and still meets its requirements
+-- (BusinessService.meetsRequirements -- level + owned tools), end any job they're already on,
 -- spin up a fresh JobServer, publish the businessId on the ActiveJob player attribute (so
 -- their client loads the wall overlays + restores the stains), and teleport them onto the
 -- building's TeleportPart. One job at a time.
@@ -20,8 +21,8 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
-local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
+local BusinessService = require(script.Parent.BusinessService)
 local JobServer = require(script.Parent.JobServer)
 local PlotService = require(script.Parent.PlotService)
 
@@ -76,16 +77,6 @@ local function isUnlocked(player: Player, businessId: string): boolean
 	return DataService:get(player, { "BusinessList", businessId, "Unlocked" }) == true
 end
 
--- Whether the player is high enough level to accept this business (BusinessConfig.RequiredLevel,
--- defaulting to 1 -- no gate -- when the business declares none). Mirrors the client's board gate
--- in JobUiController; enforced here so the server is the authority, not just the hidden button.
-local function meetsLevel(player: Player, businessId: string): boolean
-	local def = BusinessConfig[businessId]
-	local required = (def and def.RequiredLevel) or 1
-	local level = DataService:get(player, { "Level", "CurrentLevel" })
-	return type(level) == "number" and level >= required
-end
-
 -- End a player's current job: drop the JobServer and clear the ActiveJob attribute (which
 -- tears the job state down on their client). Safe to call with no active job.
 function JobService.endJob(player: Player)
@@ -120,8 +111,11 @@ local function accept(player: Player, businessId: any)
 	if not isUnlocked(player, businessId) then
 		return -- not unlocked: ignore (button shouldn't have been offered)
 	end
-	if not meetsLevel(player, businessId) then
-		return -- below the business's RequiredLevel: ignore (button is hidden client-side too)
+	-- Unlocking is one-way, so the Unlocked flag alone can outlive the requirements that earned it
+	-- (a config change adding a gate to a business someone already owns). Re-check them here so the
+	-- live requirements always win. The client board hides the Wash button on the same gates.
+	if not BusinessService.meetsRequirements(player, businessId) then
+		return
 	end
 	local building = buildingFor(businessId)
 	if not building then

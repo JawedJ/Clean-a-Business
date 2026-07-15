@@ -14,6 +14,10 @@ export type Item = {
 	Radius: number?,
 	SlotNumber: number?,
 
+	-- Icon shown wherever the tool is displayed as a requirement (the job board's RequiredItems
+	-- row). Static catalog property (ToolConfig), not a per-player record field.
+	Image: string?,
+
 	-- Upgrade tuning (see ItemUpgrades). BaseUpgradeCost is the price of the FIRST upgrade
 	-- (level 0 -> 1); the shared cost formula scales it up per level. UpgradeRange/UpgradeRadius
 	-- are how much each upgrade adds to the item's Range/Radius; UpgradeUseTime is how much each
@@ -61,6 +65,12 @@ export type Business = {
 	-- businesses default to level 1 (no gate). Like DecalWeight this is a static catalog
 	-- property (BusinessConfig), not a per-player record field.
 	RequiredLevel: number?,
+	-- Tool UniqueIDs (ToolConfig keys) the player must have Unlocked in their Inventory before
+	-- they can accept this business's job -- a gate on top of RequiredLevel, not a replacement:
+	-- both must pass. Order drives the board's RequiredItems icons (first entry -> Item1). At
+	-- most 5 (the board authors that many slots). Optional -- omitted businesses need no tools.
+	-- Static catalog property (BusinessConfig), not a per-player record field.
+	RequiredItems: { string }?,
 }
 
 

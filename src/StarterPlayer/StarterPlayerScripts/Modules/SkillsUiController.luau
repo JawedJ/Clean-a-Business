@@ -14,6 +14,10 @@
 --     PurchaseFailed SFX and fire nothing. A maxed skill is a silent no-op. The server (SkillsService)
 --     re-validates and is authoritative; we just fire the request and repaint off the data change.
 --
+-- The frame's UnlockAllButton prompts a Robux product that maxes every skill at once. It hides
+-- once they're ALL maxed -- the product would grant nothing at that point, so it must not be
+-- sellable.
+--
 -- Like the other HUD controllers, the ScreenGui is re-cloned into PlayerGui on every respawn, so we
 -- re-bind to the fresh instances each time one appears. The ASkillsButton lives in the Buttons3
 -- cluster, which hides during a job, so the frame also snaps hidden (and refuses to open) mid-job.
@@ -68,6 +72,8 @@ local SkillsUiController = {}
 -- re-cloned each respawn, so these can't be captured once).
 local skillsFrame: Frame? = nil
 local scrollingFrame: Instance? = nil
+-- The Robux "unlock all" button, hidden once every skill is maxed (nothing left to buy).
+local unlockAllButton: ImageButton? = nil
 -- Drives the frame's open/close (slide + expand) animation; rebuilt per bind alongside the frame.
 local skillsPanel: UiAnimations.Panel? = nil
 -- Authored BackgroundColor3 of each Circle pip, captured the first time we fill it so an unfilled
@@ -109,6 +115,17 @@ end
 local function getLevel(skillName: string): number
 	local level = DataService:get({ "Skills", skillName })
 	return if type(level) == "number" then level else 0
+end
+
+-- Whether every skill is already at the cap -- i.e. the "unlock all" product has nothing left to
+-- grant, so offering it would take Robux for nothing.
+local function allSkillsMaxed(): boolean
+	for skillName in SkillsConfig.Skills do
+		if SkillsConfig.canUpgrade(getLevel(skillName)) then
+			return false
+		end
+	end
+	return true
 end
 
 -- Whether the local player currently holds a job (the Buttons3 cluster -- including the
@@ -187,16 +204,20 @@ local function onBuy(skillName: string)
 	end
 end
 
--- Repaint every skill row. Guards the post-respawn gap before anything is bound.
+-- Repaint every skill row, and hide the "unlock all" button once there's nothing left for it to
+-- unlock. Guards the post-respawn gap before anything is bound.
 local function renderSkills()
 	local scroll = scrollingFrame
-	if not scroll then
-		return
-	end
-	for _, child in scroll:GetChildren() do
-		if child:IsA("ImageLabel") then
-			renderSkill(child)
+	if scroll then
+		for _, child in scroll:GetChildren() do
+			if child:IsA("ImageLabel") then
+				renderSkill(child)
+			end
 		end
+	end
+	local button = unlockAllButton
+	if button and button.Parent then
+		button.Visible = not allSkillsMaxed()
 	end
 end
 
@@ -227,7 +248,7 @@ local function bind(screenGui: Instance)
 	local skillsButton = buttons3:WaitForChild("ASkillsButton") :: ImageButton
 	local frame = screenGui:WaitForChild("SkillsDisplay") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton
-	local unlockAllButton = frame:WaitForChild("UnlockAllButton") :: ImageButton
+	local unlockAll = frame:WaitForChild("UnlockAllButton") :: ImageButton
 	local scroll = frame:WaitForChild("ScrollingFrame")
 
 	-- Drop the previous clone's captured pip colours so this fresh clone is captured pristine.
@@ -237,6 +258,7 @@ local function bind(screenGui: Instance)
 	skillsFrame = frame
 	scrollingFrame = scroll
 	skillsPanel = panel
+	unlockAllButton = unlockAll
 	frame.Visible = false
 
 	-- Register with the coordinator so open/close is sequenced against the other panels; it
@@ -251,10 +273,15 @@ local function bind(screenGui: Instance)
 		ExclusivePanels.close(PANEL_NAME)
 	end)
 
-	-- Prompt the Robux "unlock all skills" dev product; the server maxes every skill on receipt,
-	-- and the resulting Skills change repaints the rows (circles fill, prices flip to MAX).
-	UiAnimations.hoverGrow(unlockAllButton)
-	unlockAllButton.Activated:Connect(function()
+	-- Prompt the Robux "unlock all skills" dev product; the server maxes every skill on receipt, and
+	-- the resulting Skills change repaints the rows (circles fill, prices flip to MAX) and hides this
+	-- button. Maxed is re-checked here too: the button hides on the same data, but a purchase prompt
+	-- that grants nothing is worth guarding against directly rather than trusting Visible.
+	UiAnimations.hoverGrow(unlockAll)
+	unlockAll.Activated:Connect(function()
+		if allSkillsMaxed() then
+			return
+		end
 		MarketplaceService:PromptProductPurchase(localPlayer, UNLOCK_ALL_PRODUCT_ID)
 	end)
 

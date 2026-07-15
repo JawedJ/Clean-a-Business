@@ -6,10 +6,16 @@
 -- (locked, zero completions) and then RESOLVE which ones they've earned.
 --
 -- Unlocking is one-way: once a business is unlocked it stays unlocked forever -- resolve() only
--- ever grants, never revokes. Resolution re-runs on join and whenever the player's level changes,
--- so reaching a business's RequiredLevel unlocks it live (the client board refreshes off the
--- BusinessList changed signal). Requirements today are just RequiredLevel; future gates (e.g. an
--- owned tool) slot into meetsRequirements without touching the seed/resolve flow.
+-- ever grants, never revokes. Resolution re-runs on join and whenever the player's Level or
+-- Inventory changes, so reaching a business's RequiredLevel or buying its last RequiredItems tool
+-- unlocks it live (the client board refreshes off the BusinessList changed signal).
+--
+-- Requirements are RequiredLevel + RequiredItems (owned tools); both must pass. New gate kinds
+-- slot into meetsRequirements without touching the seed/resolve flow.
+--
+-- Because unlocking is one-way, an already-unlocked business stays unlocked even if a later
+-- config change adds a requirement its owner doesn't meet. That's why JobService.accept re-checks
+-- meetsRequirements at accept time instead of trusting the Unlocked flag alone.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -34,17 +40,26 @@ local function freshRecord(def: DataTemplate.Business): DataTemplate.Business
 	}
 end
 
--- Whether the player currently satisfies a business's unlock requirements. Today that's just
--- being at or above its RequiredLevel (default 1 -- no gate). This is the one place to extend
--- when new requirement kinds (owned tools, etc.) are added.
-local function meetsRequirements(player: Player, businessId: string): boolean
+-- Whether the player currently satisfies a business's unlock requirements: they're at or above
+-- its RequiredLevel (default 1 -- no gate) AND they own every tool in its RequiredItems (default
+-- none). This is the one place to extend when new requirement kinds are added, and the single
+-- server-side definition of "may this player play this business" -- JobService.accept re-checks it
+-- rather than keeping its own copy.
+function BusinessService.meetsRequirements(player: Player, businessId: string): boolean
 	local def = BusinessConfig[businessId]
 	if not def then
 		return false
 	end
-	local required = def.RequiredLevel or 1
 	local level = DataService:get(player, { "Level", "CurrentLevel" })
-	return type(level) == "number" and level >= required
+	if type(level) ~= "number" or level < (def.RequiredLevel or 1) then
+		return false
+	end
+	for _, toolId in def.RequiredItems or {} do
+		if DataService:get(player, { "Inventory", toolId, "Unlocked" }) ~= true then
+			return false
+		end
+	end
+	return true
 end
 
 -- Seed any missing businesses into the player's list, then unlock any that are still locked but
@@ -63,7 +78,7 @@ local function resolve(player: Player)
 		end
 
 		local alreadyUnlocked = type(record) == "table" and record.Unlocked == true
-		if not alreadyUnlocked and meetsRequirements(player, businessId) then
+		if not alreadyUnlocked and BusinessService.meetsRequirements(player, businessId) then
 			DataService:set(player, { "BusinessList", businessId, "Unlocked" }, true)
 		end
 	end
@@ -76,6 +91,12 @@ local function setupPlayer(player: Player)
 
 	-- Levelling up can newly satisfy a business's RequiredLevel; re-resolve to grant it live.
 	DataService:getChangedSignal(player, { "Level" }):Connect(function()
+		resolve(player)
+	end)
+
+	-- Buying a tool can newly satisfy a business's RequiredItems, so re-resolve on that too --
+	-- otherwise the unlock would wait for the player's next level-up or rejoin.
+	DataService:getChangedSignal(player, { "Inventory" }):Connect(function()
 		resolve(player)
 	end)
 end

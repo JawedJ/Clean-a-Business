@@ -19,6 +19,8 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		-- Stains fill 25% of the completion bar here, walls the other 75%.
 		DecalWeight = 0.25,
 		RequiredLevel = 5,
+		-- Stains here need the broom, walls the pressure washer, so both are required.
+		RequiredItems = { "pressureWasher", "startingBroom" },
 	},
 
 	starbucks = {
@@ -29,6 +31,8 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		Completions = 0,
 		XpReward = 500,
 		RequiredLevel = 1,
+		-- Walls only (no stains), so the pressure washer is the only tool needed.
+		RequiredItems = { "pressureWasher" },
 	},
 }
 

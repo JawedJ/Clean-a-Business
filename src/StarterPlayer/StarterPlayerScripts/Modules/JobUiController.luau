@@ -3,9 +3,13 @@
 -- Drives the job board UI (PlayerGui.ScreenGui: Buttons.JobButton + JobFrame). The JobButton
 -- toggles the JobFrame; the frame's ExitButton closes it. The frame's ScrollingFrame
 -- holds one TaskDesign per business, each tagged with a "BusinessId" attribute: a row
--- shows its WashButton if the local player has that business Unlocked, or its
--- LockedButton if not. Pressing Wash accepts that business's job (AcceptJob), which the
--- server confirms by publishing the businessId on the ActiveJob attribute.
+-- shows its WashButton once the local player clears every gate on that business -- it's
+-- Unlocked, they're at its RequiredLevel, and they own its RequiredItems tools -- or its
+-- LockedButton if any gate fails. Pressing Wash accepts that business's job (AcceptJob), which
+-- the server confirms by publishing the businessId on the ActiveJob attribute.
+--
+-- The row's Requirements label and RequiredItems icons show WHY a row is locked: the level line
+-- and each required tool's icon go green when that gate is met, red while it isn't.
 --
 -- Each row also shows the business's mastery progress (StarAmount / MasteryRequirements) and a
 -- Rewards line whose XP figure includes the current mastery boost, all driven off the player's
@@ -31,6 +35,7 @@ local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
+local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
@@ -55,10 +60,16 @@ local CLICK_SOUND = "UIClick"
 -- one a button is hovered in: frames above it slide up by this much, frames below slide down, and
 -- the hovered one holds. Y scale, so it tracks the screen at any resolution.
 local CLUSTER_HOVER_SPREAD = 0.003
--- Requirements label colors: green once the player meets the business's level gate, the authored
--- red-orange (matching the Studio-authored default) while they're still below it.
+-- Requirement colors, shared by the level-gate label and the RequiredItems icons: green once the
+-- player meets the gate (level reached / tool owned), the authored red-orange (matching the
+-- Studio-authored default) while they don't.
 local REQ_MET_COLOR = Color3.fromRGB(78, 214, 94)
 local REQ_UNMET_COLOR = Color3.fromRGB(225, 62, 30)
+-- The RequiredItems frame each row authors, holding Item1..Item{MAX_REQUIRED_ITEM_SLOTS} icon
+-- slots. A business shows one slot per tool in its BusinessConfig.RequiredItems (in order) and
+-- hides the rest, so a two-tool business lights up Item1 + Item2 only.
+local REQUIRED_ITEMS_FRAME = "RequiredItems"
+local MAX_REQUIRED_ITEM_SLOTS = 5
 
 local JobUiController = {}
 
@@ -122,6 +133,19 @@ end
 local function requiredLevelFor(businessId: string): number
 	local def = BusinessConfig[businessId]
 	return (def and def.RequiredLevel) or 1
+end
+
+-- Tool UniqueIDs a business needs to be accepted, in board display order. Empty when the
+-- business declares no BusinessConfig.RequiredItems (no tool gate).
+local function requiredItemsFor(businessId: string): { string }
+	local def = BusinessConfig[businessId]
+	return (def and def.RequiredItems) or {}
+end
+
+-- Whether the player owns a tool. Inventory records are seeded from the ToolConfig catalog, so a
+-- missing record just means not-yet-owned -- read it as defensively as isUnlocked does.
+local function ownsItem(toolId: string): boolean
+	return DataService:get({ "Inventory", toolId, "Unlocked" }) == true
 end
 
 -- Render a mastery boost percent for the requirement label: whole numbers stay bare (5 -> "5"),
@@ -241,6 +265,8 @@ local function bindTask(row: Instance): (() -> ())?
 	local rewards = row:FindFirstChild("Rewards") :: TextLabel?
 	-- The level-gate line ("REQUIRED: Level N"), turned green once the gate is met.
 	local requirements = row:FindFirstChild("Requirements") :: TextLabel?
+	-- The tool-gate icons (optional, like the mastery labels).
+	local requiredItems = row:FindFirstChild(REQUIRED_ITEMS_FRAME) :: Frame?
 
 	-- Redraw the mastery stars, the Rewards line's boosted XP, and the next-milestone
 	-- requirement from the player's lifetime completions on this business.
@@ -292,30 +318,69 @@ local function bindTask(row: Instance): (() -> ())?
 	end
 
 	-- Paint the level-gate line: text from the business's RequiredLevel, green when the player
-	-- meets it and red-orange while they're still short. Returns whether the gate is met so the
-	-- caller can fold it into the button visibility.
-	local function refreshRequirement(): boolean
+	-- meets it and red-orange while they're still short.
+	local function refreshRequirement()
 		local required = requiredLevelFor(businessId)
-		local met = playerLevel() >= required
 		if requirements then
 			requirements.Text = string.format("REQUIRED: Level %d", required)
-			requirements.TextColor3 = if met then REQ_MET_COLOR else REQ_UNMET_COLOR
+			requirements.TextColor3 = if playerLevel() >= required then REQ_MET_COLOR else REQ_UNMET_COLOR
 		end
-		return met
+	end
+
+	-- Paint the tool-gate icons: one slot per tool the business requires, showing that tool's
+	-- catalog icon over a green background when the player owns it and red while they don't.
+	-- Unused slots (a business needing fewer tools than the row authors) stay hidden.
+	local function refreshRequiredItems()
+		if not requiredItems then
+			return
+		end
+		local required = requiredItemsFor(businessId)
+		for slot = 1, MAX_REQUIRED_ITEM_SLOTS do
+			local frame = requiredItems:FindFirstChild("Item" .. slot) :: Frame?
+			local toolId = required[slot]
+			if frame then
+				frame.Visible = toolId ~= nil
+				if toolId then
+					frame.BackgroundColor3 = if ownsItem(toolId) then REQ_MET_COLOR else REQ_UNMET_COLOR
+					local icon = frame:FindFirstChild("ImageLabel") :: ImageLabel?
+					local def = ToolConfig[toolId]
+					if icon and def and def.Image then
+						icon.Image = def.Image
+					end
+				end
+			end
+		end
+	end
+
+	-- Whether the player may accept this business right now: it's unlocked, they're high enough
+	-- level, and they own every tool it requires. Kept as one predicate so the Wash button's
+	-- visibility and its click guard can never disagree. The server enforces the same three gates
+	-- in JobService.accept.
+	local function isPlayable(): boolean
+		if not isUnlocked(businessId) or playerLevel() < requiredLevelFor(businessId) then
+			return false
+		end
+		for _, toolId in requiredItemsFor(businessId) do
+			if not ownsItem(toolId) then
+				return false
+			end
+		end
+		return true
 	end
 
 	local function refresh()
-		-- A row offers its Wash button only when the business is both unlocked AND the player is
-		-- high enough level; otherwise it shows the Locked button. The server enforces the same
-		-- gate in JobService.accept.
-		local playable = isUnlocked(businessId) and refreshRequirement()
+		-- Repaint the gate displays first (they own the row's requirement visuals), then offer the
+		-- Wash button only if every gate passes; otherwise show the Locked button.
+		refreshRequirement()
+		refreshRequiredItems()
+		local playable = isPlayable()
 		washButton.Visible = playable
 		lockedButton.Visible = not playable
 		refreshMastery()
 	end
 
 	washButton.Activated:Connect(function()
-		if not isUnlocked(businessId) or playerLevel() < requiredLevelFor(businessId) or hasActiveJob() then
+		if not isPlayable() or hasActiveJob() then
 			return
 		end
 		-- On success the server sets ActiveJob, which hides the whole job UI via
@@ -393,6 +458,9 @@ function JobUiController.init()
 	DataService:getChangedSignal({ "BusinessList" }):Connect(refreshTasks)
 	-- Leveling up can clear a business's level gate, so re-run the rows when Level changes.
 	DataService:getChangedSignal({ "Level" }):Connect(refreshTasks)
+	-- Buying a tool can clear a business's item gate (and repaints its RequiredItems icons), so
+	-- re-run the rows when the Inventory changes too.
+	DataService:getChangedSignal({ "Inventory" }):Connect(refreshTasks)
 	-- Buying the Greed/Inteligence skills changes the boosted reward the rows predict, so repaint
 	-- them when Skills change too.
 	DataService:getChangedSignal({ "Skills" }):Connect(refreshTasks)
