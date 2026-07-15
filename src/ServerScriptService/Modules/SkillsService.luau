@@ -17,17 +17,22 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MarketplaceService = game:GetService("MarketplaceService")
+local StarterPlayer = game:GetService("StarterPlayer")
 
-local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local PurchaseSkill = Remotes:WaitForChild("PurchaseSkill") :: RemoteEvent
 
--- Base free-roam walk speed the Speedy multiplier scales. Matches the game's canonical speed
--- (Config.JobWalkSpeed), so with no Speedy levels a player moves at exactly the default.
-local BASE_WALK_SPEED = Config.JobWalkSpeed
+-- Base free-roam walk speed the Speedy multiplier scales: StarterPlayer.CharacterWalkSpeed, the
+-- same value Roblox spawns characters at, so with no Speedy levels a player moves at exactly the
+-- authored default. Read live rather than cached so tuning the property (in Studio, or at runtime)
+-- takes effect on the next apply. Deliberately NOT Config.JobWalkSpeed -- that is the separate,
+-- pinned ON-THE-JOB speed (see JobServer._pinWalkSpeed).
+local function baseWalkSpeed(): number
+	return StarterPlayer.CharacterWalkSpeed
+end
 
 -- Robux developer product that maxes every skill at once (the SkillsDisplay's "UNLOCK ALL SKILLS"
 -- button prompts it). Granting is idempotent (just sets each skill to the cap), so re-processing a
@@ -55,7 +60,7 @@ local function applyWalkSpeed(player: Player, character: Model)
 	if not humanoid then
 		return
 	end
-	humanoid.WalkSpeed = BASE_WALK_SPEED * SkillsService.getMultiplier(player, "Speedy")
+	humanoid.WalkSpeed = baseWalkSpeed() * SkillsService.getMultiplier(player, "Speedy")
 end
 
 -- Re-apply the player's Speedy-boosted walk speed to their current character, if any. Called
