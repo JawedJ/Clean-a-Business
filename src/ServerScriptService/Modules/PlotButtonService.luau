@@ -27,6 +27,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
@@ -261,11 +262,11 @@ local SPAWN_ANIM_DURATION = 1
 local SPAWN_ANIM_HEIGHT = 8
 local SPAWN_ANIM_START_TRANSPARENCY = 0.9
 
--- Build the invisible collision blocker that reserves a spawnable's final footprint during its
--- drop-in, so a player standing where it lands isn't trapped by the falling (non-colliding) model.
--- Sized/placed from the model's bounding box; parented OUTSIDE the model so moving the model doesn't
--- drag it. Named "Hitbox" per spec; removed when the drop finishes.
-local function makeLandingHitbox(model: Instance, cframe: CFrame, size: Vector3): BasePart
+-- Build one invisible collision blocker that reserves a chunk of a spawnable's final footprint
+-- during its drop-in, so a player standing where it lands isn't trapped by the falling
+-- (non-colliding) model. Parented OUTSIDE the model so moving the model doesn't drag it. Named
+-- "Hitbox" per spec; removed when the drop finishes.
+local function makeLandingHitbox(parent: Instance, cframe: CFrame, size: Vector3): BasePart
 	local hitbox = Instance.new("Part")
 	hitbox.Name = "Hitbox"
 	hitbox.Size = size
@@ -275,33 +276,88 @@ local function makeLandingHitbox(model: Instance, cframe: CFrame, size: Vector3)
 	hitbox.CanTouch = false
 	hitbox.CanQuery = false
 	hitbox.Transparency = 1
-	hitbox.Parent = model.Parent
+	hitbox.Parent = parent
 	return hitbox
 end
 
+-- Reserve a spawnable's landing footprint. A single box around the whole spawnable spans the empty
+-- gap between sub-models that sit apart from each other, so instead we descend to each *leaf* model
+-- (one with no Models of its own) and give it its own box, plus a box per loose BasePart that isn't
+-- inside any sub-model. A spawnable with no sub-models is itself a leaf and gets the one box it
+-- always did.
+local function makeLandingHitboxes(model: Instance): { BasePart }
+	local parent = model.Parent
+	if not parent then
+		return {}
+	end
+
+	local hitboxes: {BasePart} = {}
+
+	local function addBox(cframe: CFrame, size: Vector3)
+		-- Empty models report a zero-size box; nothing to reserve.
+		if size.Magnitude > 0 then
+			table.insert(hitboxes, makeLandingHitbox(parent, cframe, size))
+		end
+	end
+
+	local function descend(inst: Instance)
+		if inst:IsA("BasePart") then
+			addBox(inst.CFrame, inst.Size)
+			return
+		end
+		if not inst:IsA("Model") then
+			return
+		end
+
+		local hasSubModel = false
+		for _, child in inst:GetChildren() do
+			if child:IsA("Model") then
+				hasSubModel = true
+				break
+			end
+		end
+		if not hasSubModel then
+			addBox(inst:GetBoundingBox())
+			return
+		end
+
+		-- Mixed contents: recurse into sub-models, and box any loose parts alongside them.
+		for _, child in inst:GetChildren() do
+			if child:IsA("Model") or child:IsA("BasePart") then
+				descend(child)
+			end
+		end
+	end
+
+	descend(model)
+	return hitboxes
+end
+
+local function destroyHitboxes(hitboxes: { BasePart })
+	for _, hitbox in hitboxes do
+		hitbox:Destroy()
+	end
+end
+
 -- Drop a spawnable in over SPAWN_ANIM_DURATION: it starts SPAWN_ANIM_HEIGHT studs up and nearly
--- transparent, then eases (Quad-out) down to its authored spot and fades to its authored look. A
--- "Hitbox" reserves the landing footprint for the duration so the falling model (parts set
+-- transparent, then eases (Quad-out) down to its authored spot and fades to its authored look.
+-- "Hitbox" parts reserve the landing footprint for the duration so the falling model (parts set
 -- non-colliding for the drop) can't trap a player. Runs in its own task so purchases don't block on
 -- it, and cancels cleanly (restoring the resting pose) if the plot is reset mid-drop.
 local function animateSpawnIn(state: PlotState, model: Instance)
 	-- Resting pose is wherever the model is authored -- it hasn't been moved, so its current pivot
 	-- IS the target. Fall back to a plain show for anything without geometry.
 	local finalPivot: CFrame
-	local boxCFrame: CFrame
-	local boxSize: Vector3
 	if model:IsA("Model") then
 		finalPivot = model:GetPivot()
-		boxCFrame, boxSize = model:GetBoundingBox()
 	elseif model:IsA("BasePart") then
-		local part = model :: BasePart
-		finalPivot, boxCFrame, boxSize = part.CFrame, part.CFrame, part.Size
+		finalPivot = (model :: BasePart).CFrame
 	else
 		setVisible(model, true)
 		return
 	end
 
-	local hitbox = makeLandingHitbox(model, boxCFrame, boxSize)
+	local hitboxes = makeLandingHitboxes(model)
 
 	-- Everything we fade, with its authored (target) transparency captured at build in originalProps.
 	-- Start each a fixed amount MORE transparent than its target (never less, so a semi-transparent
@@ -348,7 +404,7 @@ local function animateSpawnIn(state: PlotState, model: Instance)
 			if stateByPlot[state.plot] ~= state or not state.active[model.Name] then
 				model:PivotTo(finalPivot)
 				setVisible(model, false)
-				hitbox:Destroy()
+				destroyHitboxes(hitboxes)
 				return
 			end
 			elapsed += dt
@@ -363,7 +419,7 @@ local function animateSpawnIn(state: PlotState, model: Instance)
 		-- remove the footprint reservation.
 		model:PivotTo(finalPivot)
 		setVisible(model, true)
-		hitbox:Destroy()
+		destroyHitboxes(hitboxes)
 	end)
 end
 
@@ -686,9 +742,38 @@ local function startGemLoop()
 	end)
 end
 
+-- Hide every plot at server start, before any client can replicate it.
+--
+-- Plots are authored in their FINAL, fully-bought, visible state (setVisible snapshots those
+-- authored values on first sight and restores them on show -- see snapshot). Without this sweep they
+-- stay visible from server start until the first owner's onAssigned runs, which yields on
+-- waitForData -- so an early joiner sees every plot fully built for a moment. Hiding here happens
+-- before any player joins, so clients only ever receive the hidden state.
+--
+-- This also takes the authored snapshot, which is why it MUST run before anything mutates
+-- transparency. The temporary registries are deliberately not stored in stateByPlot: these plots
+-- have no owner yet, and onAssigned rebuilds from scratch anyway.
+local function hideAllPlotsAtStartup()
+	local plotsFolder = Workspace:FindFirstChild(Config.PlotsFolderName)
+	if not plotsFolder then
+		warn(string.format("[PlotButtonService] No %q folder under Workspace; cannot pre-hide plots.", Config.PlotsFolderName))
+		return
+	end
+	for i = 1, Config.PlotCount do
+		local plot = plotsFolder:FindFirstChild("Plot" .. i)
+		if plot then
+			local state = buildRegistry(plot)
+			if state then
+				hideAll(state)
+			end
+		end
+	end
+end
+
 -- Register plot hooks BEFORE PlotService.init() so the join sweep and every future assignment
 -- build the plot from save data.
 function PlotButtonService.init()
+	hideAllPlotsAtStartup()
 	PlotService.onAssigned(onAssigned)
 	PlotService.onReleased(onReleased)
 	startGemLoop()
