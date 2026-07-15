@@ -53,6 +53,13 @@ local CleaningConfig = {
 	-- plot and on every respawn (unless they currently hold a job, see ActiveJob).
 	PlotSpawnPartName = "spawnPart",
 
+	-- The plot's warehouse name sign (see PlotSignService), stamped with the owner's name on
+	-- assign and blanked on release. The path below is walked from the plot:
+	--   Plot(i).Warehouse.OutsideDesign.<PlotSignPath...>
+	-- ending at a TextBox whose Text becomes "<Owner>'s Warehouse".
+	PlotWarehouseFolderName = "Warehouse",
+	PlotSignPath = { "OutsideDesign", "Wood Sign", "TextPart", "SurfaceGui", "TextBox" },
+
 	-- Per-plot purchase progression (see PlotButtonService). Each plot holds two folders:
 	--   Plot(i).<PlotButtonsFolderName>     -- purchase buttons, named "Button1".."ButtonN"
 	--   Plot(i).<PlotSpawnablesFolderName>  -- the things buttons unlock, one Model per UnlockID
