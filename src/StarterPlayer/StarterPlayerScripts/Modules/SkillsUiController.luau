@@ -266,9 +266,6 @@ local function bind(screenGui: Instance)
 	ExclusivePanels.register(PANEL_NAME, panel, renderSkills)
 
 	skillsButton.Activated:Connect(togglePanel)
-	-- Grow the close button on hover, like the HUD's cluster buttons (its hover sound is wired
-	-- centrally in UiSoundController).
-	UiAnimations.hoverGrow(exitButton)
 	exitButton.Activated:Connect(function()
 		ExclusivePanels.close(PANEL_NAME)
 	end)
@@ -277,7 +274,6 @@ local function bind(screenGui: Instance)
 	-- the resulting Skills change repaints the rows (circles fill, prices flip to MAX) and hides this
 	-- button. Maxed is re-checked here too: the button hides on the same data, but a purchase prompt
 	-- that grants nothing is worth guarding against directly rather than trusting Visible.
-	UiAnimations.hoverGrow(unlockAll)
 	unlockAll.Activated:Connect(function()
 		if allSkillsMaxed() then
 			return

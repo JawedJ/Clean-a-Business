@@ -273,9 +273,6 @@ local function bind(screenGui: Instance)
 	ExclusivePanels.register(PANEL_NAME, panel, syncSliders)
 
 	settingsButton.Activated:Connect(togglePanel)
-	-- Grow the close button on hover, like the HUD's cluster buttons (its hover sound is wired
-	-- centrally in UiSoundController).
-	UiAnimations.hoverGrow(exitButton)
 	exitButton.Activated:Connect(function()
 		ExclusivePanels.close(PANEL_NAME)
 	end)

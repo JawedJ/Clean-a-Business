@@ -13,7 +13,8 @@
 --         panel:hideInstant() -- snap hidden with no tween (forced state changes)
 --
 --   * UiAnimations.hoverGrow(button) -- grows a button a touch while hovered, settling back
---     on leave. Attach once per button (re-attach on each respawn):
+--     on leave. You usually do NOT call this: UiButtonController attaches it to every button
+--     in PlayerGui (and to anything cloned in later), so a new button gets it for free.
 --         UiAnimations.hoverGrow(someButton)
 --
 --   * UiAnimations.hoverGrowCluster(frame) -- attaches the grid-aware hover-grow to every

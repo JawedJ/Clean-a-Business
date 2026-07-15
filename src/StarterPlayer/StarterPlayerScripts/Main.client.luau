@@ -25,7 +25,7 @@ local WorkerGemPopupController = require(Modules:WaitForChild("WorkerGemPopupCon
 local JobCompletionController = require(Modules:WaitForChild("JobCompletionController"))
 local JobSummaryController = require(Modules:WaitForChild("JobSummaryController"))
 local JobCameraController = require(Modules:WaitForChild("JobCameraController"))
-local UiSoundController = require(Modules:WaitForChild("UiSoundController"))
+local UiButtonController = require(Modules:WaitForChild("UiButtonController"))
 local SettingsUiController = require(Modules:WaitForChild("SettingsUiController"))
 local BackgroundMusicController = require(Modules:WaitForChild("BackgroundMusicController"))
 local UiStrokeScaler = require(Modules:WaitForChild("UiStrokeScaler"))
@@ -90,7 +90,7 @@ safeInit("PurchaseSoundController", PurchaseSoundController.init)
 safeInit("JobCompletionController", JobCompletionController.init)
 safeInit("JobSummaryController", JobSummaryController.init)
 safeInit("JobCameraController", JobCameraController.init)
-safeInit("UiSoundController", UiSoundController.init)
+safeInit("UiButtonController", UiButtonController.init)
 -- Settings tab (volume sliders). Init BEFORE the music starts so saved volumes apply first.
 safeInit("SettingsUiController", SettingsUiController.init)
 -- Loop the BackgroundMusic playlist for the local player, with fade transitions.

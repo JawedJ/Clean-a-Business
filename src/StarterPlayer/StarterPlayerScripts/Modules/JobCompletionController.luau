@@ -36,7 +36,7 @@ local localPlayer = Players.LocalPlayer
 local SCREEN_GUI_NAME = "ScreenGui"
 -- Keyboard shortcut that finishes the job early, same as clicking the FinishEarly button.
 local FINISH_KEY = Enum.KeyCode.H
--- UI click sound for the keyboard shortcut (the button gets it from UiSoundController's
+-- UI click sound for the keyboard shortcut (the button gets it from UiButtonController's
 -- per-GuiButton wiring; the key press doesn't).
 local CLICK_SOUND = "UIClick"
 -- Quick slide of the fill bar toward its new value on each clean.

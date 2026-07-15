@@ -54,7 +54,7 @@ local BUSINESS_ID_ATTRIBUTE = "BusinessId"
 -- Keyboard shortcut that toggles the board, same as clicking the JobButton.
 local TOGGLE_KEY = Enum.KeyCode.B
 -- UI click sound played for the keyboard shortcut (the JobButton gets it automatically
--- from UiSoundController's per-GuiButton wiring; the key press doesn't).
+-- from UiButtonController's per-GuiButton wiring; the key press doesn't).
 local CLICK_SOUND = "UIClick"
 -- The stacked HUD clusters (top-to-bottom: Button1, Buttons2, Buttons3) open up around whichever
 -- one a button is hovered in: frames above it slide up by this much, frames below slide down, and
@@ -257,6 +257,17 @@ local function bindTask(row: Instance): (() -> ())?
 	end
 	local washButton, lockedButton = wash, locked
 
+	-- The hover grow itself comes from UiButtonController's PlayerGui-wide sweep. But a button
+	-- swapped out from under the pointer (a row going Locked -> Wash while hovered) may never get
+	-- its MouseLeave, which would leave it grown the next time it's shown. Reset the one being
+	-- hidden back to rest.
+	local function resetHoverScale(button: GuiButton)
+		local scale = button:FindFirstChildOfClass("UIScale")
+		if scale then
+			scale.Scale = 1
+		end
+	end
+
 	-- Mastery labels (optional -- a row without them just skips the mastery display): the stars
 	-- earned, the requirement/next-boost line, and the Rewards line we rewrite so its XP figure
 	-- reflects the current mastery boost.
@@ -376,6 +387,7 @@ local function bindTask(row: Instance): (() -> ())?
 		local playable = isPlayable()
 		washButton.Visible = playable
 		lockedButton.Visible = not playable
+		resetHoverScale(if playable then lockedButton else washButton)
 		refreshMastery()
 	end
 
@@ -417,9 +429,10 @@ local function bind(screenGui: Instance)
 
 	button.Activated:Connect(toggleBoard)
 
-	-- Every button in every HUD cluster gets the same hover polish as the JobButton: a center
-	-- grow that also pushes its row-neighbours aside (via the shared grid's padding) so the
-	-- growing button keeps a constant gap instead of overlapping them.
+	-- The HUD clusters are the one exception to UiButtonController's PlayerGui-wide hover grow
+	-- (which skips them): their buttons share a UIGridLayout, so they need the grid-aware variant
+	-- that also pushes row-neighbours aside via the grid's padding, keeping a constant gap
+	-- instead of overlapping them.
 	UiAnimations.hoverGrowCluster(button1 :: GuiObject)
 	UiAnimations.hoverGrowCluster(buttons2 :: GuiObject)
 	UiAnimations.hoverGrowCluster(buttons3 :: GuiObject)
@@ -432,9 +445,6 @@ local function bind(screenGui: Instance)
 		buttons3 :: GuiObject,
 	}, CLUSTER_HOVER_SPREAD)
 
-	-- Grow the close button on hover, like the cluster buttons above (its hover sound is wired
-	-- centrally in UiSoundController).
-	UiAnimations.hoverGrow(exitButton)
 	exitButton.Activated:Connect(function()
 		ExclusivePanels.close(PANEL_NAME)
 	end)
