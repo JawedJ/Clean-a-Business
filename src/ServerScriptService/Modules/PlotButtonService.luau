@@ -70,8 +70,14 @@ type PlotState = {
 	bought: { [string]: boolean }, -- button names already purchased (never reveal these again)
 	active: { [string]: boolean }, -- spawnable names currently unlocked/visible
 	debounce: { [string]: boolean }, -- per-button touch debounce
+	readyAt: { [string]: number }, -- earliest os.clock() a button may be purchased (reveal cooldown)
 	conns: { RBXScriptConnection }, -- touch listeners + the owner's Cash-changed listener
 }
+
+-- Grace period after a button is revealed before its Interact part can fire a purchase. Buying a
+-- button reveals the next one right where the owner is standing, so without this a stray Touched
+-- from that same footstep could instantly buy the freshly-revealed button.
+local REVEAL_COOLDOWN = 1
 
 -- RichText colours for the appended price: green when the owner can afford it, red when not.
 local AFFORD_COLOR = "#37D67A"
@@ -242,6 +248,7 @@ local function buildRegistry(plot: Instance): PlotState?
 		bought = {},
 		active = {},
 		debounce = {},
+		readyAt = {},
 		conns = {},
 	}
 end
@@ -452,6 +459,8 @@ local function revealButton(state: PlotState, index: number)
 		return
 	end
 	state.available[entry.name] = true
+	-- Arm the reveal cooldown: the button can't be purchased for REVEAL_COOLDOWN after appearing.
+	state.readyAt[entry.name] = os.clock() + REVEAL_COOLDOWN
 	setVisible(entry.model, true)
 end
 
@@ -538,6 +547,12 @@ end
 -- it and the button is currently available; otherwise do nothing.
 local function tryPurchase(state: PlotState, entry: ButtonEntry)
 	if not state.available[entry.name] or state.debounce[entry.name] then
+		return
+	end
+	-- Still within the reveal cooldown: ignore the touch entirely (no buy, no fail SFX) so it
+	-- can't be purchased the instant it appears.
+	local readyAt = state.readyAt[entry.name]
+	if readyAt and os.clock() < readyAt then
 		return
 	end
 	state.debounce[entry.name] = true

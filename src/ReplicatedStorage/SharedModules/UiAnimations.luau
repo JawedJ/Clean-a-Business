@@ -277,6 +277,29 @@ function UiAnimations.hoverGrow(button: GuiButton)
 	end)
 end
 
+-- Grow a secondary element in lockstep with a button's hoverGrow. hoverGrow scales via a UIScale on
+-- the button, which only reaches the button's DESCENDANTS -- so a label layered OVER a button as its
+-- SIBLING (e.g. a price label sitting on a buy ImageButton) stays put while the button grows under
+-- it. Give that element its own centered UIScale and drive it off the button's hover with the same
+-- scale + feel, so the two read as one growing button. Center-anchoring it first (recenterAnchor)
+-- makes it grow about its middle, keeping it aligned over the likewise-centered button. Idempotent
+-- per element -- reuses an existing UIScale so a re-attach after a respawn doesn't stack it.
+function UiAnimations.coupleHoverScale(button: GuiButton, element: GuiObject)
+	recenterAnchor(element)
+	local scale = element:FindFirstChildOfClass("UIScale")
+	if not scale then
+		scale = Instance.new("UIScale")
+		scale.Parent = element
+	end
+
+	button.MouseEnter:Connect(function()
+		TweenService:Create(scale, HOVER_TWEEN, { Scale = HOVER_SCALE }):Play()
+	end)
+	button.MouseLeave:Connect(function()
+		TweenService:Create(scale, HOVER_TWEEN, { Scale = 1 }):Play()
+	end)
+end
+
 -- Like hoverGrow, but for buttons sharing a UIGridLayout -- which forces every cell to its
 -- fixed CellSize and so never reflows to make room for the grow, leaving hovered buttons
 -- overlapping their neighbours. Alongside the same center grow, this widens the grid's

@@ -36,8 +36,8 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Radius = 0.8,
 		SlotNumber = 1,
 		BaseUpgradeCost = 100,
-		UpgradeRange = 5,
-		UpgradeRadius = 0.05,
+		UpgradeRange = 3,
+		UpgradeRadius = 0.025,
 	},
 }
 

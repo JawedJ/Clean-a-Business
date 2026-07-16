@@ -293,6 +293,12 @@ local function bind(screenGui: Instance)
 				buyButton.Activated:Connect(function()
 					onBuy(name)
 				end)
+				-- GemAmt is layered OVER the BuyButton as a sibling, so it sits outside the button's
+				-- hover UIScale and wouldn't grow with it -- couple it so the price grows in lockstep.
+				local gemAmt = child:FindFirstChild("GemAmt")
+				if gemAmt and gemAmt:IsA("GuiObject") then
+					UiAnimations.coupleHoverScale(buyButton, gemAmt)
+				end
 			end
 		end
 	end
