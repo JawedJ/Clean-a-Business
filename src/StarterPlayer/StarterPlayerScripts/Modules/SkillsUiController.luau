@@ -1,6 +1,7 @@
 --!strict
 
--- Drives the skills UI (PlayerGui.ScreenGui: Buttons3.ASkillsButton + SkillsDisplay). The
+-- Drives the skills UI (PlayerGui.ScreenGui: HUD.AllButtons.Buttons3.ASkillsButton +
+-- SkillsDisplay). The
 -- ASkillsButton toggles the SkillsDisplay open/closed with the SAME slide + expand animation as
 -- the job board / upgrades shop / settings tab (via the shared ExclusivePanels coordinator, so
 -- opening it closes whichever of those was open, and vice versa); the frame's ExitButton closes it.
@@ -244,7 +245,7 @@ end
 -- Resolve one ScreenGui's skills elements, wire the buttons, then paint the rows + apply current
 -- state. Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)
-	local buttons3 = screenGui:WaitForChild("Buttons3")
+	local buttons3 = screenGui:WaitForChild("HUD"):WaitForChild("AllButtons"):WaitForChild("Buttons3")
 	local skillsButton = buttons3:WaitForChild("ASkillsButton") :: ImageButton
 	local frame = screenGui:WaitForChild("SkillsDisplay") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton

@@ -1,6 +1,6 @@
 --!strict
 
--- Drives the cash HUD (PlayerGui.ScreenGui.CashDisplay.MoneyAmt): writes the
+-- Drives the cash HUD (PlayerGui.ScreenGui.HUD.AllDisplays.CashDisplay.MoneyAmt): writes the
 -- player's Cash balance into the MoneyAmt label as an abbreviated, "$"-prefixed
 -- string (e.g. 1100 -> "$1.1k"). Reads the Cash domain from DataService and
 -- re-renders whenever it changes.
@@ -37,7 +37,7 @@ end
 
 -- Resolve and store the MoneyAmt label of one CashDisplay, then paint it.
 local function bind(screenGui: Instance)
-	local cashDisplay = screenGui:WaitForChild("CashDisplay")
+	local cashDisplay = screenGui:WaitForChild("HUD"):WaitForChild("AllDisplays"):WaitForChild("CashDisplay")
 	moneyLabel = cashDisplay:WaitForChild("MoneyAmt") :: TextLabel
 	render()
 end

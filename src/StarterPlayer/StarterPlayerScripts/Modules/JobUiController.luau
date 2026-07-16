@@ -59,7 +59,7 @@ local CLICK_SOUND = "UIClick"
 -- The stacked HUD clusters (top-to-bottom: Button1, Buttons2, Buttons3) open up around whichever
 -- one a button is hovered in: frames above it slide up by this much, frames below slide down, and
 -- the hovered one holds. Y scale, so it tracks the screen at any resolution.
-local CLUSTER_HOVER_SPREAD = 0.003
+local CLUSTER_HOVER_SPREAD = 0.017
 -- Requirement colors, shared by the level-gate label and the RequiredItems icons: green once the
 -- player meets the gate (level reached / tool owned), the authored red-orange (matching the
 -- Studio-authored default) while they don't.
@@ -407,9 +407,10 @@ end
 -- Resolve one ScreenGui's job elements, wire the buttons + rows, then apply current
 -- state (lock rows + active-job visibility). Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)
-	local button1 = screenGui:WaitForChild("Button1")
-	local buttons2 = screenGui:WaitForChild("Buttons2")
-	local buttons3 = screenGui:WaitForChild("Buttons3")
+	local allButtons = screenGui:WaitForChild("HUD"):WaitForChild("AllButtons")
+	local button1 = allButtons:WaitForChild("Button1")
+	local buttons2 = allButtons:WaitForChild("Buttons2")
+	local buttons3 = allButtons:WaitForChild("Buttons3")
 	local button = button1:WaitForChild("JobButton") :: ImageButton
 	local frame = screenGui:WaitForChild("JobFrame") :: Frame
 	local exitButton = frame:WaitForChild("ExitButton") :: ImageButton

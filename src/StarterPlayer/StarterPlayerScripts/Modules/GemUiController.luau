@@ -1,6 +1,6 @@
 --!strict
 
--- Drives the gem HUD (PlayerGui.ScreenGui.GemDisplay.GemAmt): writes the
+-- Drives the gem HUD (PlayerGui.ScreenGui.HUD.AllDisplays.GemDisplay.GemAmt): writes the
 -- player's Gems balance into the GemAmt label as an abbreviated string
 -- (e.g. 1100 -> "1.1k"). Reads the Gems domain from DataService and
 -- re-renders whenever it changes.
@@ -37,7 +37,7 @@ end
 
 -- Resolve and store the GemAmt label of one GemDisplay, then paint it.
 local function bind(screenGui: Instance)
-	local gemDisplay = screenGui:WaitForChild("GemDisplay")
+	local gemDisplay = screenGui:WaitForChild("HUD"):WaitForChild("AllDisplays"):WaitForChild("GemDisplay")
 	gemLabel = gemDisplay:WaitForChild("GemAmt") :: TextLabel
 	render()
 end

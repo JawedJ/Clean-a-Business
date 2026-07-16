@@ -1,6 +1,7 @@
 --!strict
 
--- Drives the settings UI (PlayerGui.ScreenGui: Buttons3.SettingsButton + SettingsTab). The
+-- Drives the settings UI (PlayerGui.ScreenGui: HUD.AllButtons.Buttons3.SettingsButton +
+-- SettingsTab). The
 -- SettingsButton toggles the SettingsTab open/closed with the SAME slide + expand animation as
 -- the job board and upgrades shop (via the shared ExclusivePanels coordinator, so opening it
 -- closes whichever of those was open, and vice versa); the tab's ExitButton closes it.
@@ -257,7 +258,7 @@ end
 -- Resolve one ScreenGui's settings elements, wire the button + sliders, then apply current state.
 -- Yields on WaitForChild for a fresh clone.
 local function bind(screenGui: Instance)
-	local buttons3 = screenGui:WaitForChild("Buttons3")
+	local buttons3 = screenGui:WaitForChild("HUD"):WaitForChild("AllButtons"):WaitForChild("Buttons3")
 	local settingsButton = buttons3:WaitForChild("SettingsButton") :: ImageButton
 	local tab = screenGui:WaitForChild("SettingsTab") :: Frame
 	local exitButton = tab:WaitForChild("ExitButton") :: ImageButton
