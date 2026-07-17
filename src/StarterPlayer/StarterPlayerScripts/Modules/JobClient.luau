@@ -16,8 +16,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local CompletionWeights = require(ReplicatedStorage.SharedModules.CompletionWeights)
 local SurfaceManager = require(script.Parent.SurfaceManager)
 local DecalVisibility = require(script.Parent.DecalVisibility)
+local SpillVisibility = require(script.Parent.SpillVisibility)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local WallCleaned = Remotes:WaitForChild("WallCleaned") :: RemoteEvent
@@ -38,7 +40,9 @@ export type JobClient = typeof(setmetatable(
 		alive: boolean,
 		totalWalls: number,
 		totalDecals: number,
+		totalSpills: number,
 		cleanedDecals: number,
+		cleanedSpills: number,
 		-- Called with the new 0..1 completion after every clean (and once totals load), so
 		-- the completion UI can track progress. nil if no one is listening.
 		onProgress: ((number) -> ())?,
@@ -62,7 +66,9 @@ function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobCl
 	self.alive = true
 	self.totalWalls = 0
 	self.totalDecals = 0
+	self.totalSpills = 0
 	self.cleanedDecals = 0
+	self.cleanedSpills = 0
 	self.onProgress = onProgress
 
 	task.spawn(function()
@@ -119,6 +125,8 @@ function JobClient._load(self: JobClient)
 	-- Stain visibility (show/hide/restore) is owned by DecalVisibility, driven by
 	-- JobController; here we just read the total for the local completion %.
 	self.totalDecals = DecalVisibility.getStainCount(self.businessId)
+	-- Spill visibility works the same way (owned by SpillVisibility); read the total here.
+	self.totalSpills = SpillVisibility.getSpillCount(self.businessId)
 
 	if walls then
 		self.totalWalls = countChildren(walls, "BasePart")
@@ -163,6 +171,18 @@ function JobClient.onDecalCleaned(self: JobClient, _model: Model)
 	self:_notifyProgress()
 end
 
+-- Called by JobController when this client finishes mopping a spill (client-driven, like a
+-- wall). The hiding is done by JobController/SpillVisibility; here we just track progress for
+-- the completion bar. The server is told separately (MopController -> CleanSpill) for the
+-- reward + authoritative completion.
+function JobClient.onSpillCleaned(self: JobClient, _model: Model)
+	if not self.alive then
+		return
+	end
+	self.cleanedSpills += 1
+	self:_notifyProgress()
+end
+
 -- Live wall completion in whole-wall units (a half-washed wall counts as 0.5). This is what
 -- we report to the server for the finish-early reward, kept in the same units the server
 -- combines with its stain count.
@@ -172,26 +192,24 @@ end
 
 -- 0..1 fraction of this job cleaned locally (for UI). Walls contribute their live clean
 -- amount (a half-washed wall counts as half), so this moves smoothly mid-wall rather than
--- stepping only when a whole wall finishes. Stains are weighted at the business's DecalWeight
--- of the bar and walls at the rest; if the business has only one kind, that kind fills the
--- whole bar so completion still reaches 1. Mirrored server-side in JobServer.getCompletion.
+-- stepping only when a whole wall finishes. The three cleanable kinds (walls, stains, spills)
+-- are weighted by CompletionWeights so a business with only some kinds still fills the whole
+-- bar. Mirrored server-side in JobServer.getCompletion (same shared weighting).
 function JobClient.getCompletion(self: JobClient): number
 	local hasWalls = self.totalWalls > 0
 	local hasDecals = self.totalDecals > 0
-	if not hasWalls and not hasDecals then
-		return 0
-	end
-	local wallShare = if hasWalls then self:getWallAmount() / self.totalWalls else 0
-	local decalShare = if hasDecals then self.cleanedDecals / self.totalDecals else 0
-	if not hasDecals then
-		return wallShare
-	end
-	if not hasWalls then
-		return decalShare
-	end
+	local hasSpills = self.totalSpills > 0
 	local def = BusinessConfig[self.businessId]
-	local decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight
-	return wallShare * (1 - decalWeight) + decalShare * decalWeight
+	return CompletionWeights.combine({
+		hasWalls = hasWalls,
+		hasDecals = hasDecals,
+		hasSpills = hasSpills,
+		wallShare = if hasWalls then self:getWallAmount() / self.totalWalls else 0,
+		decalShare = if hasDecals then self.cleanedDecals / self.totalDecals else 0,
+		spillShare = if hasSpills then self.cleanedSpills / self.totalSpills else 0,
+		decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight,
+		spillWeight = (def and def.SpillWeight) or Config.DefaultSpillWeight,
+	})
 end
 
 function JobClient.destroy(self: JobClient)

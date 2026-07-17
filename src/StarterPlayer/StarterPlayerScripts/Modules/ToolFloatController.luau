@@ -35,6 +35,8 @@ local ToolFloatController = {}
 -- and a bit forward. Per-tool since models differ; falls back to DEFAULT_SHOULDER_OFFSET.
 local SHOULDER_OFFSET: { [string]: Vector3 } = {
 	startingBroom = Vector3.new(1.25, 0.8, 0),
+	-- Same as the default, pulled 1 stud closer to the player (Z: -0.75 -> 0.25).
+	mop = Vector3.new(1.65, 1.45, 0.25),
 }
 local DEFAULT_SHOULDER_OFFSET = Vector3.new(1.25, 1.0, -0.75)
 
@@ -46,6 +48,8 @@ local HANDLE_AIM_OFFSET: { [string]: CFrame } = {
 	-- The broom's Handle is modelled pointing along its own +X, so without a twist it aims
 	-- 90° to the right. Yaw it back so the broom's length points down the aim direction.
 	startingBroom = CFrame.Angles(0, math.rad(90), 0),
+	-- The mop shows the same 90°-to-the-right lean; yaw it back the same way.
+	mop = CFrame.Angles(0, math.rad(90), 0),
 }
 local DEFAULT_AIM_OFFSET = CFrame.identity
 
@@ -60,6 +64,9 @@ local HANDLE_PIVOT: { [string]: Vector3 } = {
 	-- +Z. Pin along -X to match, otherwise the default +Z pivot lands sideways and shoves
 	-- the broom off to the left.
 	startingBroom = Vector3.new(-2, 0, 0),
+	-- The mop uses the same yaw offset as the broom, so its "back" is likewise along -X;
+	-- pin there so the default +Z pivot doesn't rotate onto -X and shove it into the left arm.
+	mop = Vector3.new(-2, 0, 0),
 }
 local DEFAULT_PIVOT = Vector3.new(0, 0, 2)
 

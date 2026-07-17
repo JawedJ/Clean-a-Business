@@ -15,6 +15,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local JobClient = require(script.Parent.JobClient)
 local DecalVisibility = require(script.Parent.DecalVisibility)
+local SpillVisibility = require(script.Parent.SpillVisibility)
 
 local DecalCleaned = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("DecalCleaned") :: RemoteEvent
 
@@ -56,8 +57,21 @@ local function setJob(businessId: string?)
 	-- so stains hide the instant the job ends even before the JobClient finishes tearing
 	-- down, and so it's the single owner of stain visibility.
 	DecalVisibility.setActiveBusiness(businessId)
+	-- Spills are shown/hidden/reset (redo) the same way, owned by SpillVisibility.
+	SpillVisibility.setActiveBusiness(businessId)
 	if businessId then
 		current = JobClient.new(businessId, emitProgress)
+	end
+end
+
+-- Called by MopController when this client fully mops a spill. Hide it locally (independent of
+-- the JobClient's lifetime, so the spill that COMPLETES a job -- which tears the JobClient down --
+-- still vanishes) and, if a job is live, count it toward the completion bar. The server is told
+-- separately by MopController (CleanSpill) for the reward + authoritative completion.
+function JobController.onSpillCleaned(model: Model)
+	SpillVisibility.hideOne(model)
+	if current then
+		current:onSpillCleaned(model)
 	end
 end
 

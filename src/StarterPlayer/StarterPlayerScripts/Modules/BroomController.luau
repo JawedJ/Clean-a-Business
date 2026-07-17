@@ -65,7 +65,27 @@ local brushSound: SoundManager.SustainedSound? = nil
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
--- Raycast from the mouse into the world, ignoring the player's own character.
+-- Cleanable spills sit ON the surfaces the broom cleans; their query-only hitboxes would otherwise
+-- block the broom ray from reaching a stain behind/under them. Collect every business's
+-- CleanableSpills folder so the aim ray can exclude them (like the pressure washer does).
+local spillFolders: { Instance } = {}
+local function watchSpillFolders()
+	task.spawn(function()
+		local businesses = Workspace:WaitForChild(Config.BusinessesFolderName)
+		local function consider(desc: Instance)
+			if desc:IsA("Folder") and desc.Name == Config.SpillsFolderName and not table.find(spillFolders, desc) then
+				table.insert(spillFolders, desc)
+			end
+		end
+		for _, desc in businesses:GetDescendants() do
+			consider(desc)
+		end
+		businesses.DescendantAdded:Connect(consider)
+	end)
+end
+
+-- Raycast from the mouse into the world, ignoring the player's own character and every spill
+-- (so a spill's hitbox can't shadow a stain sitting under it).
 local function aim(): RaycastResult?
 	local cam = Workspace.CurrentCamera
 	if not cam then
@@ -73,7 +93,11 @@ local function aim(): RaycastResult?
 	end
 	local mouse = UserInputService:GetMouseLocation()
 	local ray = cam:ViewportPointToRay(mouse.X, mouse.Y)
-	rayParams.FilterDescendantsInstances = { localPlayer.Character :: Instance }
+	local exclude: { Instance } = { localPlayer.Character :: Instance }
+	for _, folder in spillFolders do
+		table.insert(exclude, folder)
+	end
+	rayParams.FilterDescendantsInstances = exclude
 	return Workspace:Raycast(ray.Origin, ray.Direction * getRange(), rayParams)
 end
 
@@ -217,6 +241,9 @@ end
 
 function BroomController.init()
 	brushSound = SoundManager.createSustained("BrushAudio")
+
+	-- Start collecting spill folders so the aim ray can pass through spills to the stains under them.
+	watchSpillFolders()
 
 	-- Re-accepting a job restores its stains (the same model instances) as cleanable
 	-- again, so forget which stains we've cleaned whenever the active job changes.

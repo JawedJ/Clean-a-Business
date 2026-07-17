@@ -15,6 +15,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local CompletionWeights = require(ReplicatedStorage.SharedModules.CompletionWeights)
 local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
@@ -40,10 +41,13 @@ export type JobServer = typeof(setmetatable(
 		startedAt: number,
 		totalWalls: number,
 		totalDecals: number,
+		totalSpills: number,
 		cleanedWalls: { [string]: boolean },
 		cleanedDecals: { [string]: boolean },
+		cleanedSpills: { [string]: boolean },
 		cleanedWallCount: number,
 		cleanedDecalCount: number,
+		cleanedSpillCount: number,
 		-- Client-reported wall completion in whole-wall units (e.g. 2.5 of 5 walls). Walls
 		-- are erased entirely client-side, so their PARTIAL progress can't be server-verified
 		-- -- we trust the client's report (throttled ~1/s, and refreshed when they finish
@@ -91,10 +95,13 @@ function JobServer.new(
 	self.startedAt = os.clock()
 	self.totalWalls = countChildren(building, Config.WallsFolderName, "BasePart")
 	self.totalDecals = countChildren(building, Config.DecalsFolderName, "Model")
+	self.totalSpills = countChildren(building, Config.SpillsFolderName, "Model")
 	self.cleanedWalls = {}
 	self.cleanedDecals = {}
+	self.cleanedSpills = {}
 	self.cleanedWallCount = 0
 	self.cleanedDecalCount = 0
+	self.cleanedSpillCount = 0
 	self.reportedWallAmount = 0
 	self.completed = false
 	self.alive = true
@@ -144,14 +151,18 @@ function JobServer.isDecalCleaned(self: JobServer, surfaceId: string): boolean
 	return self.cleanedDecals[surfaceId] == true
 end
 
+function JobServer.isSpillCleaned(self: JobServer, surfaceId: string): boolean
+	return self.cleanedSpills[surfaceId] == true
+end
+
 -- Total cleanables, and how many are fully done server-side (deduped WallCleaned +
 -- validated stains) -- the authoritative count the full-completion trigger uses.
 function JobServer.getTotal(self: JobServer): number
-	return self.totalWalls + self.totalDecals
+	return self.totalWalls + self.totalDecals + self.totalSpills
 end
 
 function JobServer.getCleaned(self: JobServer): number
-	return self.cleanedWallCount + self.cleanedDecalCount
+	return self.cleanedWallCount + self.cleanedDecalCount + self.cleanedSpillCount
 end
 
 -- Record the client's latest wall completion (whole-wall units). Client-trusted -- clamp
@@ -174,21 +185,21 @@ end
 function JobServer.getCompletion(self: JobServer): number
 	local hasWalls = self.totalWalls > 0
 	local hasDecals = self.totalDecals > 0
-	if not hasWalls and not hasDecals then
-		return 0
-	end
+	local hasSpills = self.totalSpills > 0
+	-- Walls use the client's live report, floored at the server-verified full-wall count so it
+	-- can never pay LESS than what we've confirmed. Stains + spills are server-authoritative.
 	local walls = math.clamp(self.reportedWallAmount, self.cleanedWallCount, self.totalWalls)
-	local wallShare = if hasWalls then walls / self.totalWalls else 0
-	local decalShare = if hasDecals then self.cleanedDecalCount / self.totalDecals else 0
-	if not hasDecals then
-		return wallShare
-	end
-	if not hasWalls then
-		return decalShare
-	end
 	local def = BusinessConfig[self.businessId]
-	local decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight
-	return wallShare * (1 - decalWeight) + decalShare * decalWeight
+	return CompletionWeights.combine({
+		hasWalls = hasWalls,
+		hasDecals = hasDecals,
+		hasSpills = hasSpills,
+		wallShare = if hasWalls then walls / self.totalWalls else 0,
+		decalShare = if hasDecals then self.cleanedDecalCount / self.totalDecals else 0,
+		spillShare = if hasSpills then self.cleanedSpillCount / self.totalSpills else 0,
+		decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight,
+		spillWeight = (def and def.SpillWeight) or Config.DefaultSpillWeight,
+	})
 end
 
 function JobServer.isComplete(self: JobServer): boolean
@@ -284,7 +295,11 @@ function JobServer._checkComplete(self: JobServer)
 	if self.completed or self:getTotal() == 0 then
 		return
 	end
-	if self.cleanedWallCount >= self.totalWalls and self.cleanedDecalCount >= self.totalDecals then
+	if
+		self.cleanedWallCount >= self.totalWalls
+		and self.cleanedDecalCount >= self.totalDecals
+		and self.cleanedSpillCount >= self.totalSpills
+	then
 		self:complete()
 	end
 end
@@ -306,6 +321,16 @@ function JobServer.markDecalCleaned(self: JobServer, surfaceId: string): boolean
 	end
 	self.cleanedDecals[surfaceId] = true
 	self.cleanedDecalCount += 1
+	self:_checkComplete()
+	return true
+end
+
+function JobServer.markSpillCleaned(self: JobServer, surfaceId: string): boolean
+	if self.cleanedSpills[surfaceId] then
+		return false
+	end
+	self.cleanedSpills[surfaceId] = true
+	self.cleanedSpillCount += 1
 	self:_checkComplete()
 	return true
 end

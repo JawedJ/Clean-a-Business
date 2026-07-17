@@ -9,7 +9,7 @@ export type Item = {
 	Level: number, -- upgrade level; starts at 0, capped at ItemUpgrades.MAX_LEVEL
 
 	Range: number?, -- max cleaning distance (studs)
-	Power: number?,
+	Power: number?, -- mop: Transparency added per second while cleaning a spill (0..1/s)
 	UseTime: number?,
 	Radius: number?,
 	SlotNumber: number?,
@@ -27,6 +27,7 @@ export type Item = {
 	UpgradeRange: number?,
 	UpgradeRadius: number?,
 	UpgradeUseTime: number?,
+	UpgradePower: number?, -- how much each upgrade ADDS to the mop's Power (faster fade)
 }
 
 -- a funciton will be made to compute the xp requirements for the next level, using some formula
@@ -71,6 +72,11 @@ export type Business = {
 	-- most 5 (the board authors that many slots). Optional -- omitted businesses need no tools.
 	-- Static catalog property (BusinessConfig), not a per-player record field.
 	RequiredItems: { string }?,
+	-- Fraction (0..1) of the completion bar this business's cleanable SPILLS (mop targets) fill,
+	-- when it has any. Optional -- omitted businesses with spills use CleaningConfig.DefaultSpillWeight;
+	-- businesses without spills ignore it entirely. Static catalog property (BusinessConfig), like
+	-- DecalWeight, not a per-player record field. See CompletionWeights.
+	SpillWeight: number?,
 }
 
 
@@ -165,6 +171,21 @@ local DataTemplate = {
 		BaseUpgradeCost = 100,
 		UpgradeRange = 3,
 		UpgradeRadius = 0.025,
+		},
+
+		["mop"] = {
+		Name = "Mop",
+		Equipped = false,
+		Unlocked = true,
+		Cost = 0,
+		UniqueID = "mop",
+		Level = 0,
+		SlotNumber = 3,
+		Power = 0.4, -- Transparency/sec while cleaning: a spill fully fades in ~2.5s at level 0
+		Range = 30,
+		BaseUpgradeCost = 250,
+		UpgradePower = 0.08, -- each level fades faster
+		UpgradeRange = 5,
 		},
 
 	} :: { [string]: Item },

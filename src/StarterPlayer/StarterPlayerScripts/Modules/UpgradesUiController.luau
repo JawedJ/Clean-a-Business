@@ -222,6 +222,19 @@ local function renderSlot(slot: Instance)
 		end
 	end
 
+	-- Power is the mop's fade rate (Transparency/sec). Optional per item, shown/hidden like the
+	-- other stat labels (only the mop has it).
+	local powerLabel = slot:FindFirstChild("Power")
+	if powerLabel and powerLabel:IsA("TextLabel") then
+		local power = item.Power
+		if power then
+			powerLabel.Text = string.format("Power: %.2f", power)
+			powerLabel.Visible = true
+		else
+			powerLabel.Visible = false
+		end
+	end
+
 	local textInfo = slot:FindFirstChild("TextInfo")
 	if textInfo then
 		local levelLabel = textInfo:FindFirstChild("Level")

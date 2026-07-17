@@ -96,6 +96,9 @@ local rayExclude: { Instance } = {}
 local IGNORED_FOLDER_NAMES: { [string]: boolean } = {
 	[Config.InteriorFolderName] = true,
 	[Config.DecalsFolderName] = true,
+	-- Cleanable spills sit ON the walls/floors; their query-only hitboxes would otherwise block
+	-- the wash from reaching the wall behind/under them, so the ray passes through them too.
+	[Config.SpillsFolderName] = true,
 }
 
 local function rebuildRayExclude()

@@ -39,6 +39,22 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		UpgradeRange = 3,
 		UpgradeRadius = 0.025,
 	},
+
+	mop = {
+		Name = "Mop",
+		Equipped = false,
+		Unlocked = true,
+		Cost = 0,
+		UniqueID = "mop",
+		Level = 0,
+		Image = "rbxassetid://85297772324862",
+		SlotNumber = 3,
+		Power = 0.4, -- Transparency/sec while cleaning: a spill fully fades in ~2.5s at level 0
+		Range = 30,
+		BaseUpgradeCost = 250,
+		UpgradePower = 0.08, -- each upgrade fades spills faster
+		UpgradeRange = 5,
+	},
 }
 
 return ToolConfig

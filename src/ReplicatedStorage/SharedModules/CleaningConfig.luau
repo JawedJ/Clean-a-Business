@@ -39,6 +39,24 @@ local CleaningConfig = {
 	HitboxName = "Hitbox",
 	SurfaceIdAttribute = "surfaceId",
 
+	-- Cleanable spills (mop targets) live alongside the walls + stains:
+	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableSpills.<model>
+	-- Each <model> is a spill whose parts the player mops away by holding click: the mop
+	-- fades the whole model's Transparency toward 1 (invisible) at the mop's Power per
+	-- second, then hides it locally once fully faded. Each spill carries a SpillSurfaceIdAttribute
+	-- so the server can dedupe which spills a player has already cleaned this job.
+	--
+	-- A spill's visible geometry is often CanQuery=false (a thin puddle the ray would pass
+	-- through), so a spill model can carry an invisible child BasePart named HitboxName (the same
+	-- name the stains use) purely to give the mop ray something to hit. The mop resolves ANY
+	-- BasePart in the model to the spill, so a hitbox is optional -- it just makes thin spills
+	-- easier to aim at. The hitbox is excluded from the fade (see MopController).
+	SpillsFolderName = "CleanableSpills",
+	-- Attribute holding a spill's unique id, authored on the spill Model. Capitalised "SurfaceId"
+	-- -- distinct from the stains'/walls' lowercase SurfaceIdAttribute -- because that's how the
+	-- spill models are authored in Studio.
+	SpillSurfaceIdAttribute = "SurfaceId",
+
 	-- Plots are still a thing: each joining player is assigned a personal plot (their
 	-- home/spawn base) named Plot1..Plot(PlotCount), living under one Workspace folder:
 	--   Workspace.<PlotsFolderName>.Plot(i)
@@ -142,6 +160,14 @@ local CleaningConfig = {
 	-- set its own DecalWeight. Both the client bar (JobClient) and the server's finish-early
 	-- payout (JobServer) read this so the two stay in sync.
 	DefaultDecalWeight = 0.2,
+
+	-- Fraction (0..1) of the completion bar filled by a business's cleanable SPILLS (mop
+	-- targets), when it has any. Used for any business whose BusinessConfig entry doesn't set
+	-- its own SpillWeight. Spills carve out this slice; whatever's left (1 - SpillWeight) is
+	-- split between walls and decals exactly as before (see CompletionWeights), so a business
+	-- with no spills is unaffected. Both the client bar (JobClient) and the server payout
+	-- (JobServer) read this through CompletionWeights so the two stay in sync.
+	DefaultSpillWeight = 0.2,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
 	-- Default for every wall; an individual CleanableWall part can override it with a

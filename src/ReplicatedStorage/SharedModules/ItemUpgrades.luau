@@ -56,6 +56,9 @@ function ItemUpgrades.applyUpgrade(item: Item): Item
 	if item.UpgradeUseTime and item.UseTime then
 		upgraded.UseTime = math.max(MIN_USE_TIME, item.UseTime - item.UpgradeUseTime)
 	end
+	if item.UpgradePower and item.Power then
+		upgraded.Power = item.Power + item.UpgradePower
+	end
 	return upgraded
 end
 

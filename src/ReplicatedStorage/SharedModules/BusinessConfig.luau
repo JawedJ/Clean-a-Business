@@ -19,8 +19,8 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		-- Stains fill 25% of the completion bar here, walls the other 75%.
 		DecalWeight = 0.25,
 		RequiredLevel = 5,
-		-- Stains here need the broom, walls the pressure washer, so both are required.
-		RequiredItems = { "pressureWasher", "startingBroom" },
+		-- Stains need the broom, walls the pressure washer, spills the mop -- all three required.
+		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
 	},
 
 	starbucks = {
