@@ -17,6 +17,7 @@ local CashUiController = require(Modules:WaitForChild("CashUiController"))
 local GemUiController = require(Modules:WaitForChild("GemUiController"))
 local JobUiController = require(Modules:WaitForChild("JobUiController"))
 local WarehouseBoardProximity = require(Modules:WaitForChild("WarehouseBoardProximity"))
+local BoardTextVisibility = require(Modules:WaitForChild("BoardTextVisibility"))
 local UpgradesUiController = require(Modules:WaitForChild("UpgradesUiController"))
 local SkillsUiController = require(Modules:WaitForChild("SkillsUiController"))
 local PurchaseSoundController = require(Modules:WaitForChild("PurchaseSoundController"))
@@ -82,6 +83,8 @@ safeInit("JobUiController", JobUiController.init)
 -- Open/close the job board and upgrades shop as the player walks in/out of their warehouse
 -- board hitboxes.
 safeInit("WarehouseBoardProximity", WarehouseBoardProximity.init)
+-- Show each plot's board text (Job/Upgrades billboards) only on its owner's client.
+safeInit("BoardTextVisibility", BoardTextVisibility.init)
 safeInit("UpgradesUiController", UpgradesUiController.init)
 safeInit("SkillsUiController", SkillsUiController.init)
 safeInit("PurchaseSoundController", PurchaseSoundController.init)

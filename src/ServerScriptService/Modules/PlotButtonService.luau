@@ -269,6 +269,10 @@ local SPAWN_ANIM_DURATION = 1
 local SPAWN_ANIM_HEIGHT = 8
 local SPAWN_ANIM_START_TRANSPARENCY = 0.9
 
+-- Reservation parts are created spread across this many frames instead of all on one frame, so a
+-- spawnable with many parts/sub-models doesn't cause a spawn-time hitch.
+local HITBOX_SPAWN_FRAMES = 4
+
 -- Build one invisible collision blocker that reserves a chunk of a spawnable's final footprint
 -- during its drop-in, so a player standing where it lands isn't trapped by the falling
 -- (non-colliding) model. Parented OUTSIDE the model so moving the model doesn't drag it. Named
@@ -287,23 +291,22 @@ local function makeLandingHitbox(parent: Instance, cframe: CFrame, size: Vector3
 	return hitbox
 end
 
--- Reserve a spawnable's landing footprint. A single box around the whole spawnable spans the empty
--- gap between sub-models that sit apart from each other, so instead we descend to each *leaf* model
--- (one with no Models of its own) and give it its own box, plus a box per loose BasePart that isn't
--- inside any sub-model. A spawnable with no sub-models is itself a leaf and gets the one box it
--- always did.
-local function makeLandingHitboxes(model: Instance): { BasePart }
-	local parent = model.Parent
-	if not parent then
-		return {}
-	end
+-- A landing-footprint box to be created: where and how big. Collected up front (cheap property
+-- reads) so the actual Hitbox parts can be spawned spread across a few frames.
+type BoxSpec = { cframe: CFrame, size: Vector3 }
 
-	local hitboxes: {BasePart} = {}
+-- Compute a spawnable's landing-footprint boxes WITHOUT creating any parts yet. A single box around
+-- the whole spawnable spans the empty gap between sub-models that sit apart from each other, so
+-- instead we descend to each *leaf* model (one with no Models of its own) and give it its own box,
+-- plus a box per loose BasePart that isn't inside any sub-model. A spawnable with no sub-models is
+-- itself a leaf and gets the one box it always did. The caller turns these specs into real parts.
+local function collectLandingBoxSpecs(model: Instance): { BoxSpec }
+	local specs: { BoxSpec } = {}
 
 	local function addBox(cframe: CFrame, size: Vector3)
 		-- Empty models report a zero-size box; nothing to reserve.
 		if size.Magnitude > 0 then
-			table.insert(hitboxes, makeLandingHitbox(parent, cframe, size))
+			table.insert(specs, { cframe = cframe, size = size })
 		end
 	end
 
@@ -337,7 +340,7 @@ local function makeLandingHitboxes(model: Instance): { BasePart }
 	end
 
 	descend(model)
-	return hitboxes
+	return specs
 end
 
 local function destroyHitboxes(hitboxes: { BasePart })
@@ -364,7 +367,9 @@ local function animateSpawnIn(state: PlotState, model: Instance)
 		return
 	end
 
-	local hitboxes = makeLandingHitboxes(model)
+	local parent = model.Parent
+	local boxSpecs = if parent then collectLandingBoxSpecs(model) else {}
+	local hitboxes: { BasePart } = {}
 
 	-- Everything we fade, with its authored (target) transparency captured at build in originalProps.
 	-- Start each a fixed amount MORE transparent than its target (never less, so a semi-transparent
@@ -404,6 +409,12 @@ local function animateSpawnIn(state: PlotState, model: Instance)
 
 	task.spawn(function()
 		local elapsed = 0
+		-- Spawn the reservation parts a chunk per frame over the first HITBOX_SPAWN_FRAMES frames
+		-- rather than all at once, so a many-part spawnable doesn't spike on a single frame. The
+		-- model starts SPAWN_ANIM_HEIGHT studs up and only nears the ground late in the drop, so
+		-- reaching full coverage a few frames in can't trap anyone.
+		local created = 0
+		local perFrame = math.max(1, math.ceil(#boxSpecs / HITBOX_SPAWN_FRAMES))
 		while elapsed < SPAWN_ANIM_DURATION do
 			local dt = RunService.Heartbeat:Wait()
 			-- Cancelled (plot reset or this spawnable no longer active): restore the resting pose,
@@ -413,6 +424,14 @@ local function animateSpawnIn(state: PlotState, model: Instance)
 				setVisible(model, false)
 				destroyHitboxes(hitboxes)
 				return
+			end
+			if created < #boxSpecs and parent then
+				local stop = math.min(created + perFrame, #boxSpecs)
+				for i = created + 1, stop do
+					local spec = boxSpecs[i]
+					table.insert(hitboxes, makeLandingHitbox(parent, spec.cframe, spec.size))
+				end
+				created = stop
 			end
 			elapsed += dt
 			local alpha = math.min(elapsed / SPAWN_ANIM_DURATION, 1)
