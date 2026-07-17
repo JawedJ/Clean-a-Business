@@ -48,6 +48,16 @@ local DecalCleaningService = {}
 -- broom is usable again. Tracked server-side, never trusted from the client.
 local activeClean: { [Player]: boolean } = {}
 
+-- Latest click that arrived while a clean was still active. Because the server's timer
+-- starts (and therefore ends) about half a ping AFTER the client's cosmetic bar, an honest
+-- click on the NEXT stain -- sent the instant the client's bar finished -- can reach us just
+-- before the previous timer's completion callback clears activeClean. Dropping that click
+-- silently strands the client: it already showed a bar and marked the stain started, but no
+-- clean ever runs and no DecalCleaned ever comes. So instead of dropping, remember the click
+-- and process it as soon as the current clean resolves. Only one is kept (newest wins);
+-- cleans stay strictly one-at-a-time, so this gives exploiters nothing.
+local pendingClick: { [Player]: Instance } = {}
+
 -- True if the player currently has the broom equipped (its Tool is parented under their
 -- character while equipped).
 local function hasBroomEquipped(player: Player): boolean
@@ -81,53 +91,65 @@ local function validate(player: Player, target: Instance): DecalResolver.DecalId
 	return identity
 end
 
-function DecalCleaningService.init()
-	CleanDecal.OnServerEvent:Connect(function(player, target)
-		if typeof(target) ~= "Instance" then
-			return
-		end
+-- Handle one click on a stain: validate, run the authoritative UseTime timer, and on
+-- completion reward + confirm. Recurses into the pending click (if one queued up) once
+-- the timer resolves, so a boundary click is processed instead of lost.
+local function tryStartClean(player: Player, target: Instance)
+	-- One clean at a time: hold the click until the current timer finishes.
+	if activeClean[player] then
+		pendingClick[player] = target
+		return
+	end
 
-		-- One clean at a time: ignore the click until the current timer finishes.
-		if activeClean[player] then
-			return
-		end
+	if not hasBroomEquipped(player) then
+		return
+	end
 
-		if not hasBroomEquipped(player) then
-			return
-		end
+	local identity = validate(player, target)
+	if not identity then
+		return
+	end
 
-		local identity = validate(player, target)
-		if not identity then
-			return
-		end
+	activeClean[player] = true
 
-		activeClean[player] = true
+	-- The SERVER waits out the UseTime; the client cannot shortcut it.
+	task.delay(getUseTime(player), function()
+		activeClean[player] = nil
 
-		-- The SERVER waits out the UseTime; the client cannot shortcut it.
-		task.delay(getUseTime(player), function()
-			activeClean[player] = nil
-
-			-- Re-validate at completion: the player's job (or their claim to this stain)
-			-- may have changed during the wait.
-			if identity.model.Parent == nil then
-				return
-			end
-			local job = JobService.getJob(player)
-			if not job or not validate(player, identity.model) then
-				return
-			end
-
+		-- Re-validate at completion: the player's job (or their claim to this stain)
+		-- may have changed during the wait.
+		local job = JobService.getJob(player)
+		if identity.model.Parent ~= nil and job and validate(player, identity.model) then
 			-- Reward them, tell THEIR client to hide its copy of the shared model, and
 			-- record the stain in the job (which may complete it). The server model is
 			-- left intact so other players can still clean it independently.
 			ProgressionService.reward(player, DECAL_XP, DECAL_CASH)
 			DecalCleaned:FireClient(player, identity.model)
 			job:markDecalCleaned(identity.surfaceId)
-		end)
+		end
+
+		-- A click that raced this clean's completion was parked in pendingClick; now
+		-- that the broom is free, treat it as if it just arrived. (Runs after
+		-- markDecalCleaned so a duplicate click on THIS stain fails validation.)
+		local queued = pendingClick[player]
+		pendingClick[player] = nil
+		if queued then
+			tryStartClean(player, queued)
+		end
+	end)
+end
+
+function DecalCleaningService.init()
+	CleanDecal.OnServerEvent:Connect(function(player, target)
+		if typeof(target) ~= "Instance" then
+			return
+		end
+		tryStartClean(player, target)
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)
 		activeClean[player] = nil
+		pendingClick[player] = nil
 	end)
 end
 

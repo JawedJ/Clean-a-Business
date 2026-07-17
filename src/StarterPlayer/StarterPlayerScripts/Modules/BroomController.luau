@@ -23,6 +23,11 @@ local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Clean
 
 local TOOL_ID = ToolConfig.startingBroom.UniqueID
 
+-- How long after the cosmetic bar ends we wait for the server's DecalCleaned before
+-- assuming the click was rejected and making the stain clickable again. Generous vs.
+-- ping so a merely-late confirmation doesn't reopen the phantom-reclean window.
+local SERVER_CONFIRM_GRACE = 2
+
 -- Live broom stats for this player, read fresh so tool upgrades take effect
 -- immediately, falling back to the static ToolConfig default.
 local function getRange(): number
@@ -145,6 +150,16 @@ local function startClean(model: Model, hitbox: BasePart)
 		end
 		gui:Destroy()
 		busy = false
+
+		-- Safety net: if the server rejected this click (it can race the previous
+		-- clean's completion and be dropped), no DecalCleaned ever arrives and the
+		-- startedClean entry would brick this stain for the rest of the job. Once the
+		-- server has had ample time to confirm, forget the stain so it's clickable
+		-- again. Harmless when the clean DID succeed: the confirmed stain is hidden
+		-- off-world by then and can't be hit by the aim raycast anyway.
+		task.delay(SERVER_CONFIRM_GRACE, function()
+			startedClean[model] = nil
+		end)
 	end)
 end
 
