@@ -103,6 +103,12 @@ end
 -- Equip the tool in `slot`. Never unequips: if that tool is already in hand we leave it,
 -- and we only ever EquipTool, so a press/click can't leave the player empty-handed.
 local function equipSlot(slot: number)
+	-- Only equippable while on a job. Off-job (in the plot/lobby, e.g. right after GoHome)
+	-- the ActiveJob attribute is already cleared, so a stray number-key press here would
+	-- otherwise strand a tool in hand with nothing left to unequip it (stow already ran).
+	if not hasActiveJob() then
+		return
+	end
 	local info = slotInfo[slot]
 	if not info then
 		return
