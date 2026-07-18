@@ -32,17 +32,21 @@ local SIZE_VEC = Vector2.new(IMAGE_SIZE, IMAGE_SIZE)
 --   * `uComp`/`uSign` say image-right (+u) runs along uSign * local uComp axis.
 --   * `vComp`/`vSign` say image-up runs along vSign * local vComp axis (v is
 --     image-DOWN, so v = 0.5 - vSign * lp[vComp] / Size[vComp]).
--- These are Roblox's own decal texture orientation for each face (right x up =
--- outward normal), anchored on the known-good Left case, so the painted pixels line
--- up with what the Decal displays. uComp/vComp also drive the brush-radius scaling,
--- since a world-space circle becomes an ellipse on a non-square face.
+-- These are the SURFACEGUI canvas orientation for each face (right x up = outward
+-- normal), so the painted pixels line up with what the SurfaceGui displays. The side
+-- faces share the Decal texture frame (anchored on the known-good Left case), but the
+-- SurfaceGui canvas on Top/Bottom is rotated 90 degrees relative to a Decal's -- on Top
+-- the canvas up points toward -X (verified live: with the old decal-frame Top map the
+-- erase tracked 90 degrees off the aim). Bottom mirrors Top by symmetry but is untested
+-- (no overlay is authored on a downward face). uComp/vComp also drive the brush-radius
+-- scaling, since a world-space circle becomes an ellipse on a non-square face.
 local FACE_MAPS = {
 	[Enum.NormalId.Left] = { uComp = "Z", uSign = 1, vComp = "Y", vSign = 1 },
 	[Enum.NormalId.Right] = { uComp = "Z", uSign = -1, vComp = "Y", vSign = 1 },
 	[Enum.NormalId.Front] = { uComp = "X", uSign = -1, vComp = "Y", vSign = 1 },
 	[Enum.NormalId.Back] = { uComp = "X", uSign = 1, vComp = "Y", vSign = 1 },
-	[Enum.NormalId.Top] = { uComp = "X", uSign = -1, vComp = "Z", vSign = 1 },
-	[Enum.NormalId.Bottom] = { uComp = "X", uSign = 1, vComp = "Z", vSign = 1 },
+	[Enum.NormalId.Top] = { uComp = "Z", uSign = -1, vComp = "X", vSign = -1 },
+	[Enum.NormalId.Bottom] = { uComp = "Z", uSign = 1, vComp = "X", vSign = -1 },
 }
 -- Used when a wall has no Texture to point us at a face (preserves the old behaviour).
 local DEFAULT_FACE = Enum.NormalId.Left
@@ -170,7 +174,7 @@ export type CleanableSurface = typeof(setmetatable(
 	{} :: {
 		part: BasePart,
 		image: EditableImage,
-		decal: Decal,
+		gui: SurfaceGui,
 		face: Enum.NormalId,
 		faceMap: { uComp: string, uSign: number, vComp: string, vSign: number },
 		pixels: buffer,
@@ -217,15 +221,31 @@ function CleanableSurface.new(part: BasePart): CleanableSurface
 	local image = AssetService:CreateEditableImage({ Size = SIZE_VEC })
 	image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, pixels)
 
-	local decal = Instance.new("Decal")
-	decal.Face = face
-	decal.TextureContent = Content.fromObject(image)
-	decal.Parent = part
+	-- SurfaceGui instead of a Decal: the engine culls Decals by projected screen size
+	-- scaled with graphics quality, so ground overlays vanished at grazing camera angles
+	-- -- worst on mobile / in triangle-heavy areas where adaptive quality drops. SurfaceGuis
+	-- render in the UI pass and are never quality-culled (and can't z-fight the wall's own
+	-- coplanar Texture either). LightInfluence 1 keeps the dirt lit like a decal was.
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = face
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+	gui.CanvasSize = Vector2.new(IMAGE_SIZE, IMAGE_SIZE)
+	gui.LightInfluence = 1
+	gui.AlwaysOnTop = false
+
+	local label = Instance.new("ImageLabel")
+	label.BackgroundTransparency = 1
+	label.BorderSizePixel = 0
+	label.Size = UDim2.fromScale(1, 1)
+	label.ImageContent = Content.fromObject(image)
+	label.Parent = gui
+
+	gui.Parent = part
 
 	return setmetatable({
 		part = part,
 		image = image,
-		decal = decal,
+		gui = gui,
 		face = face,
 		faceMap = faceMap,
 		pixels = pixels,
@@ -341,7 +361,7 @@ function CleanableSurface.clean(
 	local justCleaned = false
 	if self.cleanedCount / self.dirtyTotal >= self.threshold then
 		self.cleaned = true
-		self.decal:Destroy()
+		self.gui:Destroy()
 		-- The wall's done -- tear the glow overlay down with it.
 		self:setGlow(false)
 		justCleaned = true
@@ -382,7 +402,7 @@ function CleanableSurface.setGlow(self: CleanableSurface, enabled: boolean)
 
 	if enabled then
 		-- Nothing to glow if the wall's already finished (its dirt overlay is gone).
-		if self.cleaned or not self.decal then
+		if self.cleaned or not self.gui then
 			return
 		end
 		-- buffer.create zero-inits, so already-clean pixels stay transparent with no write.
@@ -408,8 +428,8 @@ function CleanableSurface.setGlow(self: CleanableSurface, enabled: boolean)
 	else
 		self.glowBuffer = nil
 		self.glowing = false
-		-- Restore the true dirt look (image survives until destroy(); decal may already be gone
-		-- on a wall that finished, in which case this upload is simply invisible).
+		-- Restore the true dirt look (image survives until destroy(); the SurfaceGui may already
+		-- be gone on a wall that finished, in which case this upload is simply invisible).
 		if self.image then
 			self.image:WritePixelsBuffer(Vector2.zero, SIZE_VEC, self.pixels)
 		end
@@ -419,8 +439,8 @@ end
 function CleanableSurface.destroy(self: CleanableSurface)
 	-- Drop the reveal glow first (no-op if it isn't up) so nothing tries to re-upload after.
 	self:setGlow(false)
-	if self.decal then
-		self.decal:Destroy()
+	if self.gui then
+		self.gui:Destroy()
 	end
 	if self.image then
 		self.image:Destroy()
