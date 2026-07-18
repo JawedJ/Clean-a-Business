@@ -279,18 +279,36 @@ local function stopFiring()
 	setMopSound(false)
 end
 
+-- Mobile only: clean whenever the mop is equipped AND a job is active, and stop otherwise -- the
+-- player just LOOKS at a spill (the aim is the crosshair, see aim()) instead of holding tap.
+-- Mirrors the pressure washer's mobile handling exactly: reconciled from BOTH the Equipped/
+-- Unequipped events AND the ActiveJob attribute (wired in init), so it starts on a fresh job and
+-- stops the instant one ends -- equip alone can't gate it, since the mop can stay equipped through
+-- the end-of-job JobSummary. Desktop/console keep hold-to-clean via Activated/Deactivated.
+local function refreshMobileFiring()
+	if not IS_MOBILE then
+		return
+	end
+	local shouldFire = equippedTool ~= nil and hasActiveJob()
+	if shouldFire == firing then
+		return
+	end
+	firing = shouldFire
+	if not shouldFire then
+		setMopSound(false)
+	end
+end
+
 local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
-		-- Mobile cleans continuously while equipped + on a job (see IS_MOBILE); desktop/console
+		-- Mobile cleans continuously while equipped + on a job (look-to-clean); desktop/console
 		-- wait for a hold.
-		if IS_MOBILE then
-			startFiring()
-		end
+		refreshMobileFiring()
 	end)
 	tool.Activated:Connect(function()
 		if IS_MOBILE then
-			return -- taps are look/aim gestures on touch; firing is tied to equip
+			return -- taps are look/aim gestures on touch; firing is tied to equip + job
 		end
 		if equippedTool == tool then
 			startFiring()
@@ -305,7 +323,11 @@ local function bindTool(tool: Tool)
 	tool.Unequipped:Connect(function()
 		if equippedTool == tool then
 			equippedTool = nil
-			stopFiring()
+			if IS_MOBILE then
+				refreshMobileFiring()
+			else
+				stopFiring()
+			end
 		end
 	end)
 end
@@ -341,6 +363,9 @@ function MopController.init()
 		table.clear(bases)
 		table.clear(doneSpills)
 		clearAllBars()
+		-- On mobile, start/stop look-to-clean with the job just like the pressure washer, so a mop
+		-- already equipped when a fresh job begins fires without a tap (and stops when it ends).
+		refreshMobileFiring()
 	end)
 
 	watch(localPlayer)

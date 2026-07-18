@@ -139,6 +139,16 @@ local DataTemplate = {
 			XpReward = 500
 		},
 
+		["apple"] = {
+			BaseReward = 1000,
+			Unlocked = false,
+			Name = "Starbucks",
+			UniqueID = "starbucks",
+			Completions = 0,
+			XpReward = 500
+		},
+
+		
 
 	} :: { [string]: Business },
 

@@ -57,6 +57,30 @@ local function buildingFor(businessId: string): Instance?
 	return folder and folder:FindFirstChild(businessId)
 end
 
+-- Keep every shared business building fully loaded on every client, no matter how far away
+-- they roam. The buildings are cleaned via per-client EditableImage overlays parented to the
+-- wall parts (see SurfaceManager); with StreamingEnabled a Default-streaming building can cull
+-- a wall part mid-job, taking its client-side overlay decal with it -- the wall visually goes
+-- blank even though the server's completion tracking (JobServer) is untouched, so the player
+-- keeps getting paid for cleaning a wall they can no longer see. Marking the buildings
+-- Persistent removes that whole class of streaming despawn. Applied to any Model added to the
+-- Businesses folder later too, so a newly authored business needs no extra wiring.
+local function pinBusinessesPersistent()
+	local folder = businessesFolder()
+	if not folder then
+		return
+	end
+	local function pin(inst: Instance)
+		if inst:IsA("Model") then
+			inst.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		end
+	end
+	for _, child in folder:GetChildren() do
+		pin(child)
+	end
+	folder.ChildAdded:Connect(pin)
+end
+
 -- Drop the character onto a building's TeleportPart (upright, slightly above it),
 -- facing the same direction as the part's Front face (flattened so we never pitch/roll).
 local function teleportToJob(character: Model, building: Instance)
@@ -186,6 +210,10 @@ local function goHome(player: Player)
 end
 
 function JobService.init()
+	-- Buildings never stream out, so their cleanable geometry (and the client overlays on it)
+	-- can't despawn mid-job. See pinBusinessesPersistent.
+	pinBusinessesPersistent()
+
 	AcceptJob.OnServerEvent:Connect(accept)
 	FinishEarly.OnServerEvent:Connect(finishEarly)
 	WallCompletion.OnServerEvent:Connect(reportWallCompletion)
