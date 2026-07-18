@@ -207,6 +207,16 @@ local DataTemplate = {
 		UpgradeRange = 5,
 		},
 
+		["vacuum"] = {
+		Name = "Vacuum",
+		Equipped = false,
+		Unlocked = true,
+		Cost = 0,
+		UniqueID = "vacuum",
+		Level = 0,
+		SlotNumber = 4,
+		},
+
 	} :: { [string]: Item },
 
 

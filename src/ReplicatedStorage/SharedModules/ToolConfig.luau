@@ -55,6 +55,16 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		UpgradePower = 0.08, -- each upgrade fades spills faster
 		UpgradeRange = 5,
 	},
+
+	vacuum = {
+		Name = "Vacuum",
+		Equipped = false,
+		Unlocked = true,
+		Cost = 0,
+		UniqueID = "vacuum",
+		Level = 0,
+		SlotNumber = 4,
+	},
 }
 
 return ToolConfig

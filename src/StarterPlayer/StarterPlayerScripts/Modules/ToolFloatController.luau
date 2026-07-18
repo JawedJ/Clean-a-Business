@@ -37,6 +37,9 @@ local SHOULDER_OFFSET: { [string]: Vector3 } = {
 	startingBroom = Vector3.new(1.25, 0.8, 0),
 	-- Same as the default, pulled 1 stud closer to the player (Z: -0.75 -> 0.25).
 	mop = Vector3.new(1.65, 1.45, 0.25),
+	-- Default offset, moved 1 stud left (X: 1.25 -> 0.25) and 1 stud forward (Z: -0.75 ->
+	-- -1.75) so it doesn't sit too far right or too close to the player.
+	vacuum = Vector3.new(-0.25, 0.4, -1.75),
 }
 local DEFAULT_SHOULDER_OFFSET = Vector3.new(1.25, 1.0, -0.75)
 
@@ -50,6 +53,9 @@ local HANDLE_AIM_OFFSET: { [string]: CFrame } = {
 	startingBroom = CFrame.Angles(0, math.rad(90), 0),
 	-- The mop shows the same 90°-to-the-right lean; yaw it back the same way.
 	mop = CFrame.Angles(0, math.rad(90), 0),
+	-- The vacuum's Handle is modelled pointing along its own -X, so without a twist it aims
+	-- 90° to the LEFT (the mirror of the broom/mop). Yaw it back the other way.
+	vacuum = CFrame.Angles(0, math.rad(-90), 0),
 }
 local DEFAULT_AIM_OFFSET = CFrame.identity
 
