@@ -148,6 +148,15 @@ local DataTemplate = {
 			XpReward = 500
 		},
 
+		["gasStation"] = {
+			BaseReward = 1000,
+			Unlocked = false,
+			Name = "Frosty's",
+			UniqueID = "gasStation",
+			Completions = 0,
+			XpReward = 500
+		},
+
 		
 
 	} :: { [string]: Business },
