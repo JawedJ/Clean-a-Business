@@ -2,11 +2,18 @@
 
 -- Mop INPUT + the client-driven spill clean. Unlike the broom (whose clean is a fixed server
 -- timer) the mop works like the pressure washer's wall wash: the CLIENT drives it. While the mop
--- is equipped and the player HOLDS click on a cleanable spill, each frame we fade that spill's
--- Transparency toward 1 by the mop's Power (per second) and grow a billboard bar over it showing
--- how close it is to fully faded. When a spill reaches Transparency 1 we hide it locally
--- (SpillVisibility), count it toward the local completion bar (JobController), and tell the server
--- (CleanSpill) so it can pay the reward and record the spill toward authoritative completion.
+-- is equipped and the player HOLDS click on a cleanable spill, each frame we advance that spill's
+-- clean progress by the mop's Power (per second) and grow a billboard bar over it showing how
+-- close it is to done. When progress reaches 1 we hide the spill locally (SpillVisibility), count
+-- it toward the local completion bar (JobController), and tell the server (CleanSpill) so it can
+-- pay the reward and record the spill toward authoritative completion.
+--
+-- The spill's parts KEEP their authored Transparency the whole time -- we deliberately do NOT fade
+-- them out as they clean. A spill and its wall/floor dirt overlay are coplanar transparent
+-- surfaces; Roblox sorts transparent surfaces per-object by centroid with no depth writes, so a
+-- spill that goes semi-transparent (Transparency > 0) pops UNDER the overlay at grazing camera
+-- angles (worst on mobile). No engine property fixes that for coplanar surfaces, so the fade is
+-- gone: the billboard bar is the progress feedback, and the spill simply pops out when finished.
 --
 -- Spills are SHARED and visible to everyone (like stains), but you can only clean the business
 -- whose job you hold; off-job clicks do nothing. Releasing click (or looking away) PAUSES a
@@ -58,15 +65,11 @@ local equippedTool: Tool? = nil
 local boundTools: { [Tool]: boolean } = {}
 local firing = false
 
--- The Transparency a spill's parts fade UP to before it's finished. At this point the spill is
--- counted as cleaned and hidden (see completeSpill), so it fades most of the way out, then pops.
-local MAX_TRANSPARENCY = 0.48
-
--- Per-spill fade progress (0..1) on the CURRENT job, and the base (authored) Transparency of each
--- of a spill's parts, snapshotted the first time we touch it so re-aiming continues from where it
--- paused. Both cleared whenever the active job changes (SpillVisibility resets the spills dirty).
+-- Per-spill clean progress (0..1) on the CURRENT job, snapshotted so re-aiming continues from
+-- where it paused. Cleared whenever the active job changes (SpillVisibility resets the spills
+-- dirty). Note: this drives ONLY the billboard bar + completion; the spill's parts keep their
+-- authored Transparency throughout (no fade -- see the file header).
 local progress: { [Model]: number } = {}
-local bases: { [Model]: { [BasePart]: number } } = {}
 -- Spills already fully mopped this job, so a late frame can't re-fire the clean.
 local doneSpills: { [Model]: boolean } = {}
 
@@ -181,37 +184,7 @@ local function clearAllBars()
 	table.clear(bars)
 end
 
--- Snapshot a spill's parts' current (authored) Transparency the first time we touch it, so the
--- fade lerps from the real starting look no matter what each part started at.
-local function baseFor(model: Model): { [BasePart]: number }
-	local existing = bases[model]
-	if existing then
-		return existing
-	end
-	local snap: { [BasePart]: number } = {}
-	for _, desc in model:GetDescendants() do
-		-- Skip the invisible aim helper: it's only there for the ray to hit, so fading it is
-		-- pointless (and would make a visible hitbox flicker away with the spill). Also skip parts
-		-- already at/above the target transparency -- there's nothing to fade, and lerping would
-		-- wrongly make them MORE opaque.
-		if desc:IsA("BasePart") and desc.Name ~= Config.HitboxName and desc.Transparency < MAX_TRANSPARENCY then
-			snap[desc] = desc.Transparency
-		end
-	end
-	bases[model] = snap
-	return snap
-end
-
--- Apply fade `p` (0..1) to every part of the spill: Transparency lerps base -> MAX_TRANSPARENCY.
-local function applyFade(model: Model, p: number)
-	for part, base in baseFor(model) do
-		if part.Parent then
-			part.Transparency = base + (MAX_TRANSPARENCY - base) * p
-		end
-	end
-end
-
--- Finish a spill (its fade reached MAX_TRANSPARENCY): hide it locally, count it toward the
+-- Finish a spill (its clean progress reached 1): hide it locally, count it toward the
 -- completion bar, tell the server, and drop its (now full) bar along with the spill.
 local function completeSpill(model: Model)
 	doneSpills[model] = true
@@ -257,10 +230,9 @@ local function onHeartbeat(dt: number)
 	-- Create the spill's bar on first contact, then keep it up for the rest of the job.
 	local fill = ensureBar(model)
 
-	-- Advance the fade by Power per second and apply it.
+	-- Advance clean progress by Power per second (drives the bar + completion; no transparency fade).
 	local p = math.clamp((progress[model] or 0) + getPower() * dt, 0, 1)
 	progress[model] = p
-	applyFade(model, p)
 	if fill then
 		fill.Size = UDim2.fromScale(p, 1)
 	end
@@ -350,17 +322,12 @@ function MopController.init()
 	-- Short looping swish played while actively mopping a spill (see setMopSound).
 	mopSound = SoundManager.createSustained("MopNoise")
 
-	-- Whenever the job changes (loading a new job, or the current one ending), undo every fade we
-	-- applied this job so the spills are visually dirty again for the next run, then drop our
-	-- per-spill state. We restore the transparency here -- from the base snapshots we took -- rather
-	-- than relying on SpillVisibility, so a mop-faded spill is guaranteed reset even if its
-	-- visibility tracking misses it. applyFade(_, 0) sets each faded part back to its base.
+	-- Whenever the job changes (loading a new job, or the current one ending), drop our per-spill
+	-- state so the spills are dirty again for the next run. We no longer touch Transparency (spills
+	-- keep their authored look -- no fade), so there's nothing visual to restore here; SpillVisibility
+	-- reparents/resets the shared models on the job change.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(function()
-		for model in bases do
-			applyFade(model, 0)
-		end
 		table.clear(progress)
-		table.clear(bases)
 		table.clear(doneSpills)
 		clearAllBars()
 		-- On mobile, start/stop look-to-clean with the job just like the pressure washer, so a mop
