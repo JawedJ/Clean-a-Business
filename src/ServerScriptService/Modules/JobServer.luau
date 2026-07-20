@@ -42,12 +42,15 @@ export type JobServer = typeof(setmetatable(
 		totalWalls: number,
 		totalDecals: number,
 		totalSpills: number,
+		totalWebs: number,
 		cleanedWalls: { [string]: boolean },
 		cleanedDecals: { [string]: boolean },
 		cleanedSpills: { [string]: boolean },
+		cleanedWebs: { [string]: boolean },
 		cleanedWallCount: number,
 		cleanedDecalCount: number,
 		cleanedSpillCount: number,
+		cleanedWebCount: number,
 		-- Client-reported wall completion in whole-wall units (e.g. 2.5 of 5 walls). Walls
 		-- are erased entirely client-side, so their PARTIAL progress can't be server-verified
 		-- -- we trust the client's report (throttled ~1/s, and refreshed when they finish
@@ -80,6 +83,24 @@ local function countChildren(building: Instance, folderName: string, className: 
 	return n
 end
 
+-- Count the cleanable webs authored in a building. Unlike walls/stains/spills a web may be a bare
+-- BasePart OR a Model (see WebResolver), so count every direct child of the CleanableWebs folder
+-- carrying a SurfaceIdAttribute -- exactly what the client counts (WebVisibility) so the two agree.
+local function countWebs(building: Instance): number
+	local cleanables = building:FindFirstChild(Config.CleanablesFolderName)
+	local folder = cleanables and cleanables:FindFirstChild(Config.WebsFolderName)
+	if not folder then
+		return 0
+	end
+	local n = 0
+	for _, child in folder:GetChildren() do
+		if (child:IsA("BasePart") or child:IsA("Model")) and child:GetAttribute(Config.SurfaceIdAttribute) ~= nil then
+			n += 1
+		end
+	end
+	return n
+end
+
 function JobServer.new(
 	player: Player,
 	businessId: string,
@@ -96,12 +117,15 @@ function JobServer.new(
 	self.totalWalls = countChildren(building, Config.WallsFolderName, "BasePart")
 	self.totalDecals = countChildren(building, Config.DecalsFolderName, "Model")
 	self.totalSpills = countChildren(building, Config.SpillsFolderName, "Model")
+	self.totalWebs = countWebs(building)
 	self.cleanedWalls = {}
 	self.cleanedDecals = {}
 	self.cleanedSpills = {}
+	self.cleanedWebs = {}
 	self.cleanedWallCount = 0
 	self.cleanedDecalCount = 0
 	self.cleanedSpillCount = 0
+	self.cleanedWebCount = 0
 	self.reportedWallAmount = 0
 	self.completed = false
 	self.alive = true
@@ -155,14 +179,18 @@ function JobServer.isSpillCleaned(self: JobServer, surfaceId: string): boolean
 	return self.cleanedSpills[surfaceId] == true
 end
 
+function JobServer.isWebCleaned(self: JobServer, surfaceId: string): boolean
+	return self.cleanedWebs[surfaceId] == true
+end
+
 -- Total cleanables, and how many are fully done server-side (deduped WallCleaned +
 -- validated stains) -- the authoritative count the full-completion trigger uses.
 function JobServer.getTotal(self: JobServer): number
-	return self.totalWalls + self.totalDecals + self.totalSpills
+	return self.totalWalls + self.totalDecals + self.totalSpills + self.totalWebs
 end
 
 function JobServer.getCleaned(self: JobServer): number
-	return self.cleanedWallCount + self.cleanedDecalCount + self.cleanedSpillCount
+	return self.cleanedWallCount + self.cleanedDecalCount + self.cleanedSpillCount + self.cleanedWebCount
 end
 
 -- Record the client's latest wall completion (whole-wall units). Client-trusted -- clamp
@@ -186,19 +214,23 @@ function JobServer.getCompletion(self: JobServer): number
 	local hasWalls = self.totalWalls > 0
 	local hasDecals = self.totalDecals > 0
 	local hasSpills = self.totalSpills > 0
+	local hasWebs = self.totalWebs > 0
 	-- Walls use the client's live report, floored at the server-verified full-wall count so it
-	-- can never pay LESS than what we've confirmed. Stains + spills are server-authoritative.
+	-- can never pay LESS than what we've confirmed. Stains + spills + webs are server-authoritative.
 	local walls = math.clamp(self.reportedWallAmount, self.cleanedWallCount, self.totalWalls)
 	local def = BusinessConfig[self.businessId]
 	return CompletionWeights.combine({
 		hasWalls = hasWalls,
 		hasDecals = hasDecals,
 		hasSpills = hasSpills,
+		hasWebs = hasWebs,
 		wallShare = if hasWalls then walls / self.totalWalls else 0,
 		decalShare = if hasDecals then self.cleanedDecalCount / self.totalDecals else 0,
 		spillShare = if hasSpills then self.cleanedSpillCount / self.totalSpills else 0,
+		webShare = if hasWebs then self.cleanedWebCount / self.totalWebs else 0,
 		decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight,
 		spillWeight = (def and def.SpillWeight) or Config.DefaultSpillWeight,
+		webWeight = (def and def.WebWeight) or Config.DefaultWebWeight,
 	})
 end
 
@@ -299,6 +331,7 @@ function JobServer._checkComplete(self: JobServer)
 		self.cleanedWallCount >= self.totalWalls
 		and self.cleanedDecalCount >= self.totalDecals
 		and self.cleanedSpillCount >= self.totalSpills
+		and self.cleanedWebCount >= self.totalWebs
 	then
 		self:complete()
 	end
@@ -331,6 +364,16 @@ function JobServer.markSpillCleaned(self: JobServer, surfaceId: string): boolean
 	end
 	self.cleanedSpills[surfaceId] = true
 	self.cleanedSpillCount += 1
+	self:_checkComplete()
+	return true
+end
+
+function JobServer.markWebCleaned(self: JobServer, surfaceId: string): boolean
+	if self.cleanedWebs[surfaceId] then
+		return false
+	end
+	self.cleanedWebs[surfaceId] = true
+	self.cleanedWebCount += 1
 	self:_checkComplete()
 	return true
 end

@@ -77,6 +77,11 @@ export type Business = {
 	-- businesses without spills ignore it entirely. Static catalog property (BusinessConfig), like
 	-- DecalWeight, not a per-player record field. See CompletionWeights.
 	SpillWeight: number?,
+	-- Fraction (0..1) of the completion bar this business's cleanable WEBS (vacuum targets) fill,
+	-- when it has any. Optional -- omitted businesses with webs use CleaningConfig.DefaultWebWeight;
+	-- businesses without webs ignore it entirely. Static catalog property (BusinessConfig), like
+	-- DecalWeight, not a per-player record field. See CompletionWeights.
+	WebWeight: number?,
 }
 
 
@@ -215,6 +220,11 @@ local DataTemplate = {
 		UniqueID = "vacuum",
 		Level = 0,
 		SlotNumber = 4,
+		UseTime = 2.5,
+		Range = 30,
+		BaseUpgradeCost = 500,
+		UpgradeRange = 5,
+		UpgradeUseTime = 0.1,
 		},
 
 	} :: { [string]: Item },

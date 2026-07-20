@@ -39,6 +39,16 @@ local CleaningConfig = {
 	HitboxName = "Hitbox",
 	SurfaceIdAttribute = "surfaceId",
 
+	-- Cleanable webs (vacuum targets) live alongside the walls + stains:
+	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWebs.<web>
+	-- Each <web> is the direct child of the folder carrying a SurfaceIdAttribute attribute, and may
+	-- be authored either as a single BasePart (the mesh itself is the target) OR as a Model grouping
+	-- parts -- the vacuum ray hits the web's own geometry and WebResolver climbs to the folder child.
+	-- Webs clean like stains: the vacuum click starts a server-authoritative UseTime timer that
+	-- removes the web wholesale. Only the tool + folder differ from stains; see WebResolver /
+	-- VacuumController.
+	WebsFolderName = "CleanableWebs",
+
 	-- Cleanable spills (mop targets) live alongside the walls + stains:
 	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableSpills.<model>
 	-- Each <model> is a spill whose parts the player mops away by holding click: the mop
@@ -168,6 +178,13 @@ local CleaningConfig = {
 	-- with no spills is unaffected. Both the client bar (JobClient) and the server payout
 	-- (JobServer) read this through CompletionWeights so the two stay in sync.
 	DefaultSpillWeight = 0.2,
+
+	-- Fraction (0..1) of the completion bar filled by a business's cleanable WEBS (vacuum
+	-- targets), when it has any. Used for any business whose BusinessConfig entry doesn't set its
+	-- own WebWeight. Webs carve out this slice exactly like spills do; a business with no webs is
+	-- unaffected (their weight is zeroed and the rest renormalised -- see CompletionWeights). Both
+	-- the client bar (JobClient) and the server payout (JobServer) read this so the two stay in sync.
+	DefaultWebWeight = 0.2,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
 	-- Default for every wall; an individual CleanableWall part can override it with a

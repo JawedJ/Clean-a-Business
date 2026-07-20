@@ -99,6 +99,9 @@ local IGNORED_FOLDER_NAMES: { [string]: boolean } = {
 	-- Cleanable spills sit ON the walls/floors; their query-only hitboxes would otherwise block
 	-- the wash from reaching the wall behind/under them, so the ray passes through them too.
 	[Config.SpillsFolderName] = true,
+	-- Cleanable webs (vacuum targets) sit in front of the walls; the ray passes through them so
+	-- a web can't block the wash from reaching the wall behind it.
+	[Config.WebsFolderName] = true,
 }
 
 local function rebuildRayExclude()

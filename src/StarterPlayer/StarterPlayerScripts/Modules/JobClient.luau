@@ -20,6 +20,7 @@ local CompletionWeights = require(ReplicatedStorage.SharedModules.CompletionWeig
 local SurfaceManager = require(script.Parent.SurfaceManager)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 local SpillVisibility = require(script.Parent.SpillVisibility)
+local WebVisibility = require(script.Parent.WebVisibility)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local WallCleaned = Remotes:WaitForChild("WallCleaned") :: RemoteEvent
@@ -41,8 +42,10 @@ export type JobClient = typeof(setmetatable(
 		totalWalls: number,
 		totalDecals: number,
 		totalSpills: number,
+		totalWebs: number,
 		cleanedDecals: number,
 		cleanedSpills: number,
+		cleanedWebs: number,
 		-- Called with the new 0..1 completion after every clean (and once totals load), so
 		-- the completion UI can track progress. nil if no one is listening.
 		onProgress: ((number) -> ())?,
@@ -67,8 +70,10 @@ function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobCl
 	self.totalWalls = 0
 	self.totalDecals = 0
 	self.totalSpills = 0
+	self.totalWebs = 0
 	self.cleanedDecals = 0
 	self.cleanedSpills = 0
+	self.cleanedWebs = 0
 	self.onProgress = onProgress
 
 	task.spawn(function()
@@ -127,6 +132,8 @@ function JobClient._load(self: JobClient)
 	self.totalDecals = DecalVisibility.getStainCount(self.businessId)
 	-- Spill visibility works the same way (owned by SpillVisibility); read the total here.
 	self.totalSpills = SpillVisibility.getSpillCount(self.businessId)
+	-- Web visibility works the same way (owned by WebVisibility); read the total here.
+	self.totalWebs = WebVisibility.getWebCount(self.businessId)
 
 	if walls then
 		self.totalWalls = countChildren(walls, "BasePart")
@@ -183,6 +190,18 @@ function JobClient.onSpillCleaned(self: JobClient, _model: Model)
 	self:_notifyProgress()
 end
 
+-- Called by JobController when the server confirms a web this client vacuumed. The actual hiding
+-- is done by JobController (so the last web of a job still hides even if this JobClient is torn
+-- down by completion); here we just track progress. Mirrors onDecalCleaned. A web is a BasePart or
+-- Model, hence Instance.
+function JobClient.onWebCleaned(self: JobClient, _web: Instance)
+	if not self.alive then
+		return
+	end
+	self.cleanedWebs += 1
+	self:_notifyProgress()
+end
+
 -- Live wall completion in whole-wall units (a half-washed wall counts as 0.5). This is what
 -- we report to the server for the finish-early reward, kept in the same units the server
 -- combines with its stain count.
@@ -199,16 +218,20 @@ function JobClient.getCompletion(self: JobClient): number
 	local hasWalls = self.totalWalls > 0
 	local hasDecals = self.totalDecals > 0
 	local hasSpills = self.totalSpills > 0
+	local hasWebs = self.totalWebs > 0
 	local def = BusinessConfig[self.businessId]
 	return CompletionWeights.combine({
 		hasWalls = hasWalls,
 		hasDecals = hasDecals,
 		hasSpills = hasSpills,
+		hasWebs = hasWebs,
 		wallShare = if hasWalls then self:getWallAmount() / self.totalWalls else 0,
 		decalShare = if hasDecals then self.cleanedDecals / self.totalDecals else 0,
 		spillShare = if hasSpills then self.cleanedSpills / self.totalSpills else 0,
+		webShare = if hasWebs then self.cleanedWebs / self.totalWebs else 0,
 		decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight,
 		spillWeight = (def and def.SpillWeight) or Config.DefaultSpillWeight,
+		webWeight = (def and def.WebWeight) or Config.DefaultWebWeight,
 	})
 end
 

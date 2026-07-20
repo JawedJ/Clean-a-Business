@@ -1,15 +1,13 @@
 --!strict
 
--- Press R (or tap the HighlightButton) while on a job to reveal everything you still have
--- left to clean: the not-yet-cleaned cleanables glow neon yellow for 10 seconds, then the
--- glow clears itself. Pressing it again re-applies against the current state and restarts
--- the timer.
+-- Press R (or tap the HighlightButton) while on a job to reveal the WALLS you still have left to
+-- clean: their still-dirty pixels glow neon yellow for the reveal duration, then the glow clears
+-- itself. Pressing it again re-applies against the current state and restarts the timer.
 --
--- Walls glow per-pixel: only the still-dirty pixels of each wall's dirt overlay light up, so
--- the glow shrinks live as the player cleans (owned by SurfaceManager/CleanableSurface, which
--- hold the editable image). Stains have no partial state -- their visible parts are switched
--- to a neon-yellow material while revealed, restored afterward. Both are cosmetic and purely
--- client-side -- they touch nothing on the server.
+-- Walls glow per-pixel: only the still-dirty pixels of each wall's dirt overlay light up, so the
+-- glow shrinks live as the player cleans (owned by SurfaceManager/CleanableSurface, which hold the
+-- editable image). Purely cosmetic and client-side -- it touches nothing on the server. (Stains and
+-- webs are deliberately NOT highlighted.)
 --
 -- The on-screen button (PlayerGui.ScreenGui.HighlightButton) shows only during a job, like
 -- the JobCompletion HUD. Its ScreenGui is re-cloned on every respawn, so we re-bind to the
@@ -21,17 +19,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local SurfaceManager = require(script.Parent.SurfaceManager)
-local DecalVisibility = require(script.Parent.DecalVisibility)
 
 local localPlayer = Players.LocalPlayer
 
--- Key that reveals the remaining cleanables.
+-- Key that reveals the remaining dirty walls.
 local REVEAL_KEY = Enum.KeyCode.R
 -- How long the glow lingers (seconds) before clearing itself.
 local REVEAL_DURATION = 8
--- Neon-yellow glow for stains (walls carry their own glow via CleanableSurface).
-local STAIN_GLOW_COLOR = Color3.fromRGB(255, 234, 0)
-local STAIN_GLOW_TRANSPARENCY = 0.45
 
 -- The HUD button that triggers the same reveal (PlayerGui.ScreenGui.HighlightButton).
 local SCREEN_GUI_NAME = "ScreenGui"
@@ -39,9 +33,6 @@ local BUTTON_FRAME_NAME = "HighlightButton"
 
 local MissingHighlightController = {}
 
--- Original look of every stain part we've recolored this reveal, so we can restore it exactly.
-type PartLook = { part: BasePart, material: Enum.Material, color: Color3, transparency: number }
-local glowingParts: { PartLook } = {}
 -- Bumped on every reveal (and on teardown) so a stale expiry timer can tell it's been
 -- superseded and skip its clear, leaving the newer reveal's glow alone.
 local revealToken = 0
@@ -58,32 +49,9 @@ local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
 end
 
--- Drop the whole reveal: unglow the walls (per-pixel restore) and restore every stain part
--- we recolored to exactly how it was.
+-- Drop the reveal: unglow the walls (per-pixel restore).
 local function clearGlow()
 	SurfaceManager.setWallsGlow(false)
-	for _, look in glowingParts do
-		local part = look.part
-		if part.Parent then
-			part.Material = look.material
-			part.Color = look.color
-			part.Transparency = look.transparency
-		end
-	end
-	table.clear(glowingParts)
-end
-
--- Switch one stain part to the neon-yellow glow, remembering its original look first.
-local function glowStainPart(part: BasePart)
-	table.insert(glowingParts, {
-		part = part,
-		material = part.Material,
-		color = part.Color,
-		transparency = part.Transparency,
-	})
-	part.Material = Enum.Material.Neon
-	part.Color = STAIN_GLOW_COLOR
-	part.Transparency = STAIN_GLOW_TRANSPARENCY
 end
 
 local function reveal()
@@ -97,15 +65,6 @@ local function reveal()
 
 	-- Walls glow their own remaining-dirt pixels.
 	SurfaceManager.setWallsGlow(true)
-
-	-- Stains have no partial state: glow each visible part (skip the invisible Hitbox).
-	for _, stain in DecalVisibility.getActiveVisibleStains() do
-		for _, part in stain:GetDescendants() do
-			if part:IsA("BasePart") and part.Name ~= Config.HitboxName and part.Transparency < 1 then
-				glowStainPart(part)
-			end
-		end
-	end
 
 	revealToken += 1
 	local token = revealToken

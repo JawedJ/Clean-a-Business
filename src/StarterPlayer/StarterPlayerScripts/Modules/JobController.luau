@@ -16,8 +16,11 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local JobClient = require(script.Parent.JobClient)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 local SpillVisibility = require(script.Parent.SpillVisibility)
+local WebVisibility = require(script.Parent.WebVisibility)
 
-local DecalCleaned = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("DecalCleaned") :: RemoteEvent
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local DecalCleaned = Remotes:WaitForChild("DecalCleaned") :: RemoteEvent
+local WebCleaned = Remotes:WaitForChild("WebCleaned") :: RemoteEvent
 
 local localPlayer = Players.LocalPlayer
 
@@ -59,6 +62,8 @@ local function setJob(businessId: string?)
 	DecalVisibility.setActiveBusiness(businessId)
 	-- Spills are shown/hidden/reset (redo) the same way, owned by SpillVisibility.
 	SpillVisibility.setActiveBusiness(businessId)
+	-- Webs (vacuum targets) are shown/hidden/restored the same way, owned by WebVisibility.
+	WebVisibility.setActiveBusiness(businessId)
 	if businessId then
 		current = JobClient.new(businessId, emitProgress)
 	end
@@ -89,6 +94,19 @@ function JobController.init()
 		DecalVisibility.hideOne(model)
 		if current then
 			current:onDecalCleaned(model)
+		end
+	end)
+
+	-- Webs mirror stains exactly: the server confirms a vacuumed web, we hide it locally (regardless
+	-- of JobClient state, so the last web of a job still vanishes) and count it toward the bar.
+	WebCleaned.OnClientEvent:Connect(function(web)
+		-- A web may be a BasePart or a Model (WebResolver accepts either), so don't gate on Model.
+		if typeof(web) ~= "Instance" or not (web:IsA("BasePart") or web:IsA("Model")) then
+			return
+		end
+		WebVisibility.hideOne(web)
+		if current then
+			current:onWebCleaned(web)
 		end
 	end)
 

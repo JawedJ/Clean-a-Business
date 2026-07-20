@@ -64,6 +64,13 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		UniqueID = "vacuum",
 		Level = 0,
 		SlotNumber = 4,
+		-- Cleans webs exactly like the broom cleans stains: same Range + UseTime (server-authoritative
+		-- clean timer) and the same per-upgrade tuning.
+		UseTime = 2.5, -- seconds of vacuuming before a web is removed
+		Range = 30,
+		BaseUpgradeCost = 500,
+		UpgradeRange = 5,
+		UpgradeUseTime = 0.1, -- each upgrade shortens UseTime by this many seconds
 	},
 }
 
