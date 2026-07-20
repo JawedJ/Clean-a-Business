@@ -156,6 +156,13 @@ local function stopSound()
 	end
 end
 
+-- Depth bias (studs) pulling the spray particles toward the camera in the transparency
+-- sort. The stream reaches the wall, so its particles end up coplanar with the wall's
+-- dirt SurfaceGui overlay; without a bias the sort is ambiguous and particles sometimes
+-- draw BEHIND the overlay. A small positive ZOffset makes them reliably render in front
+-- without moving them physically.
+local SPRAY_Z_OFFSET = 1
+
 -- Find the equipped tool's spray emitter + the attachment it lives on, and start it
 -- disabled so there's no VFX until the player actually fires.
 local function resolveSpray(tool: Tool)
@@ -166,6 +173,7 @@ local function resolveSpray(tool: Tool)
 	sprayAttachment = if parent and parent:IsA("Attachment") then parent else nil
 	if sprayEmitter then
 		sprayEmitter.Enabled = false
+		sprayEmitter.ZOffset = SPRAY_Z_OFFSET
 	end
 end
 
