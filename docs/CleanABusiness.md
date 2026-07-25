@@ -6,13 +6,14 @@ Split into **what exists today** and **the design vision** it's building toward.
 ## Overview
 
 Simulator-style Roblox game. Players clean businesses with tools (broom, pressure
-washer, mop) and continuously unlock more content — tools, businesses, upgrades, plot
+washer, mop, vacuum) and continuously unlock more content — tools, businesses, upgrades, plot
 expansions — as they progress.
 
-- **Three cleanable kinds, one per tool.** A business can hold **walls** (pressure washer —
-  per-pixel `EditableImage` erase), **stains** (broom — server-timed scrub), and **spills**
-  (mop — client-driven Transparency fade). Each kind is optional; a business declares whichever
-  it authors, and the completion bar weights the kinds it has (see `CompletionWeights`).
+- **Four cleanable kinds, one per tool.** A business can hold **walls** (pressure washer —
+  per-pixel `EditableImage` erase), **stains** (broom — server-timed scrub), **spills**
+  (mop — client-driven Transparency fade), and **webs** (vacuum — server-timed removal, like
+  stains). Each kind is optional; a business declares whichever it authors, and the completion
+  bar weights the kinds it has (see `CompletionWeights`).
 
 - **6 players per server** (target), each with their own **plot** (a personal
   home/spawn base, assigned on join). Set by `CleaningConfig.PlotCount`. Each plot hosts a
@@ -70,17 +71,19 @@ report, so a player can only ever clean the one business they've accepted. Concr
   the single `CleanSpill` completion report (deduped). Neither can be farmed off a job the player
   doesn't hold.
 - **Completion is server-authoritative.** The player's `JobServer` counts the building's
-  cleanables (walls, stains, **and spills**) and only counts cleans the cleaning services have
-  already validated (deduped), so the job completes — and pays its `BaseReward` (Cash) +
-  `XpReward` (XP) bonus — exactly once, when every wall, stain, and spill is genuinely done.
+  cleanables (walls, stains, spills, **and webs**) and only counts cleans the cleaning services
+  have already validated (deduped), so the job completes — and pays its `BaseReward` (Cash) +
+  `XpReward` (XP) bonus — exactly once, when every wall, stain, spill, and web is genuinely done.
+  Webs are cleaned like stains (a server-timed vacuum click — see *Web cleaning*).
 - **Finishing early is a deliberate client/server hybrid.** The prorated finish-early payout
   needs the *partial* completion %, but wall pixel-erasing is client-only (unverifiable), so
   walls are **client-reported**: the client pushes its wall completion (`WallCompletion`
   remote, ~1/s while changing, plus a fresh value with `FinishEarly`) and the server trusts
-  it, clamped to `[server-verified full walls, totalWalls]`. Stains **and spills** stay
-  server-authoritative (`cleanedDecalCount` / `cleanedSpillCount` — spills only ever report at
-  full completion, so there's no partial spill fraction to trust). So finish-early reward =
-  `weighted(reportedWalls, cleanedStains, cleanedSpills) / total × bonus` (per `CompletionWeights`),
+  it, clamped to `[server-verified full walls, totalWalls]`. Stains, spills **and webs** stay
+  server-authoritative (`cleanedDecalCount` / `cleanedSpillCount` / `cleanedWebCount` — spills and
+  webs only ever report at full completion, so there's no partial fraction to trust). So
+  finish-early reward =
+  `weighted(reportedWalls, cleanedStains, cleanedSpills, cleanedWebs) / total × bonus` (per `CompletionWeights`),
   and it does **not** count as a completion. This is intentionally exploitable on the wall fraction
   — accepted so the payout can track the live % shown to the player. **Full** completion is
   unaffected: it still gates on the authoritative deduped counts only.
@@ -127,8 +130,9 @@ report, so a player can only ever clean the one business they've accepted. Concr
     not just by the hidden client button.
   - **`JobServer`** (class) is the authority on progress: it counts the business's
     cleanables from the shared building, records validated cleans (`markWallCleaned` /
-    `markDecalCleaned` / `markSpillCleaned`, deduped), and exposes `getCompletion`/`isComplete`.
-    When every wall, stain, and spill is done it tallies a `Completions` and pays the
+    `markDecalCleaned` / `markSpillCleaned` / `markWebCleaned`, deduped), and exposes
+    `getCompletion`/`isComplete`.
+    When every wall, stain, spill, and web is done it tallies a `Completions` and pays the
     `BaseReward` (Cash) + `XpReward`
     (XP) **completion bonus**, then calls back to `JobService` to end the job (clearing
     `ActiveJob`, which ends the state on the client). `finishEarly` instead pays a **prorated**
@@ -143,9 +147,10 @@ report, so a player can only ever clean the one business they've accepted. Concr
     per-client wall **EditableImage overlays** (via the `SurfaceManager` engine) and tracks
     local completion for the UI. Completion is **smooth** — it sums each wall's live erased
     fraction (`SurfaceManager.getCleanedWallAmount`), so the bar moves mid-wall — and combines
-    walls + stains + spills through the shared **`CompletionWeights`** (same weighting the server
-    uses), pushed to listeners via `JobController.onProgressChanged` on every stroke/clean. Stains
-    and spills each step whole (`cleanedDecals`/`cleanedSpills`, fed in by `JobController`).
+    walls + stains + spills + webs through the shared **`CompletionWeights`** (same weighting the
+    server uses), pushed to listeners via `JobController.onProgressChanged` on every stroke/clean.
+    Stains, spills, and webs each step whole (`cleanedDecals`/`cleanedSpills`/`cleanedWebs`, fed in
+    by `JobController`).
   - **`JobCompletionController`** (client) drives the completion HUD
     (`ScreenGui.JobCompletion`): a progress bar + `PercentageLabel` that fill from
     `JobClient`'s live completion, a `CurrentReward` label showing the Cash you'd bank by
@@ -437,9 +442,9 @@ saved per player is the **`Unlocked`** flag (gates accepting a job, resolved by
 ### `CleaningConfig` (shared)
 Single source of truth for cleaning tunables, consumed by client and server:
 the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`/
-`DecalsFolderName`/`SpillsFolderName`/`InteriorFolderName` (props/windows the cleaning ray
-ignores), `HitboxName`/`SurfaceIdAttribute` (stains/walls) + `SpillSurfaceIdAttribute` (the
-capital-S spill id), `PlotCount`/`PlotAttribute`/
+`DecalsFolderName`/`SpillsFolderName`/`WebsFolderName`/`InteriorFolderName` (props/windows the
+cleaning ray ignores), `HitboxName`/`SurfaceIdAttribute` (stains/walls, and also the web id) +
+`SpillSurfaceIdAttribute` (the capital-S spill id), `PlotCount`/`PlotAttribute`/
 `PlotSpawnPartName`, the plot-progression names `PlotButtonsFolderName`/
 `PlotSpawnablesFolderName`/`PlotButtonInteractPartName`, the button attribute names
 `PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`, the
@@ -447,9 +452,9 @@ gem-income config `PlotWorkerSpawnables`/`PlotWorkerBaseGemRate` and the spawnab
 attributes `PlotSpawnableGemFlatAttribute`/`PlotSpawnableGemMultiplierAttribute`/
 `PlotSpawnableGemRateAttribute`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
 `DirtAsset`, `ImageSize`, `BrushWorldRadius`, `MaxBridgeWorldDistance`,
-`CompletionThreshold`, the completion-bar weights `DefaultDecalWeight`/`DefaultSpillWeight`
-(the slice of the bar stains/spills own when a business has them; walls get the rest — see
-`CompletionWeights`), brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
+`CompletionThreshold`, the completion-bar weights `DefaultDecalWeight`/`DefaultSpillWeight`/
+`DefaultWebWeight` (the slice of the bar stains/spills/webs own when a business has them; walls get
+the rest — see `CompletionWeights`), brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
 appears mirrored from where you aim).
 
 **Walk speed** comes from two distinct sources, deliberately not shared:
@@ -546,6 +551,65 @@ into that reveal yet (see below).
   release or look-away, only when the spill finishes (destroyed) or the job changes
   (`clearAllBars`). A short looping mop sound plays only while actively fading a spill.
 
+### Web cleaning (vacuum, implemented)
+The **fourth** cleanable kind, alongside walls, stains, and spills. A web is cleaned **exactly like
+a stain** (a single server-timed click, not a continuous fade) — the vacuum is a direct mirror of
+the broom, just a different tool + folder.
+- A cleanable **web** is a **direct child of** a business's `CleanableWebs` folder, at:
+  `Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableWebs.<web>`.
+  - Unlike a stain (always a `Model` with a `Hitbox`), a web may be authored **either as a single
+    `BasePart`** (the web mesh itself is the target) **or as a `Model`** grouping several parts —
+    both work. `WebResolver` (SharedModules) climbs from any hit part up to whichever instance sits
+    directly in the `CleanableWebs` folder and reads its **`surfaceId`** attribute (lowercase, like
+    stains/walls; a number is accepted and normalised to a string), yielding
+    `{ businessId, surfaceId, web }`.
+  - **Web-authoring gotcha (hitboxes must be Anchored).** A web Model typically pairs a thin
+    `Web` mesh with an oversized invisible `Hitbox` part so it's easy to click. That hitbox **must
+    be `Anchored = true`** (and `CanQuery = true`, `CanCollide = false`). Authored unanchored with
+    no weld, gravity drops it through the world at runtime, leaving only the razor-thin mesh
+    clickable — the fix applied to every existing web. Anchoring is safe: `WebVisibility` hides/shows
+    webs by reparenting off-world, which preserves an anchored part's CFrame.
+- **Flow:** `VacuumController` (client) raycasts on click, and on a valid web (for the business
+  whose job it holds) fires **`CleanWeb`** and shows a cosmetic billboard progress bar — its aim ray
+  **excludes every business's `CleanableSpills`** so a spill's hitbox can't shadow a web near it.
+  `WebCleaningService` (server) validates (active job / vacuum-equipped / one-at-a-time /
+  not-already-cleaned-on-this-job), **runs the UseTime timer itself**, re-validates, pays a **flat
+  per-web reward** (`WEB_CASH`/`WEB_XP` = 4/4), records the web in the player's **`JobServer`**
+  (`markWebCleaned`, deduped — may complete the job), and fires **`WebCleaned`** back to **that**
+  client. The web is **shared and left intact server-side**; the cleaning player's client **hides**
+  its copy via `WebVisibility`, and re-accepting restores it for the redo. **UseTime** comes from
+  the vacuum Item in `ToolConfig` (`vacuum`, slot 4, default 2.5s); both sides read the same
+  per-player source so the bar mirrors the server timer.
+- **Boundary-click parking (mirrors the broom).** A click on the *next* web that races the previous
+  clean's completion callback is parked in `pendingClick` (newest wins) and processed the instant
+  the vacuum frees up, rather than dropped — otherwise the client would show a bar and mark the web
+  started but no clean would ever run. The client mirrors this with a `startedClean` set +
+  `SERVER_CONFIRM_GRACE` window so a rejected click can't brick a web for the rest of the job.
+- **Cleaned-web tracking lives in the `JobServer`**, so it resets on each accept — redoable and
+  re-earnable, exactly like stains and spills.
+
+### `WebVisibility` (client)
+The web counterpart to `DecalVisibility` (stains) / `SpillVisibility` (spills). Webs are shared,
+server-authored instances replicated to everyone, but a player should only **see and vacuum** a
+business's webs while they're on that business's job. So it **hides every web by default**
+(reparented off-world into a nil-parented `HiddenWebs` holder, which also makes it non-raycastable)
+and shows a business's webs **only while it's the active job**, driven by `JobController` off the
+`ActiveJob` attribute. Because a web may be a `BasePart` **or** a `Model`, it works in `Instance`s
+(the direct child of `CleanableWebs`) rather than `Model`s specifically. Reparenting (not
+destroying) keeps the shared server instance and its CFrame intact for the redo. Exposes
+`getWebCount(businessId)` for the completion total and `getActiveVisibleWebs()` (every still-dirty
+active-job web) — prepared for the remaining-cleanables highlight, though webs aren't wired into
+that reveal yet (like spills).
+
+### `VacuumController` (client)
+Detects the vacuum via the `ToolId` attribute (`"vacuum"`) and binds `Equipped`/`Activated`
+(click) / `Unequipped`, mirroring the broom. On click it raycasts (out to the vacuum's `Range`,
+read live from the player's DataService `Inventory` so upgrades apply at once, falling back to
+`ToolConfig.vacuum`), resolves the hit to a web, and — only for a web of the active business —
+fires `CleanWeb` and animates a billboard bar over the web for the same UseTime. The bar is purely
+cosmetic (the server owns timing/completion); it tears down early if the web is hidden/removed. The
+aim ray excludes the player's own character and every business's spill folders.
+
 ### Reveal remaining cleanables (implemented)
 A client-only assist that flashes a neon-yellow glow over everything the player still has left
 to clean on their active job. **Purely cosmetic** — it reads existing client state and touches
@@ -566,9 +630,10 @@ no server state or remotes.
   each visible stain part (from `DecalVisibility.getActiveVisibleStains`, skipping the invisible
   `Hitbox`) to `Material = Neon`, neon yellow, **0.55 transparency**, snapshotting and restoring
   each part's original material/color/transparency exactly.
-- **Spills are not yet highlighted.** `SpillVisibility.getActiveVisibleSpills()` exists for this
-  (the still-dirty active-job spills), but `MissingHighlightController` currently glows only walls
-  and stains — wiring spills into the reveal is a small, pending follow-up.
+- **Spills and webs are not yet highlighted.** `SpillVisibility.getActiveVisibleSpills()` and
+  `WebVisibility.getActiveVisibleWebs()` both exist for this (the still-dirty active-job
+  spills/webs), but `MissingHighlightController` currently glows only walls and stains — wiring
+  spills and webs into the reveal is a small, pending follow-up.
 - **Duration + cooldown.** The glow lingers `REVEAL_DURATION` (**8s**) then clears itself (a
   `revealToken` disarms superseded expiry timers). Re-triggering is gated by the **same
   duration** — a new reveal is ignored until the current one runs out — since each reveal
@@ -577,12 +642,14 @@ no server state or remotes.
   or switching a job drops the glow.
 
 ### Tool
-- The **Pressure Washer**, **Broom**, and **Mop** `Tool`s live in **`ReplicatedStorage.Items`**
-  (authored in Studio; `StarterPack` is empty). Each has a `Handle` and a `ToolId`
-  attribute (`"pressureWasher"` / `"startingBroom"` / `"mop"`) that ties it to its inventory Item
-  (`UniqueID`) and is used to bind its controller. The mop sits in hotbar **slot 3**
-  (`ToolConfig.mop.SlotNumber`) and uses **`Power`** as its fade rate (Transparency/sec) plus
-  `Range`; both are upgradable (`UpgradePower`/`UpgradeRange`).
+- The **Pressure Washer**, **Broom**, **Mop**, and **Vacuum** `Tool`s live in
+  **`ReplicatedStorage.Items`** (authored in Studio; `StarterPack` is empty). Each has a `Handle`
+  and a `ToolId` attribute (`"pressureWasher"` / `"startingBroom"` / `"mop"` / `"vacuum"`) that ties
+  it to its inventory Item (`UniqueID`) and is used to bind its controller. The mop sits in hotbar
+  **slot 3** (`ToolConfig.mop.SlotNumber`) and uses **`Power`** as its fade rate (Transparency/sec)
+  plus `Range`; both are upgradable (`UpgradePower`/`UpgradeRange`). The vacuum sits in **slot 4**
+  (`ToolConfig.vacuum.SlotNumber`) and, like the broom, uses **`UseTime`** (server-timed, default
+  2.5s) + `Range`, both upgradable (`UpgradeUseTime`/`UpgradeRange`).
 - **`ToolService`** (server) grants tools: on each spawn it clones every owned + `Unlocked`
   inventory item's `Tool` into the player's Backpack (matched by `ToolId`), idempotently,
   and re-grants when the inventory gains a new item.
@@ -604,7 +671,7 @@ no server state or remotes.
 ReplicatedStorage/SharedModules/
   DataTemplate.luau     saved-data shape + defaults (Cash, Gems, Level, Settings, BusinessList, Inventory, PlotButtonsBought)
   ToolConfig.luau       tool definitions catalog
-  BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/RequiredItems/DecalWeight/SpillWeight)
+  BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/RequiredItems/DecalWeight/SpillWeight/WebWeight)
   CleaningConfig.luau   cleaning tunables (shared by client + server)
   SkillsConfig.luau     skills catalog + math: the 5 skills' effectPerLevel, MAX_LEVEL 5, geometric price (BASE_PRICE 100k, x2/level), multiplier(name, level)
   ItemUpgrades.luau     shared item-upgrade math: MAX_LEVEL 10, geometric cost (BaseUpgradeCost x2.3/level), pure applyUpgrade (Range/Radius/UseTime steps, MIN_USE_TIME floor)
@@ -614,7 +681,8 @@ ReplicatedStorage/SharedModules/
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
   SpillResolver.luau    spill part/model -> identity (mop spills); climbs any hit BasePart up to the CleanableSpills Model, reads its capital-S SurfaceId
-  CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills shares by DecalWeight/SpillWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
+  WebResolver.luau      web part/model -> identity (vacuum webs); climbs any hit instance up to the direct CleanableWebs child (BasePart OR Model), reads its lowercase surfaceId
+  CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills/WEBS shares by DecalWeight/SpillWeight/WebWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
   SoundManager.luau     cosmetic sound library; CLIENT-EXECUTED only (a server-parented Sound would be audible to everyone) -- server-triggered sounds go via a remote
   SoundGroups.luau      master volume routing: SFXGroup / MusicGroup under SoundService, so a group's Volume scales every sound in it live (what the settings sliders drive)
   VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate)
@@ -628,6 +696,8 @@ ReplicatedStorage/Remotes/
   CleanDecal            RemoteEvent (client → server: stain-click intent)
   DecalCleaned          RemoteEvent (server → client: hide your local copy of a cleaned stain)
   CleanSpill            RemoteEvent (client → server: a spill is fully mopped; per-spill reward + job progress, deduped)
+  CleanWeb              RemoteEvent (client → server: vacuum-click intent on a web; server runs the UseTime timer)
+  WebCleaned            RemoteEvent (server → client: hide your local copy of a cleaned web)
   RewardPopup           RemoteEvent (server → client: show floating +XP/+Cash)
   JobSummary            RemoteEvent (server → client: end-of-job payout/percent/duration for the summary screen)
   GoHome                RemoteEvent (client → server: leave the business, teleport back to your plot)
@@ -642,7 +712,7 @@ NOTE: Remotes are Studio-authored (NOT in default.project.json) -- adding one in
 creates a duplicate. Create new remotes in Studio only.
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Job/Cleaning/DecalCleaning/Tool/Shop/Settings/Admin services
+  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Job/Cleaning/DecalCleaning/SpillCleaning/WebCleaning/Tool/Shop/Settings/Admin services
   Modules/PlotButtonService.luau     per-plot purchase progression: step-on Buttons buy Spawnables with Cash, reveal next 1-2 buttons, persist per player (PlotButtonsBought), hide every plot at startup, drop-in spawn animation (per-leaf-model Hitbox footprints), rebuild plot on reassign, price billboards + gem generation
   Modules/BusinessService.luau       seeds the catalog into each profile + resolves unlocks (level now, permanent, re-runs on level change)
   Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob; gates accept on Unlocked + RequiredLevel; pins every business Model to ModelStreamingMode.Persistent at init (see StreamingEnabled)
@@ -650,6 +720,7 @@ ServerScriptService/
   Modules/CleaningService.luau       wall wash reward + WallCleaned→job, gated by active job (no saving)
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; per-client hide via DecalCleaned
   Modules/SpillCleaningService.luau  validates client CleanSpill reports against the active job, pays the flat per-spill reward, records in JobServer (deduped)
+  Modules/WebCleaningService.luau    server-authoritative vacuum timer (mirrors DecalCleaningService); validates CleanWeb, runs UseTime, pays flat per-web reward, records in JobServer, per-client hide via WebCleaned; parks boundary clicks (pendingClick)
   Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService
   Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups
   Modules/ToolService.luau           grants owned+Unlocked items as Backpack Tools (clones from ReplicatedStorage.Items by ToolId), per spawn + on inventory change
@@ -661,8 +732,8 @@ ServerScriptService/
   Modules/InventoryManager.luau      addItem helper used by ShopService (present; not init'd on its own)
 
 StarterPlayer/StarterPlayerScripts/
-  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom + UI + MissingHighlight + UiPreloader
-  Modules/JobController.luau       watches ActiveJob, owns the JobClient, drives DecalVisibility + SpillVisibility, routes DecalCleaned→hide and MopController's onSpillCleaned→hide, onProgressChanged signal
+  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom/Mop/Vacuum + WebVisibility + UI + MissingHighlight + UiPreloader
+  Modules/JobController.luau       watches ActiveJob, owns the JobClient, drives DecalVisibility + SpillVisibility + WebVisibility, routes DecalCleaned→hide / MopController's onSpillCleaned→hide / WebCleaned→hide, onProgressChanged signal
   Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %
   Modules/CashUiController.luau    cash HUD: writes Cash into CashDisplay.MoneyAmt as a "$"-prefixed abbreviated number (e.g. "$1.1k"), re-renders on Cash change
   Modules/GemUiController.luau     gem HUD: writes Gems into GemDisplay.GemAmt abbreviated, re-renders on Gems change
@@ -681,6 +752,8 @@ StarterPlayer/StarterPlayerScripts/
   Modules/PressureWasherController.luau   tool input + raycast + cleaning
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
   Modules/MopController.luau       mop input + raycast + client-driven spill fade (hold-to-clean, Power/sec) + persistent per-spill billboard bar; fires CleanSpill on full fade
+  Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb
+  Modules/WebVisibility.luau       web visibility: hidden unless on the job (reparented to HiddenWebs holder); per-client hide-on-vacuum + reparent restore on redo; getWebCount / getActiveVisibleWebs
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown
   Modules/JobSummaryController.luau end-of-job summary (JobSummary remote): payout / % cleaned / duration, bounced in via UiAnimations.DropIn; offers replay (AcceptJob) or GoHome
@@ -701,10 +774,12 @@ StarterPlayer/StarterPlayerScripts/
 ```
 
 Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
-`ReplicatedStorage.Items.Broom` / `ReplicatedStorage.Items.Mop` (each with a `ToolId` attribute;
-`StarterPack` is empty), and the shared `Workspace.Businesses` buildings — each a **Model** with a
-`TeleportPart` and a `Cleanables` folder (`CleanableWalls` + `CleanableDecals` + `CleanableSpills`,
-each spill Model carrying a capital-S `SurfaceId` attribute) authored right in the building. The
+`ReplicatedStorage.Items.Broom` / `ReplicatedStorage.Items.Mop` / `ReplicatedStorage.Items.Vacuum`
+(each with a `ToolId` attribute; `StarterPack` is empty), and the shared `Workspace.Businesses`
+buildings — each a **Model** with a `TeleportPart` and a `Cleanables` folder (`CleanableWalls` +
+`CleanableDecals` + `CleanableSpills` + `CleanableWebs`, each spill Model carrying a capital-S
+`SurfaceId` attribute and each web BasePart/Model a lowercase `surfaceId` attribute — with any web
+`Hitbox` part **Anchored**, see *Web cleaning*) authored right in the building. The
 business Models are pinned to `ModelStreamingMode.Persistent` at runtime by `JobService` so their
 cleanable geometry never streams out from under an active job (see *StreamingEnabled*).
 The **plots** (`Workspace.Plots.Plot1..N`) are Studio-authored too — each with a `spawnPart`,
@@ -827,10 +902,10 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   through `SettingsService`'s per-key sanitizers; see *Settings*.
 - `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
   `BaseReward`, `XpReward`, `Unlocked`, `Name`, `UniqueID`, `Completions`, and optional
-  catalog-only `DecalWeight?` / `SpillWeight?` / `RequiredLevel?` / `RequiredItems?` (`DecalWeight`
-  and `SpillWeight` are the completion-bar slices stains/spills own — default
-  `CleaningConfig.DefaultDecalWeight`/`DefaultSpillWeight`; walls get the rest, see
-  `CompletionWeights`). **`Unlocked`** gates whether
+  catalog-only `DecalWeight?` / `SpillWeight?` / `WebWeight?` / `RequiredLevel?` / `RequiredItems?`
+  (`DecalWeight`, `SpillWeight`, and `WebWeight` are the completion-bar slices stains/spills/webs
+  own — default `CleaningConfig.DefaultDecalWeight`/`DefaultSpillWeight`/`DefaultWebWeight`; walls
+  get the rest, see `CompletionWeights`). **`Unlocked`** gates whether
   the player may accept that business's job (resolved per player by `BusinessService`);
   **`RequiredLevel`** (catalog, `BusinessConfig`) is the level needed to unlock/accept it;
   **`RequiredItems`** (catalog) is a list of tool `UniqueID`s the player must have `Unlocked` —

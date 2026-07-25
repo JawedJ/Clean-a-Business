@@ -261,8 +261,10 @@ local function bind(screenGui: Instance)
 	local buttons3 = screenGui:WaitForChild("HUD"):WaitForChild("AllButtons"):WaitForChild("Buttons3")
 	local settingsButton = buttons3:WaitForChild("SettingsButton") :: ImageButton
 	local tab = screenGui:WaitForChild("SettingsTab") :: Frame
-	local exitButton = tab:WaitForChild("ExitButton") :: ImageButton
-	local scroll = tab:WaitForChild("ScrollingFrame") :: ScrollingFrame
+	-- ExitButton + ScrollingFrame now sit under a Background wrapper (refactor), not on the tab directly.
+	local background = tab:WaitForChild("Background")
+	local exitButton = background:WaitForChild("ExitButton") :: ImageButton
+	local scroll = background:WaitForChild("ScrollingFrame") :: ScrollingFrame
 
 	local panel = UiAnimations.Panel.new(tab)
 	settingsTab = tab
