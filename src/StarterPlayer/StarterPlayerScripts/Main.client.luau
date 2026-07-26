@@ -32,6 +32,7 @@ local JobSummaryController = require(Modules:WaitForChild("JobSummaryController"
 local JobCameraController = require(Modules:WaitForChild("JobCameraController"))
 local UiButtonController = require(Modules:WaitForChild("UiButtonController"))
 local SettingsUiController = require(Modules:WaitForChild("SettingsUiController"))
+local CompanyUiController = require(Modules:WaitForChild("CompanyUiController"))
 local BackgroundMusicController = require(Modules:WaitForChild("BackgroundMusicController"))
 local UiStrokeScaler = require(Modules:WaitForChild("UiStrokeScaler"))
 local ScrollBarScaler = require(Modules:WaitForChild("ScrollBarScaler"))
@@ -107,6 +108,8 @@ safeInit("JobCameraController", JobCameraController.init)
 safeInit("UiButtonController", UiButtonController.init)
 -- Settings tab (volume sliders). Init BEFORE the music starts so saved volumes apply first.
 safeInit("SettingsUiController", SettingsUiController.init)
+-- Company panel (avatar, "<name>'s Business", average rating, editable saved description).
+safeInit("CompanyUiController", CompanyUiController.init)
 -- Loop the BackgroundMusic playlist for the local player, with fade transitions.
 safeInit("BackgroundMusicController", BackgroundMusicController.init)
 safeInit("UiStrokeScaler", UiStrokeScaler.init)

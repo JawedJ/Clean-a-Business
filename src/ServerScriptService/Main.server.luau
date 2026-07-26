@@ -14,11 +14,11 @@ local ToolService = require(game.ServerScriptService.Modules.ToolService)
 local ShopService = require(game.ServerScriptService.Modules.ShopService)
 local SkillsService = require(game.ServerScriptService.Modules.SkillsService)
 local SettingsService = require(game.ServerScriptService.Modules.SettingsService)
+local CompanyService = require(game.ServerScriptService.Modules.CompanyService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
 	template = DataTemplate,
-	useMock = true
 })
 
 
@@ -45,6 +45,8 @@ ShopService.init()
 -- multipliers other systems read. Init before SettingsService; order among these is not critical.
 SkillsService.init()
 SettingsService.init()
+-- Persists the player's business description (Company UI), like SettingsService for settings.
+CompanyService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()
 

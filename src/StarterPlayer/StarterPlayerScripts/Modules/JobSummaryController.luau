@@ -20,6 +20,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local JobRating = require(ReplicatedStorage.SharedModules.JobRating)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
@@ -94,13 +95,6 @@ local buttonsInteractable = false
 
 -- The business the summary is currently showing, so PlayAgain knows which job to re-accept.
 local currentBusinessId: string? = nil
-
--- One star per 20% cleaned, clamped to 1..5 so there's always a rating (and a description);
--- a full completion sends fraction = 1 -> 5 stars. The tiny epsilon keeps an exact 1.0 from
--- floating just under 5.
-local function starsFor(fraction: number): number
-	return math.clamp(math.floor(fraction * 5 + 1e-6), 1, 5)
-end
 
 local function formatDuration(seconds: number): string
 	local total = math.max(0, math.floor(seconds))
@@ -193,7 +187,7 @@ local function show(data: SummaryData)
 	-- Money + XP tick up from 0 to their totals over the next few seconds (see animateCounts).
 	animateCounts(data.cash, data.xp)
 
-	local stars = starsFor(data.fraction)
+	local stars = JobRating.starsFor(data.fraction)
 	if starAmount then
 		starAmount.Text = string.rep("⭐", stars)
 	end

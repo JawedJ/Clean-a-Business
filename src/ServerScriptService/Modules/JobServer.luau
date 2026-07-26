@@ -17,6 +17,7 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local CompletionWeights = require(ReplicatedStorage.SharedModules.CompletionWeights)
 local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
+local JobRating = require(ReplicatedStorage.SharedModules.JobRating)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
 local SkillsService = require(script.Parent.SkillsService)
@@ -242,6 +243,19 @@ end
 -- the job was cleaned (1 for a full completion, the prorated share for a finish-early), which
 -- drives the star rating; `cash`/`xp` are the amounts actually awarded (already multiplied).
 function JobServer._fireSummary(self: JobServer, cash: number, xp: number, fraction: number)
+	-- Fold this job's star rating into the player's running Ratings tally so the Company UI can
+	-- show their business's AVERAGE rating (Sum / Count). Every job end is rated -- a full
+	-- completion (fraction 1 -> 5 stars) and a finish-early (prorated) alike -- since both funnel
+	-- through here. The client's JobSummary uses the same JobRating.starsFor, so the star it shows
+	-- for this job is exactly the one we bank.
+	local stars = JobRating.starsFor(fraction)
+	DataService:update(self.player, { "Ratings", "Sum" }, function(current: number?)
+		return (current or 0) + stars
+	end)
+	DataService:update(self.player, { "Ratings", "Count" }, function(current: number?)
+		return (current or 0) + 1
+	end)
+
 	JobSummary:FireClient(self.player, {
 		businessId = self.businessId,
 		cash = cash,

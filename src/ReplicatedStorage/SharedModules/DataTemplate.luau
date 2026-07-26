@@ -47,6 +47,16 @@ export type Settings = {
 	HidePlayers: boolean,
 }
 
+-- Running tally of the player's per-job star ratings (1..5 per job -- see JobRating), used to
+-- show their business's AVERAGE rating in the Company UI. We store the running Sum + Count rather
+-- than the average itself so each new job folds in exactly (average = Sum / Count). A fresh
+-- player has rated no jobs (Count 0), which the UI shows as the 1-star floor. Recorded on every
+-- job end -- full completion (always 5) and finish-early (prorated) alike -- by JobServer.
+export type Ratings = {
+	Sum: number,
+	Count: number,
+}
+
 -- Per-player business record. We no longer persist cleaned state (jobs are
 -- per-session and reset every time they're accepted), so this only tracks whether
 -- the player has Unlocked the business -- which is what gates accepting its job.
@@ -121,6 +131,18 @@ local DataTemplate = {
 		SFXVolume = 0.5,
 		HidePlayers = false,
 	} :: Settings,
+
+	-- Free-text description the player writes for their business in the Company UI, persisted so it
+	-- re-displays each session. Empty on a fresh profile (the UI shows its placeholder then).
+	-- Reconciled onto existing profiles like the other fields.
+	BusinessDescription = "",
+
+	-- Running per-job star-rating tally (see Ratings type). Both start at 0 -> a fresh player shows
+	-- the 1-star floor until their first job is rated.
+	Ratings = {
+		Sum = 0,
+		Count = 0,
+	} :: Ratings,
 
 	BusinessList = {
 		-- Every business starts LOCKED; BusinessService grants unlocks as requirements are met

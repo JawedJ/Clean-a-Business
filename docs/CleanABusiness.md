@@ -366,6 +366,54 @@ stuff an arbitrary key or a wrong-typed/out-of-range value into its profile: `Mu
 `SFXVolume` must be a real number (NaN rejected via `value == value`) clamped to `0..1`;
 `HidePlayers` must be a boolean.
 
+### Company panel (implemented)
+**`CompanyUiController`** (client) + **`CompanyService`** (server) — the player's business-at-a-glance
+panel (`ScreenGui.CompanyUI`), opened from `HUD.AllButtons.Buttons2.CompanyButton`.
+- **Toggle.** The `CompanyButton` toggles the panel through **`ExclusivePanels`** (registered under
+  `"Company"`), exactly like the board/shop/skills/settings — so **at most one panel is open at a
+  time**: opening this closes whichever of those was up, both animating together with the shared
+  **`UiAnimations.Panel`** motion (slide-up+expand / swoop-down+shrink). The `ExitButton` calls
+  `ExclusivePanels.close`. The coordinator owns all the mid-animation gating + queueing; the
+  `beforeOpen` hook refreshes the live labels right before the panel springs in.
+- **`MainFrame`** (an `ImageLabel`) holds everything, split into `TopSubframe` / `BottomSubframe`.
+  `TopSubframe` is what's wired today:
+  - `ImageCard.ImageLabel` — the local player's **avatar headshot**, fetched async via
+    `Players:GetUserThumbnailAsync` (spawned + pcall'd; a failure leaves the authored placeholder).
+  - `InfoCard.PlayerInfoText` — `"<DisplayName>'s Business"`.
+  - `InfoCard.StarsAmtText` — the player's **average per-job star rating**, `Ratings.Sum / Count`
+    (the **1-star floor** before any job is rated), rendered as a row of **⭐ emoji** (the average
+    rounded to the nearest whole star, 1..5 — like the JobSummary screen) and kept live off the
+    `Ratings` changed signals.
+  - `InfoCard.DescriptionEditableTxt` (a `TextBox`) — an editable description the player writes.
+    Persisted across sessions exactly like the settings: the box edits locally, and on **focus-lost**
+    the client fires **`UpdateBusinessDescription`**; `CompanyService` coerces to a string, **trims**,
+    **caps at 200 chars**, and writes `DataTemplate.BusinessDescription` via DataService, which
+    replicates the confirmed value back (re-applied unless the box is mid-edit). Empty saved value ->
+    the box shows its placeholder.
+- **Per-job star rating (`Ratings`).** A job's rating is `JobRating.starsFor(fraction)` — one star per
+  20% cleaned, clamped 1..5 (full completion = 5). `JobServer._fireSummary` folds it into the running
+  `Ratings` tally (`Sum` += stars, `Count` += 1) on **every** job end — full completion **and**
+  finish-early alike — so the panel's average covers all jobs. The **same** `JobRating` module draws
+  the star on the JobSummary screen, so the shown and banked ratings can't drift (like `Mastery`).
+  This is **distinct from job mastery**: mastery stars come from lifetime `Completions` per business;
+  the Company rating is a global average of finish quality.
+
+**UI convention — every panel opens/closes with `UiAnimations.Panel`.** All full-panel frames in
+the game (job board, upgrades shop, skills, settings, Company, and any panel added later) show and
+hide through the shared **`UiAnimations.Panel`** (`:open()` / `:close()` / `:hideInstant()`), never
+by toggling `Visible` directly — that shared spring-up/expand + swoop-down/shrink motion is the
+game's consistent panel feel. Build one per frame on each bind (`Panel.new(frame)`, off the frame's
+authored resting geometry). The norm is to register the panel with **`ExclusivePanels`** and drive
+open/close through the coordinator (`ExclusivePanels.toggle`/`.close`/`.open`) rather than calling
+`panel:open()`/`:close()` directly — that enforces **one panel open at a time** (opening one closes
+whichever was up, both animating together) and owns all the mid-animation gating + queueing. The
+board, shop, skills, settings, and Company panels all do this. **Never** open/close a panel by
+setting `.Visible` alone.
+
+**UI authoring convention — `_STATIC` labels.** Any `TextLabel` whose name ends in **`_STATIC`**
+(e.g. `RatingText_STATIC`, `EarningsTxt_STATIC`) is designer-authored copy and is **never read or
+written in code** — leave its text alone. Only the non-`_STATIC` value labels are code-driven.
+
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
 - **Shared dirt template:** the initial dirt image is identical for every surface, so
@@ -669,7 +717,7 @@ no server state or remotes.
 
 ```
 ReplicatedStorage/SharedModules/
-  DataTemplate.luau     saved-data shape + defaults (Cash, Gems, Level, Settings, BusinessList, Inventory, PlotButtonsBought)
+  DataTemplate.luau     saved-data shape + defaults (Cash, Gems, Level, Settings, BusinessList, Inventory, PlotButtonsBought, BusinessDescription, Ratings)
   ToolConfig.luau       tool definitions catalog
   BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/RequiredItems/DecalWeight/SpillWeight/WebWeight)
   CleaningConfig.luau   cleaning tunables (shared by client + server)
@@ -677,6 +725,7 @@ ReplicatedStorage/SharedModules/
   ItemUpgrades.luau     shared item-upgrade math: MAX_LEVEL 10, geometric cost (BaseUpgradeCost x2.3/level), pure applyUpgrade (Range/Radius/UseTime steps, MIN_USE_TIME floor)
   Leveling.luau         pure leveling math: XP counts within the current level toward xpForLevel(CurrentLevel), rolls over on level-up
   Mastery.luau          job-mastery rules: stars from Completions, linear +5%/star XP multiplier
+  JobRating.luau        per-job star rating (1..5, one star per 20% cleaned); shared by JobSummary (display) + JobServer (persist) so they can't drift
   NumberFormat.luau     number -> display string (abbreviate "2.5k"; commas "2,500")
   SurfaceResolver.luau  wall part -> identity (walls)
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
@@ -705,6 +754,7 @@ ReplicatedStorage/Remotes/
   PurchaseItem          RemoteEvent (client → server: unlock a tool; re-validated + Gem-charged)
   UpgradeItem           RemoteEvent (client → server: level an owned tool up; re-validated + Gem-charged)
   UpdateSetting         RemoteEvent (client → server: persist one sanitized setting key)
+  UpdateBusinessDescription  RemoteEvent (client → server: persist the business description, trimmed + length-capped)
   PlotButtonSound       RemoteEvent (server → client: whether a stepped-on plot button was bought, for its SFX)
   WorkerGemPopup        RemoteEvent (server → client: float "💎N" above each paying worker)
 
@@ -712,7 +762,7 @@ NOTE: Remotes are Studio-authored (NOT in default.project.json) -- adding one in
 creates a duplicate. Create new remotes in Studio only.
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Job/Cleaning/DecalCleaning/SpillCleaning/WebCleaning/Tool/Shop/Settings/Admin services
+  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Job/Cleaning/DecalCleaning/SpillCleaning/WebCleaning/Tool/Shop/Settings/Company/Admin services
   Modules/PlotButtonService.luau     per-plot purchase progression: step-on Buttons buy Spawnables with Cash, reveal next 1-2 buttons, persist per player (PlotButtonsBought), hide every plot at startup, drop-in spawn animation (per-leaf-model Hitbox footprints), rebuild plot on reassign, price billboards + gem generation
   Modules/BusinessService.luau       seeds the catalog into each profile + resolves unlocks (level now, permanent, re-runs on level change)
   Modules/JobService.luau            job board manager: owns per-player JobServer, AcceptJob/FinishEarly, teleport, endJob; gates accept on Unlocked + RequiredLevel; pins every business Model to ModelStreamingMode.Persistent at init (see StreamingEnabled)
@@ -727,6 +777,7 @@ ServerScriptService/
   Modules/ShopService.luau           upgrades shop authority: PurchaseItem / UpgradeItem (re-validated, GEM-charged; upgrade math from shared ItemUpgrades)
   Modules/SkillsService.luau         skills authority: PurchaseSkill (re-validated, Gem-charged), getMultiplier read-point for other services, free-roam walk speed (StarterPlayer.CharacterWalkSpeed x Speedy), ProcessReceipt for the Robux unlock-all product
   Modules/SettingsService.luau       persists client preferences (volumes, HidePlayers) via UpdateSetting; per-key sanitizers clamp/type-check before saving
+  Modules/CompanyService.luau        persists the business description via UpdateBusinessDescription (string coerced, trimmed, length-capped); mirrors SettingsService
   Modules/PlayerCollisionService.luau  puts every character in a "Players" collision group that doesn't collide with itself -- players never collide, job or not (still collides with Default, so floors/walls work)
   Modules/AdminCommands.luau         owner-only dev chat commands: /completejob <id> <amt>, /addcash <amt>
   Modules/InventoryManager.luau      addItem helper used by ShopService (present; not init'd on its own)
@@ -741,6 +792,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/SkillsUiController.luau  skills panel (Buttons3.ASkillsButton + SkillsDisplay): per-skill next-level price (tinted by affordability) / MAXED, Circle1..5 level pips, BuyButton -> PurchaseSkill; UnlockAllButton prompts the Robux max-everything product and hides once all maxed
   Modules/UpgradesUiController.luau upgrades shop UI: per-slot tool purchase/upgrade -> PurchaseItem / UpgradeItem, cost + Level x/MAX from shared ItemUpgrades; InteractButton plays its own purchase/fail SFX
   Modules/SettingsUiController.luau settings tab: volume sliders (apply locally live, persist via UpdateSetting on release) + HidePlayers toggle
+  Modules/CompanyUiController.luau  Company panel: CompanyButton toggles CompanyUI open/closed through ExclusivePanels (closes whichever other panel was up, shared UiAnimations.Panel motion), ExitButton closes; avatar headshot, "<name>'s Business", average star rating as ⭐ emoji (live off Ratings), editable saved description (persist via UpdateBusinessDescription on focus-lost); never touches _STATIC labels
   Modules/ExclusivePanels.luau     one-panel-at-a-time coordinator (job board / shop / skills / settings): opening one closes the other simultaneously, raises the opener above it, and queues actions requested mid-animation (max 2, latest per panel wins)
   Modules/JobUiController.luau     job board UI: toggle (Buttons.JobButton/B key), per-business rows, AcceptJob; gates Wash/Locked on Unlocked + RequiredLevel (green Requirements when met); draws mastery stars/boost + boosted Rewards; hides the whole Buttons frame while on a job; wires the HUD clusters' grid-aware hover polish (the one grow UiButtonController skips)
   Modules/UiButtonController.luau  the one place button polish is wired: scans PlayerGui (+ DescendantAdded) and gives EVERY GuiButton the click SFX, hover SFX, and hover grow (skips TouchGui controls; skips the HUD clusters, which JobUiController wires grid-aware)
