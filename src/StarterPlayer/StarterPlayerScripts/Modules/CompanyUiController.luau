@@ -135,6 +135,11 @@ local function bind(screenGui: Instance)
 	playerInfoText.Text = string.format("%s's Business", localPlayer.DisplayName)
 	loadAvatar(avatarLabel)
 
+	-- The box is authored Active = false; on TOUCH devices an inactive TextBox never receives the
+	-- tap, so it can't focus or raise the keyboard (on desktop a click focuses it regardless). Force
+	-- it active so mobile players can edit it -- same reason the settings controls are set active.
+	box.Active = true
+
 	-- Live content -- seed it now, then keep it fresh off the data (see init's changed signals).
 	refreshStars()
 	box.PlaceholderText = DESCRIPTION_PLACEHOLDER
