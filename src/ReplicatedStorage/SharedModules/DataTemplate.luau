@@ -112,6 +112,11 @@ local DataTemplate = {
 	-- Reconciled onto existing profiles like the other fields.
 	LastOnlineTime = 0,
 	LastGemsPerSecond = 0,
+	-- Offline gems that have been earned but NOT yet claimed. Each join folds the newly-earned
+	-- offline amount into this bank (rather than replacing it), so a player who leaves without
+	-- pressing Claim keeps what they'd accrued and it simply keeps growing. Zeroed the moment the
+	-- reward is claimed (Claim or Double). Reconciled onto existing profiles.
+	UnclaimedAfkGems = 0,
 
 	-- Per-plot purchase progression (see PlotButtonService). A set of the button names the
 	-- player has bought (e.g. { Button1 = true, Button2 = true }). Layout-agnostic: buttons and

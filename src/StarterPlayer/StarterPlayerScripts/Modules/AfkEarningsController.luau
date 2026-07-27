@@ -188,7 +188,7 @@ local function bind(screenGui: Instance)
 	offlineTimeLabel = mainFrame:WaitForChild("OfflineTimeTxt") :: TextLabel
 	gemAmtLabel = mainFrame:WaitForChild("GemAmtTxt") :: TextLabel
 	afkPanel = panel
-	gemTemplate = frame:WaitForChild("GemImg") :: ImageLabel
+	gemTemplate = screenGui:WaitForChild("GemImg") :: ImageLabel
 	screenGuiRef = screenGui
 	gemDisplay = allDisplays:WaitForChild("GemDisplay") :: GuiObject
 	-- Authored Visible; snap it hidden so it only appears when a reward is shown.
