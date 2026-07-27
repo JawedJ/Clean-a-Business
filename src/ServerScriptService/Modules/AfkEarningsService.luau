@@ -23,7 +23,9 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
+local GemBuff = require(script.Parent.GemBuff)
 local PlotButtonService = require(script.Parent.PlotButtonService)
 local SkillsService = require(script.Parent.SkillsService)
 local PurchaseService = require(script.Parent.PurchaseService)
@@ -32,8 +34,8 @@ local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local ShowAfkEarnings = Remotes:WaitForChild("ShowAfkEarnings") :: RemoteEvent
 local ClaimAfkEarnings = Remotes:WaitForChild("ClaimAfkEarnings") :: RemoteEvent
 
--- Offline pay is 1/15th of the online rate.
-local OFFLINE_RATE_DIVISOR = 15
+-- Offline pay is 1/15th of the online rate (shared with the Company UI, which quotes a day of it).
+local OFFLINE_RATE_DIVISOR = Config.OfflineRateDivisor
 -- Never pay more than one day of the FULL online rate for a single offline stretch, however long
 -- they were away. (The unclaimed BANK can exceed this across multiple unclaimed stretches -- the
 -- cap guards one continuous absence, not gems already earned.)
@@ -84,13 +86,23 @@ local function onJoin(player: Player)
 	local banked = if type(bankedRaw) == "number" then bankedRaw else 0
 
 	-- Earnings for THIS offline stretch (capped), on top of whatever was banked from before.
+	--
+	-- A purchased gem boost keeps running while the player is away (its expiry is an absolute
+	-- stamp), so the payable window splits in two: the seconds from their leave until the boost ran
+	-- out pay the FULL rate times the boost -- no offline divisor at all, that's what they bought --
+	-- and everything after pays the usual reduced rate. Leaving with 60 minutes of boost left and
+	-- coming back 90 minutes later means 60 boosted minutes and 30 ordinary ones.
 	local secondsAway = 0
 	local newOffline = 0
 	if type(lastOnline) == "number" and lastOnline > 0 then
 		secondsAway = math.max(0, os.time() - lastOnline)
 		if type(rate) == "number" and rate > 0 then
 			local payableSeconds = math.min(secondsAway, MAX_OFFLINE_SECONDS)
-			newOffline = math.floor(rate / OFFLINE_RATE_DIVISOR * payableSeconds)
+			local boostedSeconds = math.clamp(GemBuff.expiresAt(player) - lastOnline, 0, payableSeconds)
+			local normalSeconds = payableSeconds - boostedSeconds
+			newOffline = math.floor(
+				rate * GemBuff.MULTIPLIER * boostedSeconds + rate / OFFLINE_RATE_DIVISOR * normalSeconds
+			)
 		end
 	end
 

@@ -131,6 +131,14 @@ local CleaningConfig = {
 	-- Absent or 0 = nothing. Workers use PlotWorkerBaseGemRate instead, not this.
 	PlotSpawnableGemRateAttribute = "GemRate",
 
+	-- Offline (AFK) earnings pay a FRACTION of the online rate: gems/sec divided by this, per second
+	-- away (see AfkEarningsService). Shared rather than server-local because the Company UI's
+	-- ClaimCard projects a payout at the same reduced rate, and must quote what the server grants.
+	OfflineRateDivisor = 15,
+	-- The stretch of offline earnings the ClaimCard's "24-Hour Earnings" product pays out, and the
+	-- window the ClaimCard's label projects.
+	ClaimEarningsSeconds = 86400,
+
 	-- The player's currently accepted job (a businessId) is published to their own
 	-- client through this attribute. The client builds wall overlays for whichever
 	-- business it names and tears them down when it changes. Cleared (nil) = no job.

@@ -42,6 +42,8 @@ local MissingHighlightController = require(Modules:WaitForChild("MissingHighligh
 local JobGhostController = require(Modules:WaitForChild("JobGhostController"))
 local HidePlayersController = require(Modules:WaitForChild("HidePlayersController"))
 local AfkEarningsController = require(Modules:WaitForChild("AfkEarningsController"))
+local GemBuffController = require(Modules:WaitForChild("GemBuffController"))
+local GemBurst = require(Modules:WaitForChild("GemBurst"))
 local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
 
 
@@ -92,6 +94,9 @@ safeInit("RewardPopupController", RewardPopupController.init)
 safeInit("LevelUiController", LevelUiController.init)
 safeInit("CashUiController", CashUiController.init)
 safeInit("GemUiController", GemUiController.init)
+-- The shared gem-shower effect. Init before its callers (AfkEarnings / Company UI claims) so a
+-- payout that lands early still has something bound to play.
+safeInit("GemBurst", GemBurst.init)
 safeInit("JobUiController", JobUiController.init)
 -- Open/close the job board and upgrades shop as the player walks in/out of their warehouse
 -- board hitboxes.
@@ -125,6 +130,8 @@ safeInit("JobGhostController", JobGhostController.init)
 safeInit("HidePlayersController", HidePlayersController.init)
 -- Offline-earnings claim screen: shown on join when the server reports AFK gems to collect.
 safeInit("AfkEarningsController", AfkEarningsController.init)
+-- HUD countdown for the purchased 10x gem boost, shown only while one is running.
+safeInit("GemBuffController", GemBuffController.init)
 -- Warm the HUD's image assets in the background so they don't first render blurry.
 safeInit("UiPreloader", UiPreloader.init)
 

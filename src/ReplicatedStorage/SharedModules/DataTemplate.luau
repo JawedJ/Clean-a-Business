@@ -118,6 +118,23 @@ local DataTemplate = {
 	-- reward is claimed (Claim or Double). Reconciled onto existing profiles.
 	UnclaimedAfkGems = 0,
 
+	-- Live plot output in gems/sec, already scaled by the Hoarding skill (i.e. what the player is
+	-- actually earning). Mirrored out of PlotButtonService by CompanyService while they're online so
+	-- the client can SHOW the rate (the Company UI's EarningsCard) -- unlike LastGemsPerSecond, which
+	-- is a leave-time snapshot the client never sees. Reconciled onto existing profiles.
+	GemsPerSecond = 0,
+
+	-- Lifetime seconds the player has spent in-game ("Business Age" in the Company UI). Accrued by
+	-- CompanyService: flushed into the profile periodically while online and once more on leave, so
+	-- the stored value is always the true running total. Reconciled onto existing profiles.
+	PlaytimeSeconds = 0,
+
+	-- When the player's purchased 10x gem boost runs out, as an ABSOLUTE os.time() stamp (0 = no
+	-- boost). Absolute rather than a countdown so it keeps ticking while they're offline, which is
+	-- what lets the offline payout pay boosted for whatever slice of the absence it covered (see
+	-- GemBuff / AfkEarningsService). Reconciled onto existing profiles.
+	GemBuffExpiresAt = 0,
+
 	-- Per-plot purchase progression (see PlotButtonService). A set of the button names the
 	-- player has bought (e.g. { Button1 = true, Button2 = true }). Layout-agnostic: buttons and
 	-- spawnables share the same names across every plot, so this replays onto whichever plot the

@@ -32,6 +32,7 @@ local Workspace = game:GetService("Workspace")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
+local GemBuff = require(script.Parent.GemBuff)
 local ProgressionService = require(script.Parent.ProgressionService)
 local PlotService = require(script.Parent.PlotService)
 
@@ -774,9 +775,19 @@ local function startGemLoop()
 			for _, state in states do
 				local total, perWorker, workers = computeGemsPerSecond(state)
 				if stateByPlot[state.plot] == state then
-					-- Record the live rate (even 0) so a leave can snapshot it for offline earnings.
+					-- Record the BASE rate (even 0) so a leave can snapshot it for offline earnings.
+					-- Deliberately pre-boost: the offline payout applies the boost itself, for
+					-- exactly the slice of the absence the boost still covered, and the Company UI
+					-- quotes this rate for its 24-hour claim.
 					gemsPerSecondByPlayer[state.player] = total
 				end
+
+				-- The purchased 10x boost scales what the plot actually pays out (and the per-worker
+				-- popup with it), without touching the base rate recorded above.
+				local boost = GemBuff.getMultiplier(state.player)
+				total *= boost
+				perWorker *= boost
+
 				if total > 0 and stateByPlot[state.plot] == state then
 					local acc = (gemAccum[state.plot] or 0) + total
 					local whole = math.floor(acc)

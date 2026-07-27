@@ -17,6 +17,7 @@ local SettingsService = require(game.ServerScriptService.Modules.SettingsService
 local CompanyService = require(game.ServerScriptService.Modules.CompanyService)
 local PurchaseService = require(game.ServerScriptService.Modules.PurchaseService)
 local AfkEarningsService = require(game.ServerScriptService.Modules.AfkEarningsService)
+local GemProductsService = require(game.ServerScriptService.Modules.GemProductsService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
@@ -51,12 +52,16 @@ PurchaseService.init()
 -- multipliers other systems read. Init before SettingsService; order among these is not critical.
 SkillsService.init()
 SettingsService.init()
--- Persists the player's business description (Company UI), like SettingsService for settings.
+-- Persists the player's business description (Company UI) and feeds its stat cards: accrues
+-- lifetime playtime and mirrors the plot's gem rate into the profile.
 CompanyService.init()
 -- Offline gem earnings: snapshots gems/sec + leave time on exit, grants a fraction on rejoin via
 -- the AfkEarnings UI. Init after SkillsService (reads its Hoarding multiplier) and PurchaseService
 -- (registers the Double dev product).
 AfkEarningsService.init()
+-- The Company UI's two Robux products: the 24-hour earnings claim and the 10x gem boost. Init after
+-- PurchaseService (it registers both with the receipt dispatcher).
+GemProductsService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()
 
