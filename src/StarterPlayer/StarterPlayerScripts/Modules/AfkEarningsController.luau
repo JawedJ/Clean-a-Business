@@ -19,6 +19,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MarketplaceService = game:GetService("MarketplaceService")
+local TweenService = game:GetService("TweenService")
 
 local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
@@ -36,6 +37,20 @@ local SCREEN_GUI_NAME = "ScreenGui"
 -- Robux dev product the Double button buys (granted server-side in AfkEarningsService).
 local DOUBLE_PRODUCT_ID = 3611857315
 
+-- Claim burst: on claim we scatter GEM_COUNT copies of the GemImg around screen centre over
+-- SPAWN_WINDOW seconds; each holds GEM_HOLD in place, then flies to the HUD gem counter over
+-- GEM_FLY while fading out, and is destroyed. The scatter half-extents (px) are kept tight so the
+-- gems overlap slightly rather than spreading thin.
+local GEM_COUNT = 30
+local SPAWN_WINDOW = 0.7
+local GEM_HOLD = 0.35
+local GEM_FLY = 0.9
+local SPREAD_X = 150
+local SPREAD_Y = 120
+local GEM_FLY_TWEEN = TweenInfo.new(GEM_FLY, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+-- Above the panel (ZIndex 1) so the burst reads over everything as it flies to the HUD.
+local GEM_Z_INDEX = 100
+
 local AfkEarningsController = {}
 
 -- Current elements, refreshed each time the ScreenGui is (re)bound (it's re-cloned per respawn).
@@ -43,6 +58,11 @@ local afkFrame: Frame? = nil
 local offlineTimeLabel: TextLabel? = nil
 local gemAmtLabel: TextLabel? = nil
 local afkPanel: UiAnimations.Panel? = nil
+-- The GemImg template (hidden, cloned per gem) and the two instances the burst needs -- the
+-- ScreenGui the clones parent under and the HUD gem counter they fly toward. Rebound each respawn.
+local gemTemplate: ImageLabel? = nil
+local screenGuiRef: Instance? = nil
+local gemDisplay: GuiObject? = nil
 
 -- The outstanding reward, held until a button resolves it: `active` means the screen should be up
 -- (drives a re-open after a respawn), and gems/away are what to display.
@@ -79,10 +99,63 @@ local function tryShow()
 	panel:showInstant()
 end
 
+-- Animate one gem: clone the template into the ScreenGui at `spawnPos` (scale-based, near screen
+-- centre), hold it there, then fly it to the HUD gem counter while fading out, and destroy it. The
+-- fly target is computed after the hold as a pixel delta from the gem's own rendered centre to the
+-- counter's, so it lands correctly regardless of the parent's coordinate origin.
+local function flyGem(template: ImageLabel, screenGui: Instance, target: GuiObject, spawnPos: UDim2)
+	local gem = template:Clone()
+	gem.Visible = true
+	gem.ZIndex = GEM_Z_INDEX
+	gem.AnchorPoint = Vector2.new(0.5, 0.5)
+	gem.Position = spawnPos
+	gem.Parent = screenGui
+
+	task.spawn(function()
+		task.wait(GEM_HOLD)
+		if not gem.Parent or not target.Parent then
+			gem:Destroy()
+			return
+		end
+		local delta = (target.AbsolutePosition + target.AbsoluteSize / 2)
+			- (gem.AbsolutePosition + gem.AbsoluteSize / 2)
+		local tween = TweenService:Create(gem, GEM_FLY_TWEEN, {
+			Position = gem.Position + UDim2.fromOffset(delta.X, delta.Y),
+			ImageTransparency = 0.8,
+		})
+		tween:Play()
+		tween.Completed:Wait()
+		SoundManager.playOneShot("plop")
+		gem:Destroy()
+	end)
+end
+
+-- Scatter the claim burst: GEM_COUNT gems spawned over SPAWN_WINDOW, each flying to the HUD gem
+-- counter (see flyGem). No-op if anything it needs isn't bound. Runs off the caller's thread.
+local function playClaimEffect()
+	local template = gemTemplate
+	local screenGui = screenGuiRef
+	local target = gemDisplay
+	if not template or not screenGui or not target then
+		return
+	end
+
+	task.spawn(function()
+		for _ = 1, GEM_COUNT do
+			local sx = (math.random() * 2 - 1) * SPREAD_X
+			local sy = (math.random() * 2 - 1) * SPREAD_Y
+			flyGem(template, screenGui, target, UDim2.new(0.5, sx, 0.5, sy))
+			task.wait(SPAWN_WINDOW / GEM_COUNT)
+		end
+	end)
+end
+
 -- Close the panel and release the lock, marking the reward resolved so it won't re-open on respawn.
+-- Fires the gem burst -- both buttons resolve through here, so it plays for claim and double alike.
 local function closeAfk()
 	active = false
 	ExclusivePanels.setLocked(false)
+	playClaimEffect()
 	local panel = afkPanel
 	if panel then
 		panel:close()
@@ -108,11 +181,16 @@ local function bind(screenGui: Instance)
 	local claimButton = mainFrame:WaitForChild("ClaimButton") :: ImageButton
 	local doubleButton = mainFrame:WaitForChild("DoubleButton") :: ImageButton
 
+	local allDisplays = screenGui:WaitForChild("HUD"):WaitForChild("AllDisplays")
+
 	local panel = UiAnimations.Panel.new(frame)
 	afkFrame = frame
 	offlineTimeLabel = mainFrame:WaitForChild("OfflineTimeTxt") :: TextLabel
 	gemAmtLabel = mainFrame:WaitForChild("GemAmtTxt") :: TextLabel
 	afkPanel = panel
+	gemTemplate = frame:WaitForChild("GemImg") :: ImageLabel
+	screenGuiRef = screenGui
+	gemDisplay = allDisplays:WaitForChild("GemDisplay") :: GuiObject
 	-- Authored Visible; snap it hidden so it only appears when a reward is shown.
 	panel:hideInstant()
 
