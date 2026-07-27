@@ -16,11 +16,11 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local MarketplaceService = game:GetService("MarketplaceService")
 local StarterPlayer = game:GetService("StarterPlayer")
 
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
+local PurchaseService = require(script.Parent.PurchaseService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local PurchaseSkill = Remotes:WaitForChild("PurchaseSkill") :: RemoteEvent
@@ -83,27 +83,6 @@ local function grantAllSkills(player: Player)
 	SkillsService.refreshWalkSpeed(player)
 end
 
--- MarketplaceService receipt handler for the skill dev products. Returns PurchaseGranted only
--- after the grant is safely written, NotProcessedYet otherwise so Roblox retries later (the grant
--- is idempotent, so a retry can't double-apply). Unknown products are left unprocessed.
-local function processReceipt(receiptInfo: { PlayerId: number, ProductId: number }): Enum.ProductPurchaseDecision
-	local player = Players:GetPlayerByUserId(receiptInfo.PlayerId)
-	if not player then
-		-- Buyer left before we could grant; Roblox will re-deliver when they're next in-game.
-		return Enum.ProductPurchaseDecision.NotProcessedYet
-	end
-
-	if receiptInfo.ProductId == UNLOCK_ALL_PRODUCT_ID then
-		local ok = pcall(function()
-			DataService:waitForData(player)
-			grantAllSkills(player)
-		end)
-		return if ok then Enum.ProductPurchaseDecision.PurchaseGranted else Enum.ProductPurchaseDecision.NotProcessedYet
-	end
-
-	return Enum.ProductPurchaseDecision.NotProcessedYet
-end
-
 -- Buy the next level of a skill, charging its Gems cost. Ignores bad names, maxed skills, and
 -- players who can't afford the next level.
 local function onPurchase(player: Player, skillName: unknown)
@@ -140,10 +119,13 @@ end
 function SkillsService.init()
 	PurchaseSkill.OnServerEvent:Connect(onPurchase)
 
-	-- Deliver the skill dev products. Only one ProcessReceipt callback exists per game; this is
-	-- currently the only one. If other products are added later, route them through a shared
-	-- receipt dispatcher instead of overwriting this.
-	MarketplaceService.ProcessReceipt = processReceipt
+	-- Deliver the "unlock all skills" dev product through the shared receipt dispatcher (the one
+	-- MarketplaceService.ProcessReceipt owner). The grant just writes the cap over every skill, so
+	-- it's idempotent and safe to re-run on a re-delivered receipt.
+	PurchaseService.register(UNLOCK_ALL_PRODUCT_ID, function(player)
+		grantAllSkills(player)
+		return true
+	end)
 
 	-- Apply each player's Speedy-boosted walk speed to every character they spawn into. Reading
 	-- their skill level needs the profile loaded, and a character can spawn before it is, so gate

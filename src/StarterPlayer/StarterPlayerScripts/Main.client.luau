@@ -41,6 +41,7 @@ local ToolFloatController = require(Modules:WaitForChild("ToolFloatController"))
 local MissingHighlightController = require(Modules:WaitForChild("MissingHighlightController"))
 local JobGhostController = require(Modules:WaitForChild("JobGhostController"))
 local HidePlayersController = require(Modules:WaitForChild("HidePlayersController"))
+local AfkEarningsController = require(Modules:WaitForChild("AfkEarningsController"))
 local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
 
 
@@ -122,6 +123,8 @@ safeInit("MissingHighlightController", MissingHighlightController.init)
 safeInit("JobGhostController", JobGhostController.init)
 -- Optional (Settings.HidePlayers) hiding of every other player's character, toggled from the tab.
 safeInit("HidePlayersController", HidePlayersController.init)
+-- Offline-earnings claim screen: shown on join when the server reports AFK gems to collect.
+safeInit("AfkEarningsController", AfkEarningsController.init)
 -- Warm the HUD's image assets in the background so they don't first render blurry.
 safeInit("UiPreloader", UiPreloader.init)
 

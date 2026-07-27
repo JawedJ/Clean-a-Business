@@ -48,6 +48,17 @@ type PendingAction = { name: string, close: boolean }
 local pendingQueue: { PendingAction } = {}
 local MAX_PENDING = 2
 
+-- When true, every request to OPEN a panel is refused (closes still work). Set by a modal that must
+-- block all other UI while it's up -- currently the AfkEarnings claim screen, which has no exit
+-- button and must be dealt with before anything else can open.
+local locked = false
+
+-- Lock or unlock opening. While locked, open/toggle are no-ops so no panel can be brought up; the
+-- modal that locked it is responsible for unlocking when it closes.
+function ExclusivePanels.setLocked(value: boolean)
+	locked = value
+end
+
 -- (Re)register a panel under a stable name; call on every bind. A freshly cloned panel starts
 -- hidden, so if this name was the open one that state no longer holds -- clear it.
 function ExclusivePanels.register(name: string, panel: UiAnimations.Panel, beforeOpen: (() -> ())?)
@@ -168,6 +179,9 @@ end
 -- (see queueAction) rather than interrupting it. Returns true when the request was accepted; false
 -- if `name` isn't registered or the queue is full.
 local function openExclusive(name: string): boolean
+	if locked then
+		return false
+	end
 	local entry = entries[name]
 	if not entry then
 		return false
@@ -193,6 +207,9 @@ end
 -- the panel open. Returns true if the request was accepted; false if `name` isn't registered or
 -- the queue is full.
 function ExclusivePanels.open(name: string): boolean
+	if locked then
+		return false
+	end
 	local entry = entries[name]
 	if not entry then
 		return false

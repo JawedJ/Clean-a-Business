@@ -98,6 +98,13 @@ local stateByPlot: { [Instance]: PlotState } = {}
 local plotGen: { [Instance]: number } = {}
 -- Fractional gem carry per plot, so sub-1/sec rates still eventually pay out.
 local gemAccum: { [Instance]: number } = {}
+-- Latest gems/sec each owner's plot is producing, refreshed every tick of the gem loop and read by
+-- AfkEarningsService at leave to snapshot the player's offline earning rate. Keyed by player (not
+-- plot) so it survives the plot teardown that release triggers. WEAK keys so an entry is reclaimed
+-- automatically once the player is gone -- deliberately NOT cleared on release, because release can
+-- fire before the leave snapshot reads this (their PlayerRemoving handlers race), which would zero
+-- the rate; the weak table needs no manual cleanup anyway.
+local gemsPerSecondByPlayer: { [Player]: number } = setmetatable({}, { __mode = "k" }) :: { [Player]: number }
 
 -- Record an instance's authored visual props once. `props` is the set we restore on show.
 local function snapshot(inst: Instance)
@@ -706,6 +713,13 @@ local function onReleased(_player: Player, plot: Instance)
 	reset(plot)
 end
 
+-- The gems/sec the player's plot is currently producing (0 if they have no plot / it earns
+-- nothing). Refreshed each second by the gem loop; read by AfkEarningsService to snapshot the
+-- player's offline earning rate when they leave.
+function PlotButtonService.getGemsPerSecond(player: Player): number
+	return gemsPerSecondByPlayer[player] or 0
+end
+
 -- Award Gems once per second for every unlocked spawnable, summed per plot (GemRate attribute;
 -- absent/0 = nothing). Fractional rates accumulate so they eventually pay out whole gems.
 -- Gems/second a plot currently produces under the worker + buff model:
@@ -759,6 +773,10 @@ local function startGemLoop()
 			end
 			for _, state in states do
 				local total, perWorker, workers = computeGemsPerSecond(state)
+				if stateByPlot[state.plot] == state then
+					-- Record the live rate (even 0) so a leave can snapshot it for offline earnings.
+					gemsPerSecondByPlayer[state.player] = total
+				end
 				if total > 0 and stateByPlot[state.plot] == state then
 					local acc = (gemAccum[state.plot] or 0) + total
 					local whole = math.floor(acc)

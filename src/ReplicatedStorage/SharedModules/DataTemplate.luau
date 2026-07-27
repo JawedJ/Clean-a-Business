@@ -102,6 +102,17 @@ local DataTemplate = {
 
 	Gems = 100,
 
+	-- Offline (AFK) gem earnings bookkeeping (see AfkEarningsService). Both are snapshotted when
+	-- the player leaves and read back on their next join to compute what they earned while away:
+	--   * LastOnlineTime -- os.time() at the moment they left (0 for a player who has never left,
+	--     which suppresses the offline reward on a first-ever join).
+	--   * LastGemsPerSecond -- the plot's gems/sec at that moment, already scaled by their Hoarding
+	--     skill so it matches what they'd have earned staying online. Offline pay is
+	--     (LastGemsPerSecond / OfflineRateDivisor) * secondsAway, capped at one day's online rate.
+	-- Reconciled onto existing profiles like the other fields.
+	LastOnlineTime = 0,
+	LastGemsPerSecond = 0,
+
 	-- Per-plot purchase progression (see PlotButtonService). A set of the button names the
 	-- player has bought (e.g. { Button1 = true, Button2 = true }). Layout-agnostic: buttons and
 	-- spawnables share the same names across every plot, so this replays onto whichever plot the

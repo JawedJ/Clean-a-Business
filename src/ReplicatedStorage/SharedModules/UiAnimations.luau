@@ -172,6 +172,22 @@ function Panel.isAnimating(self: Panel): boolean
 	return isBusy(self)
 end
 
+-- Snap fully OPEN with no animation -- the frame just appears at its resting geometry, skipping
+-- the slide+expand. The mirror of hideInstant, for a panel that should pop in without the open
+-- tween but still play its normal close() animation on the way out (e.g. the AfkEarnings modal).
+-- Clears the cooldown so the following close() isn't blocked.
+function Panel.showInstant(self: Panel)
+	if self.activeTween then
+		self.activeTween:Cancel()
+		self.activeTween = nil
+	end
+	self.busyUntil = 0
+	local frame = self.frame
+	frame.Position = self.openPosition
+	frame.Size = self.openSize
+	frame.Visible = true
+end
+
 -- Snap fully hidden with no animation, restoring the resting geometry, for forced state
 -- changes (e.g. a job starting) where a tween would be wrong. Clears the cooldown so a
 -- later open()/close() isn't blocked by a tween that no longer matters.

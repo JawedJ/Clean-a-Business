@@ -15,6 +15,8 @@ local ShopService = require(game.ServerScriptService.Modules.ShopService)
 local SkillsService = require(game.ServerScriptService.Modules.SkillsService)
 local SettingsService = require(game.ServerScriptService.Modules.SettingsService)
 local CompanyService = require(game.ServerScriptService.Modules.CompanyService)
+local PurchaseService = require(game.ServerScriptService.Modules.PurchaseService)
+local AfkEarningsService = require(game.ServerScriptService.Modules.AfkEarningsService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
@@ -41,12 +43,20 @@ SpillCleaningService.init()
 WebCleaningService.init()
 ToolService.init()
 ShopService.init()
+-- Owns the single MarketplaceService.ProcessReceipt; every dev-product grant registers a handler
+-- with it. Init before any service that registers a product (SkillsService, AfkEarningsService)
+-- so the callback is live before receipts can arrive.
+PurchaseService.init()
 -- Gem-purchased passive skills (SkillsDisplay UI): purchase authority + gain/walk-speed
 -- multipliers other systems read. Init before SettingsService; order among these is not critical.
 SkillsService.init()
 SettingsService.init()
 -- Persists the player's business description (Company UI), like SettingsService for settings.
 CompanyService.init()
+-- Offline gem earnings: snapshots gems/sec + leave time on exit, grants a fraction on rejoin via
+-- the AfkEarnings UI. Init after SkillsService (reads its Hoarding multiplier) and PurchaseService
+-- (registers the Double dev product).
+AfkEarningsService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()
 
