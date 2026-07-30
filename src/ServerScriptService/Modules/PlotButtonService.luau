@@ -5,10 +5,13 @@
 --   Plot(i).Buttons     -- purchase buttons, named "Button1".."ButtonN"
 --   Plot(i).Spawnables  -- Models a button reveals, one per UnlockID
 --
--- A button Model carries three attributes (see CleaningConfig):
+-- A button Model carries three attributes, plus one optional (see CleaningConfig):
 --   Cost (number)       -- Cash charged when the OWNER steps on the button's Interact part
 --   UnlockID (string)   -- name of the Spawnables Model this button makes visible
 --   UnlockTwo (boolean) -- if true, buying reveals the NEXT TWO available buttons instead of just one
+--   RequiresButton      -- OPTIONAL: this button stays hidden until Button<N> is bought, however far
+--     (number)             the chain has advanced (RequiresButton = 9 on Button11 -> Button11 only
+--                          appears once Button9 is purchased; until then the chain skips over it)
 --
 -- Rules:
 --   * A fresh player sees only Button1 on their plot; everything else is hidden.
@@ -17,6 +20,8 @@
 --     next available (lowest not-yet-revealed) button -- or the next two if UnlockTwo. Buying ANY
 --     button advances the chain, so out-of-order purchases never strand a button. Not enough Cash
 --     -> nothing happens.
+--   * A button with RequiresButton is skipped by that walk while its prerequisite is unbought (the
+--     slot goes to the next button instead), and appears as soon as the prerequisite is bought.
 --   * Progress persists per player (DataTemplate.PlotButtonsBought). Plots are SHARED and reused,
 --     so a plot is fully hidden when its owner leaves and rebuilt from the next owner's save data
 --     -- buttons are never Instance:Destroy()'d, just hidden, so the plot can be handed on intact.
@@ -53,6 +58,9 @@ type ButtonEntry = {
 	cost: number,
 	unlockId: string,
 	unlockTwo: boolean,
+	-- Index of the button that must be BOUGHT before this one may be revealed (RequiresButton
+	-- attribute), or nil for the usual ungated button.
+	requires: number?,
 	interact: BasePart?,
 	-- The button's billboard price label (if any) and its authored text, so we can append the
 	-- " $<cost>" price (recoloured by affordability) without stacking it on every refresh.
@@ -197,6 +205,7 @@ local function readButton(model: Instance): ButtonEntry?
 	local cost = model:GetAttribute(Config.PlotButtonCostAttribute)
 	local unlockId = model:GetAttribute(Config.PlotButtonUnlockIdAttribute)
 	local unlockTwo = model:GetAttribute(Config.PlotButtonUnlockTwoAttribute)
+	local requires = model:GetAttribute(Config.PlotButtonRequiresAttribute)
 	local interact = model:FindFirstChild(Config.PlotButtonInteractPartName, true)
 	local label = model:FindFirstChildWhichIsA("TextLabel", true) :: TextLabel?
 	if label and baseTextByLabel[label] == nil then
@@ -209,6 +218,7 @@ local function readButton(model: Instance): ButtonEntry?
 		cost = if type(cost) == "number" then cost else 0,
 		unlockId = if type(unlockId) == "string" then unlockId else "",
 		unlockTwo = unlockTwo == true,
+		requires = if type(requires) == "number" then requires else nil,
 		interact = if interact and interact:IsA("BasePart") then interact else nil,
 		priceLabel = label,
 		baseText = if label then baseTextByLabel[label] else "",
@@ -491,38 +501,63 @@ local function revealButton(state: PlotState, index: number)
 	setVisible(entry.model, true)
 end
 
--- Highest button index that's currently revealed -- either still available or already bought. Reveals
--- always fill the slots ABOVE this, so which button was just purchased never matters, only how far the
--- chain has been opened so far.
-local function highestRevealedIndex(state: PlotState): number
-	local maxIdx = 0
-	for name in state.available do
-		local entry = state.buttons[name]
-		if entry and entry.index > maxIdx then
-			maxIdx = entry.index
-		end
+-- Whether a button's RequiresButton prerequisite (if any) has been bought. A button naming a
+-- prerequisite that doesn't exist on this plot is treated as ungated, so a typo'd attribute can't
+-- strand it forever.
+local function prereqMet(state: PlotState, entry: ButtonEntry): boolean
+	local req = entry.requires
+	if not req then
+		return true
 	end
-	for name in state.bought do
-		local entry = state.buttons[name]
-		if entry and entry.index > maxIdx then
-			maxIdx = entry.index
-		end
+	local prereq = state.buttonsByIndex[req]
+	if not prereq then
+		warn(string.format(
+			"[PlotButtonService] %s.%s requires Button%d, which plot %s doesn't have; treating as ungated.",
+			entry.name,
+			Config.PlotButtonRequiresAttribute,
+			req,
+			state.plot.Name
+		))
+		return true
 	end
-	return maxIdx
+	return state.bought[prereq.name] == true
 end
 
--- Reveal the next `count` not-yet-revealed buttons in index order (skipping any gaps in numbering),
--- regardless of which button triggered them. This makes buying ANY button open the next available
--- button(s), so out-of-order purchases can't leave a gap that only a specific later button would fill.
-local function revealNext(state: PlotState, count: number)
-	local idx = highestRevealedIndex(state)
-	local revealed = 0
-	while revealed < count and idx < state.maxButtonIndex do
+-- How many buttons the owner's purchases entitle them to have seen: Button1 is the baseline entry
+-- point, plus one slot per purchase (two for an UnlockTwo button). Derived from `bought` rather than
+-- tracked incrementally, so it's the same number whether we're replaying a save or reacting to a
+-- live purchase, and out-of-order buying can't drift it.
+local function revealSlots(state: PlotState): number
+	local slots = if state.maxButtonIndex >= 1 then 1 else 0
+	for name in state.bought do
+		local entry = state.buttons[name]
+		if entry then
+			slots += if entry.unlockTwo then 2 else 1
+		end
+	end
+	return slots
+end
+
+-- Reveal every button the owner's purchases currently entitle them to see. Slots are spent on the
+-- lowest button indices first (skipping gaps in numbering), each existing button consuming one; the
+-- ones that weren't bought become the visible buttons. A button whose RequiresButton prerequisite
+-- isn't bought yet is skipped WITHOUT spending a slot, so the slot flows to the next button instead
+-- and the gated one appears only once its prerequisite is purchased -- this runs after every
+-- purchase, so that reveal happens the moment the prerequisite is paid for.
+--
+-- Only ever reveals: buttons already showing stay showing (revealButton is idempotent), so replaying
+-- this on a state that's already up to date is a no-op.
+local function refreshRevealed(state: PlotState)
+	local slots = revealSlots(state)
+	local idx = 0
+	while slots > 0 and idx < state.maxButtonIndex do
 		idx += 1
 		local entry = state.buttonsByIndex[idx]
-		if entry and not state.bought[entry.name] and not state.available[entry.name] then
-			revealButton(state, idx)
-			revealed += 1
+		if entry and prereqMet(state, entry) then
+			slots -= 1
+			if not state.bought[entry.name] then
+				revealButton(state, entry.index)
+			end
 		end
 	end
 end
@@ -555,8 +590,9 @@ local function refreshPrices(state: PlotState)
 end
 
 -- Apply a completed purchase of `entry`: hide the bought button, unlock its spawnable, and reveal
--- the next available button (or next two if UnlockTwo). Runtime state only -- persistence is written
--- by the caller so a rebuild can replay it.
+-- whatever the new purchase opens up -- the next available button (or next two if UnlockTwo), plus
+-- any button that was waiting on THIS one as its RequiresButton prerequisite. Runtime state only --
+-- persistence is written by the caller so a rebuild can replay it.
 local function applyPurchase(state: PlotState, entry: ButtonEntry)
 	state.available[entry.name] = nil
 	state.bought[entry.name] = true
@@ -564,7 +600,7 @@ local function applyPurchase(state: PlotState, entry: ButtonEntry)
 
 	unlockSpawnable(state, entry.unlockId, true)
 
-	revealNext(state, if entry.unlockTwo then 2 else 1)
+	refreshRevealed(state)
 
 	-- The spend just changed Cash and a new button may have appeared; recolour the prices.
 	refreshPrices(state)
@@ -627,34 +663,19 @@ end
 -- button's spawnable, then reveal the buttons that are unlocked-but-not-yet-bought (Button1 is the
 -- baseline entry point). Fresh player (no purchases) -> only Button1 visible.
 local function replayFromSave(state: PlotState, bought: { [string]: boolean })
-	-- Reveals fill the next open slot regardless of purchase order, so the total number of revealed
-	-- buttons only depends on WHICH buttons were bought, not the sequence: Button1 (the baseline entry
-	-- point) plus one slot per purchase, or two for an UnlockTwo button.
-	local revealBudget = if state.maxButtonIndex >= 1 then 1 else 0
 	for name, isBought in bought do
 		if isBought then
 			local entry = state.buttons[name]
 			if entry then
 				state.bought[name] = true
 				unlockSpawnable(state, entry.unlockId, false)
-				revealBudget += if entry.unlockTwo then 2 else 1
 			end
 		end
 	end
 
-	-- Spend the budget across the lowest button indices in order: each existing button consumes a
-	-- slot, and the ones that weren't bought become the currently-visible (available) buttons.
-	local idx = 0
-	while revealBudget > 0 and idx < state.maxButtonIndex do
-		idx += 1
-		local entry = state.buttonsByIndex[idx]
-		if entry then
-			revealBudget -= 1
-			if not bought[entry.name] then
-				revealButton(state, entry.index)
-			end
-		end
-	end
+	-- Reveals depend only on WHICH buttons were bought, never the sequence, so recomputing from the
+	-- restored `bought` set lands on exactly the state the player left off in.
+	refreshRevealed(state)
 end
 
 -- Tear down a plot: drop touch connections, hide everything, and forget its state. Called on

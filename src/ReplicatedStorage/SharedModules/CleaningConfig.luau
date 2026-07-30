@@ -91,11 +91,15 @@ local CleaningConfig = {
 	-- Per-plot purchase progression (see PlotButtonService). Each plot holds two folders:
 	--   Plot(i).<PlotButtonsFolderName>     -- purchase buttons, named "Button1".."ButtonN"
 	--   Plot(i).<PlotSpawnablesFolderName>  -- the things buttons unlock, one Model per UnlockID
-	-- Every button Model carries three attributes:
+	-- Every button Model carries three attributes, plus one optional:
 	--   Cost (number)      -- Cash charged when the owner steps on the button's Interact part
 	--   UnlockID (string)  -- name of the Spawnables Model this button makes visible
 	--   UnlockTwo (boolean)-- if true, buying this button reveals the NEXT TWO buttons instead
 	--                         of just the next one (still destroys this button either way)
+	--   RequiresButton     -- OPTIONAL number: this button stays hidden until Button<N> has been
+	--     (number)            bought, no matter how far the chain has advanced (e.g. 9 on Button11
+	--                         means Button11 only ever appears once Button9 is purchased). While it
+	--                         is gated the chain skips over it and reveals the next button instead.
 	-- The button is triggered when the owner steps on its child BasePart named
 	-- PlotButtonInteractPartName. Progress persists per player (DataTemplate.PlotButtonsBought),
 	-- and each plot is fully hidden on release and rebuilt from the next owner's save data.
@@ -105,6 +109,7 @@ local CleaningConfig = {
 	PlotButtonCostAttribute = "Cost",
 	PlotButtonUnlockIdAttribute = "UnlockID",
 	PlotButtonUnlockTwoAttribute = "UnlockTwo",
+	PlotButtonRequiresAttribute = "RequiresButton",
 
 	-- === Gem generation (see PlotButtonService) ===
 	-- Gem income is a WORKER + BUFF model. "Workers" are the base generators; every other
