@@ -199,12 +199,31 @@ export type CleanableSurface = typeof(setmetatable(
 -- Defaults to the shared Config.CompletionThreshold, but a part can override it with
 -- an optional "Percentage" attribute. The attribute may be authored as a 0-1 fraction
 -- (e.g. 0.9) or a 0-100 percentage (e.g. 90); values > 1 are treated as a percentage.
+-- A Percentage authored as a STRING attribute ("87" instead of 87) used to fall through to the
+-- default silently, which reads in game as "the override just doesn't work". We accept a numeric
+-- string and warn, so the wall behaves as authored AND the mistype is visible in the output.
 local function resolveThreshold(part: BasePart): number
 	local pct = part:GetAttribute("Percentage")
-	if typeof(pct) ~= "number" then
+	if pct == nil then
 		return Config.CompletionThreshold
 	end
-	local fraction = if pct > 1 then pct / 100 else pct
+
+	local number = if typeof(pct) == "number" then pct else tonumber(pct)
+	if not number then
+		warn(
+			`[CleanableSurface] {part:GetFullName()} has a non-numeric Percentage attribute `
+				.. `({typeof(pct)} {pct}); falling back to the default threshold.`
+		)
+		return Config.CompletionThreshold
+	end
+	if typeof(pct) ~= "number" then
+		warn(
+			`[CleanableSurface] {part:GetFullName()} has Percentage authored as a {typeof(pct)}, `
+				.. `not a number -- change the attribute's type in Studio.`
+		)
+	end
+
+	local fraction = if number > 1 then number / 100 else number
 	return math.clamp(fraction, 0, 1)
 end
 

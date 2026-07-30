@@ -179,6 +179,20 @@ function SurfaceManager.getCleanedWallAmount(): number
 	return amount
 end
 
+-- How many of the current job's walls are FULLY cleaned (whole walls only -- a half-washed
+-- wall counts 0, unlike getCleanedWallAmount). Subtract from the job's wall count (JobClient)
+-- for the "how many are left" readout; walls not yet built count as uncleaned, which is what
+-- the player sees.
+function SurfaceManager.getCleanedWallCount(): number
+	local count = 0
+	for _, surface in surfaces do
+		if surface.cleaned then
+			count += 1
+		end
+	end
+	return count
+end
+
 -- Tear down the current job's overlays: stop watching the walls folder, destroy every
 -- overlay, drop anything still queued, and forget the completion callback.
 function SurfaceManager.clear()

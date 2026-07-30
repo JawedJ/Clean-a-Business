@@ -16,6 +16,10 @@
 --   * PlaytimeSeconds -- lifetime "Business Age", accrued from each session's wall time: flushed
 --     into the profile every FLUSH_INTERVAL and once more when the player leaves, so the stored
 --     total is always current (and replicates to the client between flushes).
+--
+-- Both are ALSO refreshed on demand when the client opens its Company UI (RefreshCompanyStats), so
+-- the cards -- including the 24-hour claim quote derived from the rate -- never show a figure the
+-- FLUSH_INTERVAL tick hasn't caught up to yet.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -27,6 +31,9 @@ local SkillsService = require(script.Parent.SkillsService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local UpdateBusinessDescription = Remotes:WaitForChild("UpdateBusinessDescription") :: RemoteEvent
+-- Fired by the client as the Company UI opens, asking for an immediate stats mirror rather than
+-- waiting out the rest of the FLUSH_INTERVAL tick (see onRefreshRequest).
+local RefreshCompanyStats = Remotes:WaitForChild("RefreshCompanyStats") :: RemoteEvent
 
 -- Longest description we persist. The box is small; this just bounds what a client can write.
 local MAX_LENGTH = 200
@@ -109,6 +116,32 @@ local function refreshGemsPerSecond(player: Player)
 	end
 end
 
+-- Shortest gap between two honoured refresh requests from the same player. The work is cheap and
+-- idempotent, but the remote is client-fired, so this bounds how hard it can be spammed.
+local REFRESH_COOLDOWN = 0.5
+
+-- os.clock() at each player's last honoured refresh request, for REFRESH_COOLDOWN.
+local lastRefresh: { [Player]: number } = {}
+
+-- The client opened its Company UI and wants the stat cards current NOW: mirror the plot rate (and
+-- fold in playtime, which the Time card reads) immediately instead of showing whatever the last
+-- FLUSH_INTERVAL tick left behind. Both writes are the same ones the loop makes and both no-op when
+-- nothing moved, so an extra call costs nothing. Only ever refreshes the CALLER's own stats.
+local function onRefreshRequest(player: Player)
+	if not lastFlush[player] then
+		return -- profile still loading; the loop will pick them up
+	end
+	local now = os.clock()
+	local previous = lastRefresh[player]
+	if previous and now - previous < REFRESH_COOLDOWN then
+		return
+	end
+	lastRefresh[player] = now
+
+	flushPlaytime(player)
+	refreshGemsPerSecond(player)
+end
+
 -- Start the clock for a joining player once their profile is loaded (the flush writes through
 -- DataService, which needs data). Nothing is added for the load itself -- the first flush counts
 -- from here.
@@ -125,6 +158,7 @@ end
 local function onLeave(player: Player, data: any)
 	local since = lastFlush[player]
 	lastFlush[player] = nil
+	lastRefresh[player] = nil
 	if since then
 		local elapsed = os.clock() - since
 		if elapsed > 0 then
@@ -151,6 +185,7 @@ end
 
 function CompanyService.init()
 	UpdateBusinessDescription.OnServerEvent:Connect(onUpdate)
+	RefreshCompanyStats.OnServerEvent:Connect(onRefreshRequest)
 
 	DataService:addPlayerRemovingCallback(onLeave)
 

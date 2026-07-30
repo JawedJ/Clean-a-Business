@@ -7,7 +7,9 @@
 -- second and render the authored "10x GEMS: MM:SS" shape. The label is hidden whenever nothing is
 -- running, which is also its authored state.
 --
--- GemBuff.DURATION is one second short of an hour precisely so this never has to show "60:00".
+-- Boost purchases stack (GemBuff.activate extends the expiry rather than restarting it), so the
+-- remaining time is NOT bounded by one hour -- past 59:59 the countdown grows an hours field
+-- ("10x GEMS: 2:00:00") instead of wrapping.
 --
 -- The countdown compares the server's os.time() stamp against the CLIENT's clock. Both are UTC
 -- seconds, so they agree to within whatever the player's machine clock is off by -- fine for a
@@ -60,7 +62,15 @@ local function render()
 		label.Visible = false
 		return
 	end
-	label.Text = string.format("%dx GEMS: %02d:%02d", MULTIPLIER, remaining // 60, remaining % 60)
+	-- Under an hour keeps the authored "MM:SS"; stacked purchases past that get an hours field so
+	-- the minutes never have to read "90:00".
+	local hours = remaining // 3600
+	if hours > 0 then
+		label.Text =
+			string.format("%dx GEMS: %d:%02d:%02d", MULTIPLIER, hours, remaining % 3600 // 60, remaining % 60)
+	else
+		label.Text = string.format("%dx GEMS: %02d:%02d", MULTIPLIER, remaining // 60, remaining % 60)
+	end
 	label.Visible = true
 end
 

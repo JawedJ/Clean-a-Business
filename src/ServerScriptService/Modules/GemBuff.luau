@@ -21,9 +21,9 @@ local GemBuff = {}
 -- What the boost multiplies gem income by while it's running.
 GemBuff.MULTIPLIER = 10
 
--- How long a purchase lasts. Deliberately one second short of a full hour: the HUD status label is
--- authored as "MM:SS", so a true 3600 would need to render "60:00" for its first second.
-GemBuff.DURATION = 3599
+-- How long a single purchase adds. Purchases stack (see activate), so the total remaining can be any
+-- multiple of this -- the HUD countdown grows an hours field past 59:59 rather than being capped.
+GemBuff.DURATION = 3600
 
 -- The player's boost expiry as an os.time() stamp (0 = never bought / long expired). Reads default
 -- to 0 while a profile is still loading.
@@ -46,11 +46,12 @@ function GemBuff.getMultiplier(player: Player): number
 	return if GemBuff.isActive(player) then GemBuff.MULTIPLIER else 1
 end
 
--- Start (or restart) the boost for a full DURATION. Buying again while one is already running
--- RESTARTS the clock rather than stacking on top of it, so the remaining time can never exceed
--- DURATION -- which is what keeps the "MM:SS" status label in range.
+-- Add a full DURATION of boost. Purchases STACK: buying while one is already running extends the
+-- existing expiry instead of restarting it, so two buys really are two hours. We extend from the
+-- later of now and the stored stamp, so an old expired stamp can't eat into the new time.
 function GemBuff.activate(player: Player)
-	DataService:set(player, { "GemBuffExpiresAt" }, os.time() + GemBuff.DURATION)
+	local from = math.max(os.time(), GemBuff.expiresAt(player))
+	DataService:set(player, { "GemBuffExpiresAt" }, from + GemBuff.DURATION)
 end
 
 return GemBuff

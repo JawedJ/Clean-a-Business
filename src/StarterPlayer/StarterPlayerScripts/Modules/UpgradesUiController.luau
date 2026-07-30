@@ -8,7 +8,8 @@
 -- attribute (== the Item's UniqueID). Each slot is painted from the player's own copy of that
 -- item (DataService.Inventory) when they own it, otherwise from the static catalog
 -- (ToolConfig) so not-yet-owned tools still show their stats. Per slot we set:
---   * Cost   -- "Cost: 💎<abbrev>" (the item's price / upgrade price, in Gems; purple if affordable)
+--   * Cost   -- "Cost: 💎<abbrev>" (the item's price / upgrade price, in Gems; purple if
+--     affordable). Hidden once the item is maxed -- there's no price left to show.
 --   * Range  -- "Range: <studs>"  (optional label; hidden if the item has no Range)
 --   * Radius -- "Radius: <n.n>"   (optional label; hidden if the item has no Radius)
 --   * UseTime -- "Time: <n.n>s"     (optional label; hidden if the item has no UseTime)
@@ -170,20 +171,23 @@ local function renderSlot(slot: Instance)
 	local level = if owned and type(item.Level) == "number" then item.Level else 0
 
 	-- Cost: the purchase price when unowned, the next upgrade's price when owned + upgradeable,
-	-- or "MAXED" once at the cap. Priced in Gems -- "Cost: 💎1.2k" style, purple when affordable.
+	-- or hidden entirely once at the cap. Priced in Gems -- "Cost: 💎1.2k" style, purple when affordable.
 	local costLabel = slot:FindFirstChild("Cost")
 	if costLabel and costLabel:IsA("TextLabel") then
 		if not owned then
 			costLabel.Text = "Cost: " .. GEM_ICON .. NumberFormat.abbreviate(item.Cost)
 			applyCostGradient(costLabel, if canAfford(item.Cost) then AFFORDABLE_GRADIENT else RED_GRADIENT)
+			costLabel.Visible = true
 		elseif ItemUpgrades.canUpgrade(item) then
 			local cost = ItemUpgrades.getUpgradeCost(item)
 			costLabel.Text = "Cost: " .. GEM_ICON .. NumberFormat.abbreviate(cost)
 			applyCostGradient(costLabel, if canAfford(cost) then AFFORDABLE_GRADIENT else RED_GRADIENT)
+			costLabel.Visible = true
 		else
-			costLabel.Text = "MAXED"
-			-- Maxed slots aren't a purchase; restore the authored colour (never pink/red).
+			-- Maxed: nothing left to buy, so the price line just goes away. Restore the authored
+			-- colour too, so a later re-show never inherits a stale pink/red tint.
 			applyCostGradient(costLabel, nil)
+			costLabel.Visible = false
 		end
 	end
 

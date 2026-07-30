@@ -39,6 +39,10 @@ export type JobClient = typeof(setmetatable(
 	{} :: {
 		businessId: string,
 		alive: boolean,
+		-- false until _load has resolved the building and read the totals below. Until then every
+		-- total is 0, which is indistinguishable from "nothing left to clean" -- UI that shows
+		-- counts (rather than just a fraction) has to wait for this.
+		loaded: boolean,
 		totalWalls: number,
 		totalDecals: number,
 		totalSpills: number,
@@ -67,6 +71,7 @@ function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobCl
 	local self = setmetatable({}, JobClient) :: JobClient
 	self.businessId = businessId
 	self.alive = true
+	self.loaded = false
 	self.totalWalls = 0
 	self.totalDecals = 0
 	self.totalSpills = 0
@@ -147,7 +152,9 @@ function JobClient._load(self: JobClient)
 	end
 
 	-- Totals are known now (0 before this); push the starting completion so the UI can
-	-- paint an accurate empty bar rather than waiting for the first clean.
+	-- paint an accurate empty bar rather than waiting for the first clean. `loaded` is set
+	-- first so listeners reading the counts in this same push see them as real.
+	self.loaded = true
 	self:_notifyProgress()
 end
 
@@ -207,6 +214,19 @@ end
 -- combines with its stain count.
 function JobClient.getWallAmount(self: JobClient): number
 	return SurfaceManager.getCleanedWallAmount()
+end
+
+-- How many cleanables of each kind are still dirty (for the UNCLEANED readout). Walls count in
+-- WHOLE walls -- a half-washed wall is still "uncleaned" -- so this is the wall count minus the
+-- fully finished ones, not the fractional amount the completion bar uses. Kinds the business
+-- doesn't have simply come back 0, since their totals are 0.
+function JobClient.getRemaining(self: JobClient): { walls: number, spills: number, decals: number, webs: number }
+	return {
+		walls = math.max(self.totalWalls - SurfaceManager.getCleanedWallCount(), 0),
+		spills = math.max(self.totalSpills - self.cleanedSpills, 0),
+		decals = math.max(self.totalDecals - self.cleanedDecals, 0),
+		webs = math.max(self.totalWebs - self.cleanedWebs, 0),
+	}
 end
 
 -- 0..1 fraction of this job cleaned locally (for UI). Walls contribute their live clean

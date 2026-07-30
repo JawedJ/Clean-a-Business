@@ -26,7 +26,9 @@
 --   * ClaimCard   -- GemAmtTxt quotes a full day of OFFLINE-rate earnings (the plot's gems/sec over
 --                    CleaningConfig.OfflineRateDivisor, times ClaimEarningsSeconds) and ClaimNowButton
 --                    buys exactly that. The server recomputes the amount at receipt time; this label
---                    is only a quote, never the source of what's paid.
+--                    is only a quote, never the source of what's paid. Every open asks the server to
+--                    re-mirror the rate first (RefreshCompanyStats), so the quote can't lag behind a
+--                    producer the player just bought.
 --   * PurchaseCard -- PurchaseButton buys the 10x gem boost (see GemBuff); the HUD countdown while
 --                    it runs is GemBuffController's, not ours.
 --
@@ -51,6 +53,9 @@ local GemBurst = require(script.Parent.GemBurst)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local UpdateBusinessDescription = Remotes:WaitForChild("UpdateBusinessDescription") :: RemoteEvent
+-- Asks CompanyService to re-mirror GemsPerSecond right now, instead of leaving the cards on
+-- whatever its 15-second stats loop last wrote (see refreshOnOpen).
+local RefreshCompanyStats = Remotes:WaitForChild("RefreshCompanyStats") :: RemoteEvent
 
 local localPlayer = Players.LocalPlayer
 
@@ -300,7 +305,13 @@ local function bind(screenGui: Instance)
 	ExclusivePanels.register(PANEL_NAME, panel, function()
 		refreshStars()
 		refreshDescription()
+		-- Paint immediately off the data we already have so the panel never springs in blank or
+		-- mid-change...
 		refreshStats()
+		-- ...and ask the server to re-mirror the plot rate, since its stats loop only writes every
+		-- 15 seconds -- a player who just bought a producer would otherwise open to a stale rate and
+		-- a stale 24-hour quote. The reply lands as a GemsPerSecond change, which repaints again.
+		RefreshCompanyStats:FireServer()
 	end)
 
 	-- Static, per-session content.

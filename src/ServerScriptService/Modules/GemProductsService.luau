@@ -8,8 +8,8 @@
 --     CleaningConfig.ClaimEarningsSeconds. Exactly the sum the card quotes, computed here from the
 --     live plot rather than from anything the client sends.
 --
---   * BOOST_PRODUCT_ID (PurchaseCard) -- starts the 10x gem boost for GemBuff.DURATION. The boost
---     itself lives in GemBuff; this only sells it.
+--   * BOOST_PRODUCT_ID (PurchaseCard) -- adds GemBuff.DURATION of the 10x gem boost, stacking onto
+--     any time already left. The boost itself lives in GemBuff; this only sells it.
 --
 -- The claim deliberately quotes the UNBOOSTED rate. GemsPerSecond (what the card reads) is the
 -- plot's base output, so a player can't buy the boost and then buy a 10x-inflated day of earnings

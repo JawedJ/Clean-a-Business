@@ -28,6 +28,7 @@ local PurchaseSoundController = require(Modules:WaitForChild("PurchaseSoundContr
 local PlotButtonSoundController = require(Modules:WaitForChild("PlotButtonSoundController"))
 local WorkerGemPopupController = require(Modules:WaitForChild("WorkerGemPopupController"))
 local JobCompletionController = require(Modules:WaitForChild("JobCompletionController"))
+local UncleanedInfoController = require(Modules:WaitForChild("UncleanedInfoController"))
 local JobSummaryController = require(Modules:WaitForChild("JobSummaryController"))
 local JobCameraController = require(Modules:WaitForChild("JobCameraController"))
 local UiButtonController = require(Modules:WaitForChild("UiButtonController"))
@@ -109,6 +110,8 @@ safeInit("PurchaseSoundController", PurchaseSoundController.init)
 -- PlotButtonSoundController (purchase SFX) and WorkerGemPopupController (worker popups) are
 -- connected first, up top, so their remote events aren't dropped during startup.
 safeInit("JobCompletionController", JobCompletionController.init)
+-- One-line "what's left" readout beside the completion bar, shown only while on a job.
+safeInit("UncleanedInfoController", UncleanedInfoController.init)
 safeInit("JobSummaryController", JobSummaryController.init)
 safeInit("JobCameraController", JobCameraController.init)
 safeInit("UiButtonController", UiButtonController.init)
