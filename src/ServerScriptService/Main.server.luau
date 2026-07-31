@@ -3,6 +3,7 @@ local DataTemplate = require(game.ReplicatedStorage.SharedModules.DataTemplate)
 local PlotService = require(game.ServerScriptService.Modules.PlotService)
 local PlotButtonService = require(game.ServerScriptService.Modules.PlotButtonService)
 local PlotSignService = require(game.ServerScriptService.Modules.PlotSignService)
+local PortalService = require(game.ServerScriptService.Modules.PortalService)
 local BusinessService = require(game.ServerScriptService.Modules.BusinessService)
 local JobService = require(game.ServerScriptService.Modules.JobService)
 local PlayerCollisionService = require(game.ServerScriptService.Modules.PlayerCollisionService)
@@ -33,6 +34,9 @@ PlotButtonService.init()
 -- plot's warehouse sign after its owner.
 PlotSignService.init()
 PlotService.init()
+-- Wires the Portal spawnable's two TouchDetectors to their plot's Teleport1/Teleport2 pads. Reads
+-- only the authored plot geometry, so its position in this order doesn't matter.
+PortalService.init()
 -- Seeds every catalog business into each player's profile and grants unlocks as requirements
 -- are met (level now, permanent once earned). Runs before JobService so accepts see the list.
 BusinessService.init()

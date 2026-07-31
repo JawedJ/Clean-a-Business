@@ -111,6 +111,21 @@ local CleaningConfig = {
 	PlotButtonUnlockTwoAttribute = "UnlockTwo",
 	PlotButtonRequiresAttribute = "RequiresButton",
 
+	-- The Portal spawnable (see PortalService): a two-ended teleporter inside a plot. Authored as
+	--   Plot(i).<PlotSpawnablesFolderName>.<PortalModelName>                       -- the top end
+	--     .<PortalTouchPartName>                                                   -- sends to Teleport2
+	--     .<PortalSecondModelName>.<PortalTouchPartName>                           -- sends to Teleport1
+	-- with the two landing pads as parts directly under the plot:
+	--   Plot(i).<PortalDestinationFromSecond> / Plot(i).<PortalDestinationFromFirst>
+	-- Both ends teleport within the SAME plot as the portal that was touched. While the spawnable
+	-- is still locked PlotButtonService leaves it CanTouch = false, so the pads are unreachable
+	-- until it's bought.
+	PortalModelName = "Portal",
+	PortalSecondModelName = "SecondPortal",
+	PortalTouchPartName = "TouchDetector",
+	PortalDestinationFromFirst = "Teleport2",
+	PortalDestinationFromSecond = "Teleport1",
+
 	-- === Gem generation (see PlotButtonService) ===
 	-- Gem income is a WORKER + BUFF model. "Workers" are the base generators; every other
 	-- unlocked spawnable is a buff that scales what each worker produces. Per plot, per second:
