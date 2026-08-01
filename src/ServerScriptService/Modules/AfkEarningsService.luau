@@ -70,7 +70,6 @@ local function onLeave(player: Player, data: any)
 	local rate = PlotButtonService.getGemsPerSecond(player) * SkillsService.getMultiplier(player, "Hoarding")
 	data.LastGemsPerSecond = rate
 	data.LastOnlineTime = os.time()
-	print(string.format("[AfkEarnings] onLeave %s: saving rate=%s (raw=%s) time=%d", player.Name, tostring(rate), tostring(PlotButtonService.getGemsPerSecond(player)), os.time()))
 	pending[player] = nil
 end
 
@@ -107,7 +106,6 @@ local function onJoin(player: Player)
 	end
 
 	local total = banked + newOffline
-	print(string.format("[AfkEarnings] onJoin %s: lastOnline=%s rate=%s banked=%d new=%d total=%d", player.Name, tostring(lastOnline), tostring(rate), banked, newOffline, total))
 
 	-- Account for offline earnings up to now: advance the clock (so this stretch is never recounted)
 	-- and persist the running bank (so leaving without claiming keeps it). dontReplicate -- pure
@@ -120,7 +118,6 @@ local function onJoin(player: Player)
 	end
 
 	pending[player] = total
-	print(string.format("[AfkEarnings] firing ShowAfkEarnings to %s (%d gems)", player.Name, total))
 	ShowAfkEarnings:FireClient(player, total, secondsAway)
 end
 

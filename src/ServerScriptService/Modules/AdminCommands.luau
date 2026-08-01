@@ -12,8 +12,13 @@
 --     the per-completion Cash/XP.
 --   /addcash <amount>
 --     Adds `amount` (default 1) Cash to the owner's balance for testing.
---   /addcash <amount>
---     Adds `amount` (default 1) Cash to the owner's balance for testing.
+--   /addgems <amount>
+--     Adds `amount` (default 1) Gems to the owner's balance for testing. Granted literally, NOT
+--     through ProgressionService.awardGems -- an admin grant shouldn't be silently inflated by the
+--     Hoarding skill when you asked for an exact number.
+--   /setlevel <level>
+--     Sets the owner's level outright (and zeroes XP, which counts WITHIN a level -- see Leveling),
+--     so level-gated content can be reached without grinding XP. Goes down as well as up.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -28,6 +33,9 @@ local AdminCommands = {}
 local OWNER_ID = 168921043
 -- Cap a single command so a typo can't balloon the tally.
 local MAX_AMOUNT = 10000000
+-- Ceiling for /setlevel, purely so a fat-fingered number can't push the profile somewhere
+-- absurd. Nothing in Leveling caps the real progression.
+local MAX_PLAYER_LEVEL = 1000
 
 -- /completejob <businessId> <amount>: add `amount` completions to the business's tally.
 local function completeJob(player: Player, businessId: string?, amountText: string?)
@@ -55,6 +63,40 @@ local function addCash(player: Player, amountText: string?)
 	print(string.format("[AdminCommands] +%d cash for %s", amount, player.Name))
 end
 
+-- /addgems <amount>: add `amount` Gems to the owner's balance. Written straight to the balance
+-- rather than through ProgressionService.awardGems, which would scale the amount by the Hoarding
+-- skill -- a test grant should land on exactly the number that was typed.
+local function addGems(player: Player, amountText: string?)
+	local amount = math.floor(tonumber(amountText) or 1)
+	amount = math.clamp(amount, 1, MAX_AMOUNT)
+
+	DataService:update(player, { "Gems" }, function(current: number?)
+		return (current or 0) + amount
+	end)
+	print(string.format("[AdminCommands] +%d gems for %s", amount, player.Name))
+end
+
+-- /setlevel <level>: set the owner's level outright, clearing XP. XP is progress WITHIN the current
+-- level (Leveling.addXp counts it from 0 toward xpForLevel), so carrying the old value over would
+-- leave the player part-way through a level they never earned -- and if it exceeded the new level's
+-- requirement, the next XP award would instantly re-level them.
+--
+-- Writing the whole { "Level" } table is also what makes this take effect everywhere: BusinessService
+-- watches that path and re-resolves business unlocks, so levelling up here grants any business whose
+-- RequiredLevel is now met. Note that unlocks are never revoked, so setting the level back DOWN
+-- leaves already-granted businesses unlocked.
+local function setLevel(player: Player, levelText: string?)
+	local level = tonumber(levelText)
+	if not level then
+		warn(string.format("[AdminCommands] /setlevel: expected a number, got %q", tostring(levelText)))
+		return
+	end
+	level = math.clamp(math.floor(level), 1, MAX_PLAYER_LEVEL)
+
+	DataService:set(player, { "Level" }, { CurrentLevel = level, XP = 0 })
+	print(string.format("[AdminCommands] set %s to level %d", player.Name, level))
+end
+
 local function onChatted(player: Player, message: string)
 	if player.UserId ~= OWNER_ID then
 		return
@@ -71,6 +113,10 @@ local function onChatted(player: Player, message: string)
 		completeJob(player, tokens[2], tokens[3])
 	elseif command == "/addcash" then
 		addCash(player, tokens[2])
+	elseif command == "/addgems" then
+		addGems(player, tokens[2])
+	elseif command == "/setlevel" then
+		setLevel(player, tokens[2])
 	end
 end
 

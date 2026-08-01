@@ -18,12 +18,20 @@ export type Item = {
 	-- row). Static catalog property (ToolConfig), not a per-player record field.
 	Image: string?,
 
-	-- Upgrade tuning (see ItemUpgrades). BaseUpgradeCost is the price of the FIRST upgrade
-	-- (level 0 -> 1); the shared cost formula scales it up per level. UpgradeRange/UpgradeRadius
+	-- Upgrade tuning (see ItemUpgrades). BaseUpgradeCost marks an item upgradeable, and is the
+	-- base price its upgrade ladder is measured against -- but only for FREE starter tools; a tool
+	-- with a purchase Cost measures its ladder against that Cost instead, so buying it and
+	-- levelling it never cost the same. UpgradeRange/UpgradeRadius
 	-- are how much each upgrade adds to the item's Range/Radius; UpgradeUseTime is how much each
 	-- upgrade SUBTRACTS from the item's UseTime (faster cleaning). An item with no BaseUpgradeCost
 	-- isn't upgradeable.
 	BaseUpgradeCost: number?,
+	-- What the item's LAST upgrade (level MAX_LEVEL - 1 -> MAX_LEVEL) should cost -- i.e. where its
+	-- price ladder caps out. Optional per-item override: omitted items ride the shared
+	-- ItemUpgrades.FINAL_MULTIPLE off their base price instead. Set it when a tool's own top price
+	-- matters (the mop and vacuum have very different base prices, so one global multiple can't
+	-- land both). Ignored if it isn't above the item's base price.
+	MaxUpgradeCost: number?,
 	UpgradeRange: number?,
 	UpgradeRadius: number?,
 	UpgradeUseTime: number?,
@@ -98,9 +106,9 @@ export type Business = {
 
 local DataTemplate = {
 
-	Cash = 1000,
+	Cash = 5000,
 
-	Gems = 100,
+	Gems = 499,
 
 	-- Offline (AFK) gem earnings bookkeeping (see AfkEarningsService). Both are snapshotted when
 	-- the player leaves and read back on their next join to compute what they earned while away:
@@ -182,25 +190,25 @@ local DataTemplate = {
 		-- when the player joins (see ServerScriptService.BusinessService). Keep this list in sync
 		-- with the BusinessConfig catalog -- one entry per business.
 		["mcDonalds"] = {
-			BaseReward = 2500,
+			BaseReward = 8000,
 			Unlocked = false,
 			Name = "McDonalds",
 			UniqueID = "mcDonalds",
 			Completions = 0,
-			XpReward = 250
+			XpReward = 700
 		},
 
 		["starbucks"] = {
-			BaseReward = 1000,
+			BaseReward = 3500,
 			Unlocked = false,
 			Name = "Starbucks",
 			UniqueID = "starbucks",
 			Completions = 0,
-			XpReward = 500
+			XpReward = 350
 		},
 
 		["apple"] = {
-			BaseReward = 1000,
+			BaseReward = 5000,
 			Unlocked = false,
 			Name = "Starbucks",
 			UniqueID = "starbucks",
@@ -209,12 +217,12 @@ local DataTemplate = {
 		},
 
 		["gasStation"] = {
-			BaseReward = 1000,
+			BaseReward = 2500,
 			Unlocked = false,
 			Name = "Frosty's",
 			UniqueID = "gasStation",
 			Completions = 0,
-			XpReward = 500
+			XpReward = 250
 		},
 
 		
@@ -255,14 +263,15 @@ local DataTemplate = {
 		["mop"] = {
 		Name = "Mop",
 		Equipped = false,
-		Unlocked = true,
-		Cost = 0,
+		Unlocked = false,
+		Cost = 50000,
 		UniqueID = "mop",
 		Level = 0,
 		SlotNumber = 3,
 		Power = 0.4, -- Transparency/sec while cleaning: a spill fully fades in ~2.5s at level 0
 		Range = 30,
 		BaseUpgradeCost = 250,
+		MaxUpgradeCost = 15000000,
 		UpgradePower = 0.08, -- each level fades faster
 		UpgradeRange = 5,
 		},
@@ -270,14 +279,15 @@ local DataTemplate = {
 		["vacuum"] = {
 		Name = "Vacuum",
 		Equipped = false,
-		Unlocked = true,
-		Cost = 0,
+		Unlocked = false,
+		Cost = 500000,
 		UniqueID = "vacuum",
 		Level = 0,
 		SlotNumber = 4,
 		UseTime = 2.5,
 		Range = 30,
 		BaseUpgradeCost = 500,
+		MaxUpgradeCost = 20000000,
 		UpgradeRange = 5,
 		UpgradeUseTime = 0.1,
 		},
