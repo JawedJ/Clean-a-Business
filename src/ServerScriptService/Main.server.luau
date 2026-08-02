@@ -19,11 +19,12 @@ local CompanyService = require(game.ServerScriptService.Modules.CompanyService)
 local PurchaseService = require(game.ServerScriptService.Modules.PurchaseService)
 local AfkEarningsService = require(game.ServerScriptService.Modules.AfkEarningsService)
 local GemProductsService = require(game.ServerScriptService.Modules.GemProductsService)
+local LeaderboardService = require(game.ServerScriptService.Modules.LeaderboardService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
 	template = DataTemplate,
-	useMock = true
+	
 })
 
 
@@ -67,6 +68,9 @@ AfkEarningsService.init()
 -- The Company UI's two Robux products: the 24-hour earnings claim and the 10x gem boost. Init after
 -- PurchaseService (it registers both with the receipt dispatcher).
 GemProductsService.init()
+-- Global top-100 boards on the Leaderboard wall models. Init after CompanyService (whose flushes
+-- keep PlaytimeSeconds current) so the first publish reports a real figure, not a stale one.
+LeaderboardService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()
 

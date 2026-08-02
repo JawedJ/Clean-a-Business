@@ -45,6 +45,7 @@ local HidePlayersController = require(Modules:WaitForChild("HidePlayersControlle
 local AfkEarningsController = require(Modules:WaitForChild("AfkEarningsController"))
 local GemBuffController = require(Modules:WaitForChild("GemBuffController"))
 local GemBurst = require(Modules:WaitForChild("GemBurst"))
+local LeaderboardController = require(Modules:WaitForChild("LeaderboardController"))
 local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
 
 
@@ -135,6 +136,8 @@ safeInit("HidePlayersController", HidePlayersController.init)
 safeInit("AfkEarningsController", AfkEarningsController.init)
 -- HUD countdown for the purchased 10x gem boost, shown only while one is running.
 safeInit("GemBuffController", GemBuffController.init)
+-- Builds the three in-world top-100 boards (workspace.Leaderboard) from the server's broadcast.
+safeInit("LeaderboardController", LeaderboardController.init)
 -- Warm the HUD's image assets in the background so they don't first render blurry.
 safeInit("UiPreloader", UiPreloader.init)
 
