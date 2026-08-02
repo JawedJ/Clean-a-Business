@@ -30,7 +30,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		UniqueID = "starbucks",
 		Completions = 0,
 		XpReward = 350,
-		RequiredLevel = 5,
+		RequiredLevel = 3,
 		-- Walls only (no stains), so the pressure washer is the only tool needed.
 		RequiredItems = { "pressureWasher", "startingBroom" },
 	},

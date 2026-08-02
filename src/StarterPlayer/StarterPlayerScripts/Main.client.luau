@@ -45,6 +45,7 @@ local HidePlayersController = require(Modules:WaitForChild("HidePlayersControlle
 local AfkEarningsController = require(Modules:WaitForChild("AfkEarningsController"))
 local GemBuffController = require(Modules:WaitForChild("GemBuffController"))
 local GemBurst = require(Modules:WaitForChild("GemBurst"))
+local FirstSpawnCameraController = require(Modules:WaitForChild("FirstSpawnCameraController"))
 local LeaderboardController = require(Modules:WaitForChild("LeaderboardController"))
 local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
 
@@ -72,6 +73,9 @@ end
 -- entirely if a later init stalls.
 safeInit("PlotButtonSoundController", PlotButtonSoundController.init)
 safeInit("WorkerGemPopupController", WorkerGemPopupController.init)
+-- Belongs in this early block for the same reason: the server aims the camera the instant it
+-- places a first-ever character, which is right at join -- a listener connected any later misses it.
+safeInit("FirstSpawnCameraController", FirstSpawnCameraController.init)
 
 safeInit("DataService", function()
 	DataService:init()

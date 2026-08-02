@@ -11,6 +11,13 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local DataService = require(ReplicatedStorage.Packages.DataService).server
+
+-- Fired to a player on their first-ever spawn with the horizontal direction their character was
+-- pointed in, so the client can swing the camera round to match (see FirstSpawnCameraController).
+-- The camera is client-owned, so turning the character alone would leave them facing the
+-- warehouse while still LOOKING wherever the default camera happened to sit.
+local AimSpawnCamera = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AimSpawnCamera") :: RemoteEvent
 
 local PlotService = {}
 
@@ -20,6 +27,13 @@ local SPAWN_OFFSET = Vector3.new(0, 5, 0)
 local ownerByPlot: { [Instance]: Player } = {}
 local plotByPlayer: { [Player]: Instance } = {}
 local characterConns: { [Player]: RBXScriptConnection } = {}
+
+-- Whether the player still has their once-ever first spawn to use, per player:
+--   nil   -- not resolved yet (their profile hasn't been read)
+--   true  -- resolved, and the first-spawn placement is still owed to them
+--   false -- resolved and spent (or they'd already had it in an earlier session)
+-- See takeFirstSpawn.
+local firstSpawnPending: { [Player]: boolean? } = {}
 
 -- Listeners notified when a plot is handed to / taken from a player. PlotButtonService uses
 -- these to build the plot from the new owner's save data and to reset it on release. Registered
@@ -37,24 +51,100 @@ function PlotService.onReleased(fn: (Player, Instance) -> ())
 	table.insert(releasedListeners, fn)
 end
 
--- Teleport a character onto its plot's spawn part (upright, slightly above it).
-local function spawnCharacterAt(character: Model, plot: Instance)
-	local spawnPart = plot:FindFirstChild(Config.PlotSpawnPartName)
+-- Whether this spawn is the player's first EVER, claiming it if so. The profile flag is written
+-- the moment we hand the placement out, not after the character lands, so a disconnect mid-spawn
+-- can't earn them a second one.
+--
+-- Resolution yields on waitForData, so it's memoized per player: only the very first spawn of a
+-- session pays that cost, and every respawn after reads the cached false. Spawning already yields
+-- (on HumanoidRootPart), so the extra wait costs nothing visible.
+local function takeFirstSpawn(player: Player): boolean
+	if firstSpawnPending[player] == false then
+		return false
+	end
+	if firstSpawnPending[player] == nil then
+		DataService:waitForData(player)
+		if not player.Parent then
+			return false
+		end
+		firstSpawnPending[player] = DataService:get(player, { "HasSpawnedBefore" }) ~= true
+	end
+	if firstSpawnPending[player] ~= true then
+		return false
+	end
+	firstSpawnPending[player] = false
+	DataService:set(player, { "HasSpawnedBefore" }, true)
+	return true
+end
+
+-- Horizontal unit direction from `position` towards the plot's warehouse, or nil if the plot has
+-- no warehouse or it sits directly overhead (no horizontal facing to derive). Measured to the
+-- warehouse's BOUNDING-BOX centre rather than its pivot, which on an authored Model can sit
+-- anywhere and isn't reliably "where the building is".
+local function warehouseDirection(plot: Instance, position: Vector3): Vector3?
+	local warehouse = plot:FindFirstChild(Config.PlotWarehouseFolderName)
+	if not warehouse then
+		return nil
+	end
+
+	local centre: Vector3
+	if warehouse:IsA("Model") then
+		centre = warehouse:GetBoundingBox().Position
+	elseif warehouse:IsA("BasePart") then
+		centre = warehouse.Position
+	else
+		return nil
+	end
+
+	local flat = Vector3.new(centre.X - position.X, 0, centre.Z - position.Z)
+	if flat.Magnitude < 1e-4 then
+		return nil
+	end
+	return flat.Unit
+end
+
+-- Teleport a character onto its plot's spawn part (upright, slightly above it). `useFirstSpawn`
+-- picks the plot's FirstSpawn part instead -- the one-time placement a brand-new player gets --
+-- and points them (and their camera) at their warehouse rather than along the part's own
+-- LookVector, so the first thing a new player sees is the building they're meant to walk to.
+local function spawnCharacterAt(player: Player, character: Model, plot: Instance, useFirstSpawn: boolean?)
+	local partName = if useFirstSpawn then Config.PlotFirstSpawnPartName else Config.PlotSpawnPartName
+	local spawnPart = plot:FindFirstChild(partName)
+	-- A plot with no FirstSpawn part is an authoring gap, not a reason to strand a new player at
+	-- the default world spawn -- fall back to the normal spawn part.
+	if useFirstSpawn and not (spawnPart and spawnPart:IsA("BasePart")) then
+		warn(string.format("[PlotService] Plot %s has no %q part; using %q for the first spawn.", plot.Name, Config.PlotFirstSpawnPartName, Config.PlotSpawnPartName))
+		spawnPart = plot:FindFirstChild(Config.PlotSpawnPartName)
+	end
 	if not spawnPart or not spawnPart:IsA("BasePart") then
 		warn(string.format("[PlotService] Plot %s has no %q part to spawn on.", plot.Name, Config.PlotSpawnPartName))
 		return
 	end
 	character:WaitForChild("HumanoidRootPart")
 	local position = spawnPart.Position + SPAWN_OFFSET
-	-- Face the direction the spawn part's front points (its LookVector), flattened to the
-	-- horizontal so the character stands upright even if the part is tilted. If the part
-	-- happens to face straight up/down there's no horizontal facing to use, so just drop in.
-	local look = spawnPart.CFrame.LookVector
-	local flat = Vector3.new(look.X, 0, look.Z)
-	if flat.Magnitude > 1e-4 then
-		character:PivotTo(CFrame.lookAt(position, position + flat.Unit))
+
+	-- On the first spawn, face the warehouse. Otherwise face the direction the spawn part's front
+	-- points (its LookVector), flattened to the horizontal so the character stands upright even if
+	-- the part is tilted. The warehouse lookup can come back empty (no warehouse authored), so it
+	-- falls through to the LookVector rather than dropping the facing entirely.
+	local facing: Vector3? = if useFirstSpawn then warehouseDirection(plot, position) else nil
+	if not facing then
+		local look = spawnPart.CFrame.LookVector
+		local flat = Vector3.new(look.X, 0, look.Z)
+		-- A part facing straight up/down has no horizontal facing to use; just drop them in.
+		facing = if flat.Magnitude > 1e-4 then flat.Unit else nil
+	end
+
+	if facing then
+		character:PivotTo(CFrame.lookAt(position, position + facing))
 	else
 		character:PivotTo(CFrame.new(position))
+	end
+
+	-- Turning the character doesn't turn the camera -- that's the client's. Hand it the same
+	-- direction so both agree. First spawn only: a respawn shouldn't yank the player's view round.
+	if useFirstSpawn and facing then
+		AimSpawnCamera:FireClient(player, facing)
 	end
 end
 
@@ -85,12 +175,15 @@ local function assign(player: Player)
 	plotByPlayer[player] = plot
 	player:SetAttribute(Config.PlotAttribute, plot.Name)
 
-	-- Spawn the character on the plot now and on every future respawn.
+	-- Spawn the character on the plot now and on every future respawn. takeFirstSpawn returns true
+	-- for at most one of these, so only a brand-new player's opening spawn lands on FirstSpawn.
 	characterConns[player] = player.CharacterAdded:Connect(function(character)
-		spawnCharacterAt(character, plot)
+		spawnCharacterAt(player, character, plot, takeFirstSpawn(player))
 	end)
 	if player.Character then
-		task.spawn(spawnCharacterAt, player.Character, plot)
+		task.spawn(function()
+			spawnCharacterAt(player, player.Character :: Model, plot, takeFirstSpawn(player))
+		end)
 	end
 
 	for _, fn in assignedListeners do
@@ -104,6 +197,7 @@ local function release(player: Player)
 		conn:Disconnect()
 		characterConns[player] = nil
 	end
+	firstSpawnPending[player] = nil
 
 	local plot = plotByPlayer[player]
 	if plot then
@@ -127,7 +221,7 @@ function PlotService.sendToPlotSpawn(player: Player)
 	local plot = plotByPlayer[player]
 	local character = player.Character
 	if plot and character then
-		spawnCharacterAt(character, plot)
+		spawnCharacterAt(player, character, plot)
 	end
 end
 

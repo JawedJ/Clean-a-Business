@@ -132,6 +132,14 @@ local DataTemplate = {
 	-- is a leave-time snapshot the client never sees. Reconciled onto existing profiles.
 	GemsPerSecond = 0,
 
+	-- Set the first time the player's character is ever placed on their plot, and never cleared.
+	-- While it's false their FIRST spawn goes to the plot's FirstSpawn part instead of the usual
+	-- spawnPart (see PlotService); every respawn after that, and every later session, uses the
+	-- normal one. Reconciled onto existing profiles -- which means an EXISTING player reconciles in
+	-- at false and gets one first-spawn placement on their next join. Intentional: there's no way
+	-- to tell them apart from a genuinely new player after the fact.
+	HasSpawnedBefore = false,
+
 	-- Lifetime seconds the player has spent in-game ("Business Age" in the Company UI). Accrued by
 	-- CompanyService: flushed into the profile periodically while online and once more on leave, so
 	-- the stored value is always the true running total. Reconciled onto existing profiles.

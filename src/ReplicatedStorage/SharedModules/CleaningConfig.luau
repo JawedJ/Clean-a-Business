@@ -81,6 +81,12 @@ local CleaningConfig = {
 	-- plot and on every respawn (unless they currently hold a job, see ActiveJob).
 	PlotSpawnPartName = "spawnPart",
 
+	-- Part inside each plot folder used INSTEAD of PlotSpawnPartName for a player's very first
+	-- spawn in the game, ever (DataTemplate.HasSpawnedBefore -- see PlotService). Every respawn
+	-- after that, and every later session, uses the normal spawn part. A plot missing this part
+	-- just falls back to the normal one.
+	PlotFirstSpawnPartName = "FirstSpawn",
+
 	-- The plot's warehouse name sign (see PlotSignService), stamped with the owner's name on
 	-- assign and blanked on release. The path below is walked from the plot:
 	--   Plot(i).Warehouse.OutsideDesign.<PlotSignPath...>
