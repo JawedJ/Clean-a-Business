@@ -141,10 +141,12 @@ end
 -- recomputed on each apply so buying Speedy mid-job takes effect at once.
 --
 -- This is a DIFFERENT speed from free-roam, which is StarterPlayer.CharacterWalkSpeed scaled by the
--- same skill (see SkillsService) -- so destroy has to hand the player back their free-roam speed
--- when the job ends. It doesn't happen by itself: the two are only equal while nobody has retuned
+-- same skill (see SkillsService) -- so something has to hand the player back their free-roam speed
+-- once they're done. It doesn't happen by itself: the two are only equal while nobody has retuned
 -- CharacterWalkSpeed away from Config.JobWalkSpeed, and relying on that left players walking at the
--- job speed after every job until their next respawn. All connections are torn down in destroy.
+-- job speed after every job until their next respawn. That restore lives in JobService.goHome (the
+-- trip back to the plot), not in destroy -- see the note there. All connections are torn down in
+-- destroy, so nothing re-pins the speed once the job is over.
 function JobServer._pinWalkSpeed(self: JobServer)
 	local function bind(character: Model)
 		task.spawn(function()
@@ -402,18 +404,11 @@ function JobServer.destroy(self: JobServer)
 		conn:Disconnect()
 	end
 	table.clear(self.connections)
-
-	-- Hand the player back their free-roam walk speed. The pin above holds them at the job speed,
-	-- which is a separate value, so without this they'd keep walking at it until their next respawn
-	-- reapplied the real one. Ordering matters: the pin's reassert connections are disconnected
-	-- FIRST, otherwise this write would just be reverted by them.
-	--
-	-- Routed through SkillsService rather than restoring a value captured at job start, so there is
-	-- one definition of "free-roam speed" (StarterPlayer.CharacterWalkSpeed x Speedy) shared with
-	-- respawn and skill purchases -- and buying Speedy mid-job lands correctly instead of restoring
-	-- a stale pre-purchase figure. Runs on every path that ends a job: completion, finish-early,
-	-- switching jobs, and leaving (harmless with no character).
-	SkillsService.refreshWalkSpeed(self.player)
+	-- Deliberately does NOT restore the free-roam walk speed. A job ENDING isn't the player going
+	-- anywhere -- they're still standing in the business with the summary up, and may well press
+	-- PlayAgain straight back into another run. Handing their speed back there would have them
+	-- sprinting around the job site between runs. It's restored when they actually travel home
+	-- instead; see JobService.goHome.
 end
 
 return JobServer

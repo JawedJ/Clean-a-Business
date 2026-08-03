@@ -25,6 +25,7 @@ local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessService = require(script.Parent.BusinessService)
 local JobServer = require(script.Parent.JobServer)
 local PlotService = require(script.Parent.PlotService)
+local SkillsService = require(script.Parent.SkillsService)
 local TutorialService = require(script.Parent.TutorialService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -211,6 +212,20 @@ end
 local function goHome(player: Player)
 	if JobService.getActiveJob(player) == nil then
 		PlotService.sendToPlotSpawn(player)
+
+		-- Give them their free-roam walk speed back. A job pins them to the slower on-the-clock
+		-- speed (JobServer._pinWalkSpeed), and this is the moment they stop being on the clock in
+		-- any sense that matters: the job merely ENDING leaves them stood in the business with the
+		-- summary up, one PlayAgain away from another run, so the restore belongs here on the
+		-- actual trip home rather than back there.
+		--
+		-- Routed through SkillsService rather than a value captured at job start, so there's one
+		-- definition of free-roam speed (StarterPlayer.CharacterWalkSpeed x Speedy) shared with
+		-- respawn and skill purchases -- and buying Speedy mid-job restores the new speed instead
+		-- of a stale pre-purchase one. Safe to run when the pin is already gone: the job's
+		-- connections were dropped in destroy, so nothing reasserts over this.
+		SkillsService.refreshWalkSpeed(player)
+
 		-- Finishing the job and CHOOSING to leave the summary is what ends the tutorial's job step
 		-- -- PlayAgain keeps them on it. A no-op outside the tutorial.
 		TutorialService.notifyGoHome(player)
