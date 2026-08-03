@@ -101,6 +101,16 @@ local originalProps: { [Instance]: { [string]: any } } = {}
 -- onto a value we already appended in a previous session (we mutate the live label in place).
 local baseTextByLabel: { [TextLabel]: string } = {}
 
+-- Optional veto on purchases, registered by TutorialService: while the tutorial is running only the
+-- one button the current step asks for may be bought. A registered gate returning false makes the
+-- touch a silent no-op (no charge, no fail SFX) -- the button simply doesn't respond, which is what
+-- a locked-down plot should feel like. Registered as a hook rather than required directly so this
+-- module keeps no dependency on the tutorial (TutorialService requires US, for the gem rate).
+local purchaseGate: ((Player, string) -> boolean)? = nil
+-- Listeners notified after a purchase completes, with (player, buttonName). Also TutorialService's:
+-- buying the step's button is what advances steps 2 and 5.
+local purchaseListeners: { (Player, string) -> () } = {}
+
 local stateByPlot: { [Instance]: PlotState } = {}
 -- Bumped on every assign/release so an in-flight build (which yields on waitForData) can detect it
 -- was superseded and bail instead of painting a plot for the wrong owner.
@@ -612,6 +622,11 @@ local function tryPurchase(state: PlotState, entry: ButtonEntry)
 	if not state.available[entry.name] or state.debounce[entry.name] then
 		return
 	end
+	-- Vetoed (tutorial has the plot locked to one button): ignore the touch entirely, exactly like
+	-- the reveal cooldown does -- no charge and no fail SFX.
+	if purchaseGate and not purchaseGate(state.player, entry.name) then
+		return
+	end
 	-- Still within the reveal cooldown: ignore the touch entirely (no buy, no fail SFX) so it
 	-- can't be purchased the instant it appears.
 	local readyAt = state.readyAt[entry.name]
@@ -631,6 +646,9 @@ local function tryPurchase(state: PlotState, entry: ButtonEntry)
 		end)
 		DataService:set(player, { "PlotButtonsBought", entry.name }, true)
 		applyPurchase(state, entry)
+		for _, listener in purchaseListeners do
+			listener(player, entry.name)
+		end
 	end
 
 	-- Tell the owner's client to play the buy SFX on success, the fail SFX if they couldn't afford it.
@@ -735,9 +753,21 @@ local function onReleased(_player: Player, plot: Instance)
 	reset(plot)
 end
 
--- The gems/sec the player's plot is currently producing (0 if they have no plot / it earns
--- nothing). Refreshed each second by the gem loop; read by AfkEarningsService to snapshot the
--- player's offline earning rate when they leave.
+-- Install the purchase veto (see purchaseGate). One gate at a time -- TutorialService owns it.
+function PlotButtonService.setPurchaseGate(gate: ((Player, string) -> boolean)?)
+	purchaseGate = gate
+end
+
+-- Be told (player, buttonName) after each successful purchase. Register before players can buy.
+function PlotButtonService.onPurchased(listener: (Player, string) -> ())
+	table.insert(purchaseListeners, listener)
+end
+
+-- The gems/sec the player's plot was last SEEN producing (0 if they have no plot / it earns
+-- nothing). This is the gem loop's most recent tick, so it can be up to a second stale -- fine for
+-- its callers (AfkEarningsService's leave snapshot, the Company UI's rate card), which want the
+-- steady-state rate rather than the value at one exact instant. Anything reading the rate straight
+-- after a purchase wants getLiveGemsPerSecond instead.
 function PlotButtonService.getGemsPerSecond(player: Player): number
 	return gemsPerSecondByPlayer[player] or 0
 end
@@ -782,6 +812,22 @@ local function computeGemsPerSecond(state: PlotState): (number, number, { Instan
 
 	local perWorker = (Config.PlotWorkerBaseGemRate + flatPerWorker) * multiplier
 	return perWorker * #workers + standalone, perWorker, workers
+end
+
+-- The gems/sec the player's plot produces RIGHT NOW, recomputed from what's unlocked on it this
+-- instant instead of read from the gem loop's once-a-second snapshot. Use this when the rate is
+-- being read as a direct consequence of a purchase -- the snapshot is by definition from before it,
+-- so it would quote the player the rate they had a moment ago (the tutorial's "you now produce N
+-- gems each second" line read 1 instead of 4 that way). Same figure the gem loop would compute on
+-- its next tick, just without waiting for it. 0 if they have no plot.
+function PlotButtonService.getLiveGemsPerSecond(player: Player): number
+	for _, state in stateByPlot do
+		if state.player == player then
+			local total = computeGemsPerSecond(state)
+			return total
+		end
+	end
+	return 0
 end
 
 local function startGemLoop()

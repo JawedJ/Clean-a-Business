@@ -15,6 +15,11 @@
 -- request for a given panel supersedes any earlier queued one for it (a walk out then back in
 -- collapses to just the final state). See queueAction.
 --
+-- Two things can override all of this. A modal can lock opening outright (setLocked -- the
+-- AfkEarnings claim screen), and the tutorial can narrow opening to a single panel and pin that
+-- panel open so it refuses to close; both are read through TutorialState, and both leave the forced
+-- hide path (a panel's own hideInstant + markHidden, used when a job starts) working regardless.
+--
 -- Each panel registers under a stable name on every bind (HUD ScreenGuis are re-cloned each
 -- respawn, so the UiAnimations.Panel is rebuilt and must be re-registered). All open/close goes
 -- through here rather than calling Panel:open()/:close() directly, so this stays the single
@@ -23,6 +28,8 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
+
+local TutorialState = require(script.Parent.TutorialState)
 
 local ExclusivePanels = {}
 
@@ -57,6 +64,15 @@ local locked = false
 -- modal that locked it is responsible for unlocking when it closes.
 function ExclusivePanels.setLocked(value: boolean)
 	locked = value
+end
+
+-- Whether `name` may be opened right now: the AfkEarnings modal blocks everything, and the tutorial
+-- narrows opening to the one panel its current step calls for (both default to "no restriction", so
+-- outside those two states this is always true). Deliberately kept SEPARATE from `locked` rather
+-- than folded into it -- they're owned by different systems and either may be in force alone, so
+-- one shared flag would let whichever released first unlock the other's UI.
+local function canOpen(name: string): boolean
+	return not locked and TutorialState.isOpenAllowed(name)
 end
 
 -- (Re)register a panel under a stable name; call on every bind. A freshly cloned panel starts
@@ -179,7 +195,7 @@ end
 -- (see queueAction) rather than interrupting it. Returns true when the request was accepted; false
 -- if `name` isn't registered or the queue is full.
 local function openExclusive(name: string): boolean
-	if locked then
+	if not canOpen(name) then
 		return false
 	end
 	local entry = entries[name]
@@ -207,7 +223,7 @@ end
 -- the panel open. Returns true if the request was accepted; false if `name` isn't registered or
 -- the queue is full.
 function ExclusivePanels.open(name: string): boolean
-	if locked then
+	if not canOpen(name) then
 		return false
 	end
 	local entry = entries[name]
@@ -243,6 +259,10 @@ function ExclusivePanels.toggle(name: string): boolean
 		if not entry.panel.frame.Visible then
 			return false
 		end
+		-- Pinned open by the tutorial: the toggle can't close it (nor can its exit button, below).
+		if TutorialState.isCloseLocked(name) then
+			return false
+		end
 		entry.panel:close()
 		openName = nil
 		table.clear(pendingQueue) -- an explicit close cancels any swaps queued behind this panel
@@ -260,6 +280,12 @@ end
 function ExclusivePanels.close(name: string)
 	local entry = entries[name]
 	if not entry then
+		return
+	end
+	-- Pinned open by the tutorial: refuse every coordinator close path -- the panel's exit button,
+	-- and walking back out of the board's proximity hitbox. A job starting still clears it, because
+	-- that path calls the panel's hideInstant + markHidden directly rather than coming through here.
+	if TutorialState.isCloseLocked(name) then
 		return
 	end
 	if entry.panel:isAnimating() then

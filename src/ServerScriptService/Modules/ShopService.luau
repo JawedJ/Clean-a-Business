@@ -22,6 +22,7 @@ local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local ItemUpgrades = require(ReplicatedStorage.SharedModules.ItemUpgrades)
 local InventoryManager = require(script.Parent.InventoryManager)
+local TutorialService = require(script.Parent.TutorialService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local PurchaseItem = Remotes:WaitForChild("PurchaseItem") :: RemoteEvent
@@ -49,6 +50,11 @@ local function onPurchase(player: Player, uniqueId: unknown)
 	if not def then
 		return
 	end
+	-- The tutorial opens the shop for exactly one purchase (the broom, step 11); everything else is
+	-- refused for its duration.
+	if not TutorialService.canPurchaseTool(player, uniqueId) then
+		return
+	end
 
 	local owned = getOwnedItem(player, uniqueId)
 	if owned and owned.Unlocked then
@@ -74,6 +80,10 @@ local function onPurchase(player: Player, uniqueId: unknown)
 	item.Equipped = false
 	item.Level = 0
 	InventoryManager.addItem(player, item)
+
+	-- Buying the broom is what ends the tutorial's last interactive step (and lifts its
+	-- restrictions). A no-op for any other purchase.
+	TutorialService.notifyToolPurchased(player, uniqueId)
 end
 
 -- Level an owned tool up by one, charging the shared upgrade cost and applying its per-level
@@ -84,6 +94,10 @@ local function onUpgrade(player: Player, uniqueId: unknown)
 		return
 	end
 	if not ToolConfig[uniqueId] then
+		return
+	end
+	-- No tutorial step asks for an upgrade, so upgrading is off for its whole duration.
+	if not TutorialService.canUpgradeTool(player) then
 		return
 	end
 

@@ -137,10 +137,14 @@ end
 
 -- Pin the owner's walk speed for the life of the job: apply it to the current character, reassert
 -- it whenever anything changes it, and reapply to any character the player respawns into while
--- still on the job. The pinned speed is Config.JobWalkSpeed scaled by the player's Speedy skill --
--- recomputed on each apply so buying Speedy mid-job takes effect at once -- matching their free-roam
--- speed, so ending the job leaves them at the right speed with nothing to restore. All connections
--- are torn down in destroy.
+-- still on the job. The pinned speed is Config.JobWalkSpeed scaled by the player's Speedy skill,
+-- recomputed on each apply so buying Speedy mid-job takes effect at once.
+--
+-- This is a DIFFERENT speed from free-roam, which is StarterPlayer.CharacterWalkSpeed scaled by the
+-- same skill (see SkillsService) -- so destroy has to hand the player back their free-roam speed
+-- when the job ends. It doesn't happen by itself: the two are only equal while nobody has retuned
+-- CharacterWalkSpeed away from Config.JobWalkSpeed, and relying on that left players walking at the
+-- job speed after every job until their next respawn. All connections are torn down in destroy.
 function JobServer._pinWalkSpeed(self: JobServer)
 	local function bind(character: Model)
 		task.spawn(function()
@@ -398,6 +402,18 @@ function JobServer.destroy(self: JobServer)
 		conn:Disconnect()
 	end
 	table.clear(self.connections)
+
+	-- Hand the player back their free-roam walk speed. The pin above holds them at the job speed,
+	-- which is a separate value, so without this they'd keep walking at it until their next respawn
+	-- reapplied the real one. Ordering matters: the pin's reassert connections are disconnected
+	-- FIRST, otherwise this write would just be reverted by them.
+	--
+	-- Routed through SkillsService rather than restoring a value captured at job start, so there is
+	-- one definition of "free-roam speed" (StarterPlayer.CharacterWalkSpeed x Speedy) shared with
+	-- respawn and skill purchases -- and buying Speedy mid-job lands correctly instead of restoring
+	-- a stale pre-purchase figure. Runs on every path that ends a job: completion, finish-early,
+	-- switching jobs, and leaving (harmless with no character).
+	SkillsService.refreshWalkSpeed(self.player)
 end
 
 return JobServer

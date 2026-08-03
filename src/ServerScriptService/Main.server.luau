@@ -20,6 +20,7 @@ local PurchaseService = require(game.ServerScriptService.Modules.PurchaseService
 local AfkEarningsService = require(game.ServerScriptService.Modules.AfkEarningsService)
 local GemProductsService = require(game.ServerScriptService.Modules.GemProductsService)
 local LeaderboardService = require(game.ServerScriptService.Modules.LeaderboardService)
+local TutorialService = require(game.ServerScriptService.Modules.TutorialService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
@@ -71,6 +72,11 @@ GemProductsService.init()
 -- Global top-100 boards on the Leaderboard wall models. Init after CompanyService (whose flushes
 -- keep PlaytimeSeconds current) so the first publish reports a real figure, not a stale one.
 LeaderboardService.init()
+-- The first-join onboarding tutorial and its Onboarding analytics funnel. Init AFTER
+-- PlotButtonService (it installs that service's purchase gate + purchase listener) and after
+-- JobService/ShopService are required, since both call into it. It starts a player's tutorial off
+-- PlayerAdded, so it must be initialised before anyone can join -- i.e. anywhere in this file.
+TutorialService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()
 

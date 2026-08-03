@@ -25,6 +25,7 @@ local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessService = require(script.Parent.BusinessService)
 local JobServer = require(script.Parent.JobServer)
 local PlotService = require(script.Parent.PlotService)
+local TutorialService = require(script.Parent.TutorialService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local AcceptJob = Remotes:WaitForChild("AcceptJob") :: RemoteEvent
@@ -173,6 +174,10 @@ local function accept(player: Player, businessId: any)
 	if character then
 		teleportToJob(character, building)
 	end
+
+	-- Starting a job is what ends the tutorial's "pick a job" step. A no-op otherwise -- including
+	-- for the PlayAgain re-accept, which lands on a later step than the one this advances.
+	TutorialService.notifyJobAccepted(player)
 end
 
 -- Client's periodic wall-completion report (whole-wall units): trusted for the prorated
@@ -206,6 +211,9 @@ end
 local function goHome(player: Player)
 	if JobService.getActiveJob(player) == nil then
 		PlotService.sendToPlotSpawn(player)
+		-- Finishing the job and CHOOSING to leave the summary is what ends the tutorial's job step
+		-- -- PlayAgain keeps them on it. A no-op outside the tutorial.
+		TutorialService.notifyGoHome(player)
 	end
 end
 

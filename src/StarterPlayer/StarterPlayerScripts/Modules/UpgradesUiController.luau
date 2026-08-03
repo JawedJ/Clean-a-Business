@@ -38,6 +38,7 @@ local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
 
 local ExclusivePanels = require(script.Parent.ExclusivePanels)
+local TutorialState = require(script.Parent.TutorialState)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local PurchaseItem = Remotes:WaitForChild("PurchaseItem") :: RemoteEvent
@@ -285,6 +286,12 @@ local function onInteract(uniqueId: string)
 		if not def then
 			return
 		end
+		-- The tutorial opens this shop for one specific tool; every other slot is inert for the
+		-- duration. Silent -- not even the failure sound -- so a locked slot reads as "not yet"
+		-- rather than "you can't afford it". The server refuses these independently.
+		if not TutorialState.isToolAllowed(uniqueId) then
+			return
+		end
 		if canAfford(def.Cost) then
 			PurchaseItem:FireServer(uniqueId)
 			playFeedback(PURCHASE_SOUND)
@@ -296,6 +303,10 @@ local function onInteract(uniqueId: string)
 
 	-- Owned: upgrade if it isn't maxed. A maxed slot does nothing (no sound).
 	if not ItemUpgrades.canUpgrade(item) then
+		return
+	end
+	-- No tutorial step asks for an upgrade, so they're inert for its duration (server agrees).
+	if not TutorialState.areUpgradesAllowed() then
 		return
 	end
 	if canAfford(ItemUpgrades.getUpgradeCost(item)) then

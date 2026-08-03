@@ -7,6 +7,8 @@
 --   * A hover grow (UiAnimations.hoverGrow) -- except the HUD's button clusters, whose buttons
 --     share a UIGridLayout and so need the grid-aware variant JobUiController attaches instead.
 --
+-- Some ScreenGuis are skipped entirely -- see UNPOLISHED_SCREEN_GUIS.
+--
 -- Buttons are discovered by scanning PlayerGui once and then watching DescendantAdded, so UI
 -- cloned in later (e.g. the ScreenGui re-added on each respawn, or dynamically built rows) is
 -- wired automatically -- no per-button hookup elsewhere. This is the ONE place button hover
@@ -14,6 +16,8 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local TutorialConfig = require(ReplicatedStorage.SharedModules.TutorialConfig)
 
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
@@ -34,13 +38,21 @@ local INTERACT_BUTTON_NAME = "InteractButton"
 
 local UiButtonController = {}
 
--- Roblox's default mobile controls (jump button, thumbstick) live under a
--- ScreenGui named "TouchGui" in PlayerGui. Those are GuiButtons too, but they
--- aren't real UI -- no click sound, no hover polish.
-local function isTouchControl(button: GuiButton): boolean
+-- ScreenGuis whose buttons get NO polish at all -- not the click, not the hover sound, not the
+-- grow:
+--   * TouchGui   -- Roblox's default mobile controls (jump button, thumbstick). GuiButtons, but
+--     not our UI.
+--   * TutorialGui -- its "buttons" aren't buttons. They're big dimming overlays that darken the
+--     screen around whatever the tutorial wants you looking at, authored as ImageButtons only
+--     because that's the class the art needed. They're Active = false so clicks fall through to
+--     the real button underneath, and polishing them would put a click sound and a hover grow on
+--     a backdrop.
+local UNPOLISHED_SCREEN_GUIS = { TouchGui = true, [TutorialConfig.GuiName] = true }
+
+local function isUnpolished(button: GuiButton): boolean
 	local ancestor = button.Parent
 	while ancestor do
-		if ancestor.Name == "TouchGui" and ancestor:IsA("ScreenGui") then
+		if UNPOLISHED_SCREEN_GUIS[ancestor.Name] and ancestor:IsA("ScreenGui") then
 			return true
 		end
 		ancestor = ancestor.Parent
@@ -61,7 +73,7 @@ local function isInButtonCluster(button: GuiButton): boolean
 end
 
 local function wireButton(button: GuiButton)
-	if isTouchControl(button) then
+	if isUnpolished(button) then
 		return
 	end
 

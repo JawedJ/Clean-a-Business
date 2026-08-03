@@ -48,6 +48,7 @@ local GemBurst = require(Modules:WaitForChild("GemBurst"))
 local FirstSpawnCameraController = require(Modules:WaitForChild("FirstSpawnCameraController"))
 local LeaderboardController = require(Modules:WaitForChild("LeaderboardController"))
 local UiPreloader = require(Modules:WaitForChild("UiPreloader"))
+local TutorialController = require(Modules:WaitForChild("TutorialController"))
 
 
 -- The PlayerGui and replicated folders can lag the first frames this script runs; wait for the game
@@ -144,4 +145,8 @@ safeInit("GemBuffController", GemBuffController.init)
 safeInit("LeaderboardController", LeaderboardController.init)
 -- Warm the HUD's image assets in the background so they don't first render blurry.
 safeInit("UiPreloader", UiPreloader.init)
+-- First-join onboarding: renders the server's current tutorial step and applies its UI locks. Init
+-- LAST -- it reads the job board / upgrades shop through their controllers, and its first act is to
+-- pick up a step the server may already have set, which should land on a fully built HUD.
+safeInit("TutorialController", TutorialController.init)
 

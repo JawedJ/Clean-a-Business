@@ -140,6 +140,15 @@ local DataTemplate = {
 	-- to tell them apart from a genuinely new player after the fact.
 	HasSpawnedBefore = false,
 
+	-- Whether the player has already been through the onboarding tutorial, and so must never see it
+	-- again. Set the moment the tutorial STARTS, not when it finishes: a player who leaves partway
+	-- through has still had their one run at it, and replaying a half-finished tutorial on their next
+	-- join would re-lock a plot they've already started building. So the flag means "has been offered
+	-- the tutorial", and a rejoining player always lands in the normal, fully-unlocked game whether
+	-- they finished or not. Reconciled onto existing profiles -- which means every EXISTING player
+	-- reconciles in at false and gets the tutorial once on their next join, exactly like a new one.
+	TutorialComplete = false,
+
 	-- Lifetime seconds the player has spent in-game ("Business Age" in the Company UI). Accrued by
 	-- CompanyService: flushed into the profile periodically while online and once more on leave, so
 	-- the stored value is always the true running total. Reconciled onto existing profiles.
