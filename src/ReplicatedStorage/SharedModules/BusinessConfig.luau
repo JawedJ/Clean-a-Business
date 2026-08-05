@@ -10,12 +10,12 @@ local DataTemplate = require(game.ReplicatedStorage.SharedModules.DataTemplate)
 
 local BusinessConfig: { [string]: DataTemplate.Business } = {
 	mcDonalds = {
-		BaseReward = 8000,
+		BaseReward = 6000,
 		Unlocked = false,
 		Name = "McDonalds",
 		UniqueID = "mcDonalds",
 		Completions = 0,
-		XpReward = 700,
+		XpReward = 600,
 		-- Stains fill 25% of the completion bar here, walls the other 75%.
 		DecalWeight = 0.25,
 		RequiredLevel = 10,
@@ -24,7 +24,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 	},
 
 	starbucks = {
-		BaseReward = 3500,
+		BaseReward = 2500,
 		Unlocked = false,
 		Name = "Starbucks",
 		UniqueID = "starbucks",
@@ -35,7 +35,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		RequiredItems = { "pressureWasher", "startingBroom" },
 	},
 	apple = {
-		BaseReward = 5000,
+		BaseReward = 4000,
 		Unlocked = false,
 		Name = "Apples",
 		UniqueID = "apple",
@@ -47,7 +47,7 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 	},
 
 	gasStation = {
-		BaseReward = 2500,
+		BaseReward = 1500,
 		Unlocked = true,
 		Name = "Frosty's",
 		UniqueID = "gasStation",
@@ -56,6 +56,19 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		RequiredLevel = 1,
 		-- Walls only (no stains), so the pressure washer is the only tool needed.
 		RequiredItems = { "pressureWasher" },
+	},
+
+	
+	chipotle = {
+		BaseReward = 9000,
+		Unlocked = false,
+		Name = "Chipotle",
+		UniqueID = "chipotle",
+		Completions = 0,
+		XpReward = 950,
+		RequiredLevel = 15,
+		-- Walls only (no stains), so the pressure washer is the only tool needed.
+		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
 	},
 }
 

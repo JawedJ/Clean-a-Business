@@ -77,6 +77,27 @@ local function takeFirstSpawn(player: Player): boolean
 	return true
 end
 
+-- The plot part named `name`, looked up in the plot's teleports model first and falling back to a
+-- direct child of the plot folder. The teleport pads (both spawn parts, both portal pads) are
+-- grouped into that Model so they can be marked Persistent -- only a Model can be pinned against
+-- StreamingEnabled, a loose part can't -- and the fallback keeps a plot whose pads haven't been
+-- regrouped yet working. Every plot-teleport destination is resolved through here, PortalService's
+-- pads included.
+function PlotService.findPart(plot: Instance, name: string): BasePart?
+	local teleports = plot:FindFirstChild(Config.PlotTeleportsModelName)
+	if teleports then
+		local grouped = teleports:FindFirstChild(name)
+		if grouped and grouped:IsA("BasePart") then
+			return grouped
+		end
+	end
+	local direct = plot:FindFirstChild(name)
+	if direct and direct:IsA("BasePart") then
+		return direct
+	end
+	return nil
+end
+
 -- Horizontal unit direction from `position` towards the plot's warehouse, or nil if the plot has
 -- no warehouse or it sits directly overhead (no horizontal facing to derive). Measured to the
 -- warehouse's BOUNDING-BOX centre rather than its pivot, which on an authored Model can sit
@@ -109,14 +130,14 @@ end
 -- LookVector, so the first thing a new player sees is the building they're meant to walk to.
 local function spawnCharacterAt(player: Player, character: Model, plot: Instance, useFirstSpawn: boolean?)
 	local partName = if useFirstSpawn then Config.PlotFirstSpawnPartName else Config.PlotSpawnPartName
-	local spawnPart = plot:FindFirstChild(partName)
+	local spawnPart = PlotService.findPart(plot, partName)
 	-- A plot with no FirstSpawn part is an authoring gap, not a reason to strand a new player at
 	-- the default world spawn -- fall back to the normal spawn part.
-	if useFirstSpawn and not (spawnPart and spawnPart:IsA("BasePart")) then
+	if useFirstSpawn and not spawnPart then
 		warn(string.format("[PlotService] Plot %s has no %q part; using %q for the first spawn.", plot.Name, Config.PlotFirstSpawnPartName, Config.PlotSpawnPartName))
-		spawnPart = plot:FindFirstChild(Config.PlotSpawnPartName)
+		spawnPart = PlotService.findPart(plot, Config.PlotSpawnPartName)
 	end
-	if not spawnPart or not spawnPart:IsA("BasePart") then
+	if not spawnPart then
 		warn(string.format("[PlotService] Plot %s has no %q part to spawn on.", plot.Name, Config.PlotSpawnPartName))
 		return
 	end

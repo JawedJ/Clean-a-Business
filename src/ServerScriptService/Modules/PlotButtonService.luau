@@ -6,7 +6,9 @@
 --   Plot(i).Spawnables  -- Models a button reveals, one per UnlockID
 --
 -- A button Model carries three attributes, plus one optional (see CleaningConfig):
---   Cost (number)       -- Cash charged when the OWNER steps on the button's Interact part
+--   Cost (number)       -- Cash charged when the OWNER steps on the button's Interact part. Read
+--                          from PLOT1's button of the same name, not from the button itself, so
+--                          prices are authored once and every plot shares them (see referenceCost).
 --   UnlockID (string)   -- name of the Spawnables Model this button makes visible
 --   UnlockTwo (boolean) -- if true, buying reveals the NEXT TWO available buttons instead of just one
 --   RequiresButton      -- OPTIONAL: this button stays hidden until Button<N> is bought, however far
@@ -204,6 +206,26 @@ local function setVisible(model: Instance, visible: boolean)
 	end
 end
 
+-- Plot1 is the single source of truth for button PRICES. Every plot authors the same button names,
+-- so a button's cost is looked up on Plot1's button of that name rather than on the button's own
+-- Cost attribute -- which means retuning a price is a one-plot edit that every plot picks up, and
+-- six copies of the price ladder can't quietly drift apart. Only the price is shared; UnlockID,
+-- UnlockTwo and RequiresButton are still read per-plot, so a plot can lay its progression out
+-- differently if it ever needs to.
+--
+-- Read live (not cached) so the prices are whatever Plot1 says at the moment a plot is built for a
+-- new owner. A button Plot1 doesn't have falls back to its own Cost attribute.
+local PRICE_REFERENCE_PLOT = "Plot1"
+
+local function referenceCost(buttonName: string): number?
+	local plotsFolder = Workspace:FindFirstChild(Config.PlotsFolderName)
+	local plot = plotsFolder and plotsFolder:FindFirstChild(PRICE_REFERENCE_PLOT)
+	local buttons = plot and plot:FindFirstChild(Config.PlotButtonsFolderName)
+	local button = buttons and buttons:FindFirstChild(buttonName)
+	local cost = button and button:GetAttribute(Config.PlotButtonCostAttribute)
+	return if type(cost) == "number" then cost else nil
+end
+
 -- Read one button Model into a ButtonEntry, or nil if it isn't a valid "Button<number>".
 local function readButton(model: Instance): ButtonEntry?
 	local num = model.Name:match("(%d+)$")
@@ -212,7 +234,9 @@ local function readButton(model: Instance): ButtonEntry?
 		warn(string.format("[PlotButtonService] Button %q has no trailing number; skipping.", model.Name))
 		return nil
 	end
-	local cost = model:GetAttribute(Config.PlotButtonCostAttribute)
+	-- Priced off Plot1 (see referenceCost); this plot's own Cost attribute is only the fallback for
+	-- a button Plot1 doesn't have.
+	local cost = referenceCost(model.Name) or model:GetAttribute(Config.PlotButtonCostAttribute)
 	local unlockId = model:GetAttribute(Config.PlotButtonUnlockIdAttribute)
 	local unlockTwo = model:GetAttribute(Config.PlotButtonUnlockTwoAttribute)
 	local requires = model:GetAttribute(Config.PlotButtonRequiresAttribute)

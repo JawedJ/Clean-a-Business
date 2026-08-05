@@ -77,14 +77,24 @@ local CleaningConfig = {
 	PlotCount = 6,
 	PlotAttribute = "Plot",
 
-	-- Part inside each plot folder the owner's character spawns on when assigned the
-	-- plot and on every respawn (unless they currently hold a job, see ActiveJob).
+	-- Model grouping every pad the plot teleports a character ONTO -- the two spawn parts below and
+	-- the portal's two landing pads:
+	--   Plot(i).<PlotTeleportsModelName>.<PlotSpawnPartName / PlotFirstSpawnPartName /
+	--                                    PortalDestinationFromFirst / PortalDestinationFromSecond>
+	-- Grouping them in one Model is what lets them be marked never-streamed-out
+	-- (Model.ModelStreamingMode, which only exists on a Model -- loose parts can't be pinned).
+	-- Lookups go through PlotService.findPart, which also accepts a pad still sitting directly
+	-- under the plot folder, so a plot that hasn't been regrouped yet still works.
+	PlotTeleportsModelName = "Teleports",
+
+	-- Part the owner's character spawns on when assigned the plot and on every respawn
+	-- (unless they currently hold a job, see ActiveJob).
 	PlotSpawnPartName = "spawnPart",
 
-	-- Part inside each plot folder used INSTEAD of PlotSpawnPartName for a player's very first
-	-- spawn in the game, ever (DataTemplate.HasSpawnedBefore -- see PlotService). Every respawn
-	-- after that, and every later session, uses the normal spawn part. A plot missing this part
-	-- just falls back to the normal one.
+	-- Part used INSTEAD of PlotSpawnPartName for a player's very first spawn in the game, ever
+	-- (DataTemplate.HasSpawnedBefore -- see PlotService). Every respawn after that, and every
+	-- later session, uses the normal spawn part. A plot missing this part just falls back to the
+	-- normal one.
 	PlotFirstSpawnPartName = "FirstSpawn",
 
 	-- The plot's warehouse name sign (see PlotSignService), stamped with the owner's name on
@@ -121,8 +131,8 @@ local CleaningConfig = {
 	--   Plot(i).<PlotSpawnablesFolderName>.<PortalModelName>                       -- the top end
 	--     .<PortalTouchPartName>                                                   -- sends to Teleport2
 	--     .<PortalSecondModelName>.<PortalTouchPartName>                           -- sends to Teleport1
-	-- with the two landing pads as parts directly under the plot:
-	--   Plot(i).<PortalDestinationFromSecond> / Plot(i).<PortalDestinationFromFirst>
+	-- with the two landing pads inside the plot's teleports model (see PlotTeleportsModelName):
+	--   Plot(i).<PlotTeleportsModelName>.<PortalDestinationFromSecond / PortalDestinationFromFirst>
 	-- Both ends teleport within the SAME plot as the portal that was touched. While the spawnable
 	-- is still locked PlotButtonService leaves it CanTouch = false, so the pads are unreachable
 	-- until it's bought.

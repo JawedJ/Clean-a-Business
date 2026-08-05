@@ -5,8 +5,9 @@
 -- Each plot may hold one Portal under its Spawnables folder, with two ends:
 --   Spawnables.Portal.TouchDetector              -- touching it lands the player on Teleport2
 --   Spawnables.Portal.SecondPortal.TouchDetector -- touching it lands the player on Teleport1
--- Both landing pads are parts directly under that same plot, so a portal only ever moves a player
--- around inside the plot it belongs to.
+-- Both landing pads belong to that same plot -- inside its Teleports model (see
+-- Config.PlotTeleportsModelName), or directly under the plot on a plot that hasn't been regrouped
+-- -- so a portal only ever moves a player around inside the plot it belongs to.
 --
 -- Notes:
 --   * No ownership check: whoever walks into a portal rides it. The portal is only touchable once
@@ -20,6 +21,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local PlotService = require(script.Parent.PlotService)
 
 local PortalService = {}
 
@@ -69,8 +71,10 @@ local function connectEnd(plot: Instance, detector: BasePart, padName: string)
 			return
 		end
 
-		local pad = plot:FindFirstChild(padName)
-		if not pad or not pad:IsA("BasePart") then
+		-- Via PlotService so the pad resolves whether it's grouped in the plot's teleports model
+		-- or still a direct plot child.
+		local pad = PlotService.findPart(plot, padName)
+		if not pad then
 			warn(string.format("[PortalService] Plot %s has no %q part to teleport to.", plot.Name, padName))
 			return
 		end

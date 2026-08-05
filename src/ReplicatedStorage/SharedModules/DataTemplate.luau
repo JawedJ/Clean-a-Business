@@ -207,16 +207,16 @@ local DataTemplate = {
 		-- when the player joins (see ServerScriptService.BusinessService). Keep this list in sync
 		-- with the BusinessConfig catalog -- one entry per business.
 		["mcDonalds"] = {
-			BaseReward = 8000,
+			BaseReward = 6000,
 			Unlocked = false,
 			Name = "McDonalds",
 			UniqueID = "mcDonalds",
 			Completions = 0,
-			XpReward = 700
+			XpReward = 600
 		},
 
 		["starbucks"] = {
-			BaseReward = 3500,
+			BaseReward = 2500,
 			Unlocked = false,
 			Name = "Starbucks",
 			UniqueID = "starbucks",
@@ -225,7 +225,7 @@ local DataTemplate = {
 		},
 
 		["apple"] = {
-			BaseReward = 5000,
+			BaseReward = 4000,
 			Unlocked = false,
 			Name = "Starbucks",
 			UniqueID = "starbucks",
@@ -234,12 +234,21 @@ local DataTemplate = {
 		},
 
 		["gasStation"] = {
-			BaseReward = 2500,
-			Unlocked = false,
+			BaseReward = 1500,
+			Unlocked = true,
 			Name = "Frosty's",
 			UniqueID = "gasStation",
 			Completions = 0,
 			XpReward = 250
+		},
+
+		["chipotle"] = {
+			BaseReward = 9000,
+			Unlocked = false,
+			Name = "Chipotle",
+			UniqueID = "chipotle",
+			Completions = 0,
+			XpReward = 950
 		},
 
 		
