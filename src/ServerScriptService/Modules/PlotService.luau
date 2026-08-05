@@ -51,24 +51,30 @@ function PlotService.onReleased(fn: (Player, Instance) -> ())
 	table.insert(releasedListeners, fn)
 end
 
+-- Read the player's HasSpawnedBefore flag into firstSpawnPending. YIELDS on waitForData -- for a
+-- returning player that's a real datastore round-trip -- so it's started off PlayerAdded, in
+-- parallel with the character loading, and never from the spawn path itself. Once resolved it
+-- stays resolved for the session, so respawns cost nothing.
+local function resolveFirstSpawn(player: Player)
+	if firstSpawnPending[player] ~= nil then
+		return
+	end
+	DataService:waitForData(player)
+	if not player.Parent or firstSpawnPending[player] ~= nil then
+		return
+	end
+	firstSpawnPending[player] = DataService:get(player, { "HasSpawnedBefore" }) ~= true
+end
+
 -- Whether this spawn is the player's first EVER, claiming it if so. The profile flag is written
 -- the moment we hand the placement out, not after the character lands, so a disconnect mid-spawn
 -- can't earn them a second one.
 --
--- Resolution yields on waitForData, so it's memoized per player: only the very first spawn of a
--- session pays that cost, and every respawn after reads the cached false. Spawning already yields
--- (on HumanoidRootPart), so the extra wait costs nothing visible.
+-- NEVER yields: if the profile hasn't come back yet this returns false and the caller places the
+-- player on their normal spawn part immediately (see the CharacterAdded handler, which corrects the
+-- placement afterwards if the answer turns out to be yes). Making the pivot wait on the datastore is
+-- what used to leave returning players falling at the world spawn for the length of the fetch.
 local function takeFirstSpawn(player: Player): boolean
-	if firstSpawnPending[player] == false then
-		return false
-	end
-	if firstSpawnPending[player] == nil then
-		DataService:waitForData(player)
-		if not player.Parent then
-			return false
-		end
-		firstSpawnPending[player] = DataService:get(player, { "HasSpawnedBefore" }) ~= true
-	end
 	if firstSpawnPending[player] ~= true then
 		return false
 	end
@@ -169,6 +175,32 @@ local function spawnCharacterAt(player: Player, character: Model, plot: Instance
 	end
 end
 
+-- Place a freshly added character on its plot, without ever waiting on the datastore.
+--
+-- If the profile hasn't come back yet the character still lands on the plot's normal spawn part on
+-- the spot -- the placement that's right for everyone except a brand-new player -- and the first-ever
+-- placement is applied a moment later if the profile says it's owed. A new player's profile has
+-- nothing to fetch, so in practice that correction is never the visible path.
+local function placeOnSpawn(player: Player, character: Model, plot: Instance)
+	local resolved = firstSpawnPending[player] ~= nil
+	spawnCharacterAt(player, character, plot, takeFirstSpawn(player))
+	if resolved then
+		return
+	end
+
+	task.spawn(function()
+		resolveFirstSpawn(player)
+		-- They may have died, respawned or left while the profile was in flight; a later character
+		-- has its own placement, so only correct the one we just placed.
+		if player.Character ~= character or not character.Parent then
+			return
+		end
+		if takeFirstSpawn(player) then
+			spawnCharacterAt(player, character, plot, true)
+		end
+	end)
+end
+
 -- First plot (in Plot1..PlotN order) that nobody currently owns. Plots live under
 -- the shared Workspace.<PlotsFolderName> folder.
 local function findFreePlot(): Instance?
@@ -196,15 +228,17 @@ local function assign(player: Player)
 	plotByPlayer[player] = plot
 	player:SetAttribute(Config.PlotAttribute, plot.Name)
 
+	-- Start the profile read now, alongside the character loading, so the spawn path below almost
+	-- always finds the answer already waiting for it.
+	task.spawn(resolveFirstSpawn, player)
+
 	-- Spawn the character on the plot now and on every future respawn. takeFirstSpawn returns true
 	-- for at most one of these, so only a brand-new player's opening spawn lands on FirstSpawn.
 	characterConns[player] = player.CharacterAdded:Connect(function(character)
-		spawnCharacterAt(player, character, plot, takeFirstSpawn(player))
+		placeOnSpawn(player, character, plot)
 	end)
 	if player.Character then
-		task.spawn(function()
-			spawnCharacterAt(player, player.Character :: Model, plot, takeFirstSpawn(player))
-		end)
+		placeOnSpawn(player, player.Character :: Model, plot)
 	end
 
 	for _, fn in assignedListeners do
