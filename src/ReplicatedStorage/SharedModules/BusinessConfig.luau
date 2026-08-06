@@ -60,13 +60,25 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 
 	
 	chipotle = {
-		BaseReward = 9000,
+		BaseReward = 8000,
 		Unlocked = false,
 		Name = "Chipotle",
 		UniqueID = "chipotle",
 		Completions = 0,
 		XpReward = 950,
 		RequiredLevel = 15,
+		-- Walls only (no stains), so the pressure washer is the only tool needed.
+		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
+	},
+
+	fiveGuys = {
+		BaseReward = 10000,
+		Unlocked = false,
+		Name = "Five Guys",
+		UniqueID = "fiveGuys",
+		Completions = 0,
+		XpReward = 1150,
+		RequiredLevel = 18,
 		-- Walls only (no stains), so the pressure washer is the only tool needed.
 		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
 	},

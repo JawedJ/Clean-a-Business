@@ -243,12 +243,21 @@ local DataTemplate = {
 		},
 
 		["chipotle"] = {
-			BaseReward = 9000,
+			BaseReward = 8000,
 			Unlocked = false,
 			Name = "Chipotle",
 			UniqueID = "chipotle",
 			Completions = 0,
 			XpReward = 950
+		},
+
+		["fiveGuys"] = {
+			BaseReward = 10000,
+			Unlocked = false,
+			Name = "Five Guys",
+			UniqueID = "Five Guys",
+			Completions = 0,
+			XpReward = 1150
 		},
 
 		
