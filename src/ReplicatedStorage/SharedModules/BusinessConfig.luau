@@ -82,6 +82,19 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		-- Walls only (no stains), so the pressure washer is the only tool needed.
 		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
 	},
+
+	gamestop = {
+		BaseReward = 14000,
+		Unlocked = false,
+		Name = "Gamestop",
+		UniqueID = "gamestop",
+		Completions = 0,
+		XpReward = 2000,
+		RequiredLevel = 20,
+		-- Walls, stains and spills -- all three tools required.
+		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
+	},
+	--next level req 23
 }
 
 return BusinessConfig

@@ -268,11 +268,24 @@ local function renderSlot(slot: Instance)
 	end
 end
 
+-- Fire a buy/upgrade the player can't afford in gems. The failure sound plays either way -- they
+-- genuinely couldn't afford it, which is what the sound reports -- and the server then answers the
+-- shortfall by prompting the Robux product for that exact slot (ShopService), so the click leads
+-- somewhere instead of just failing. During the tutorial there's no Robux fallback (the server
+-- refuses it too), so the click stays a plain failure with no request.
+local function requestUnaffordable(remote: RemoteEvent, uniqueId: string)
+	playFeedback(PURCHASE_FAILED_SOUND)
+	if TutorialState.isRestricting() then
+		return
+	end
+	remote:FireServer(uniqueId)
+end
+
 -- Act on an InteractButton click: buy the tool if unowned, upgrade it if owned below the cap,
--- or do nothing if it's maxed. The outcome is predicted client-side from the player's cash so
+-- or do nothing if it's maxed. The outcome is predicted client-side from the player's gems so
 -- we can play instant audio feedback -- a buy/upgrade we expect to succeed fires the request
--- (the server re-validates cash/ownership/level) and plays the purchase sound; one they can't
--- afford plays the failure sound and fires nothing. A maxed slot is a silent no-op.
+-- (the server re-validates gems/ownership/level) and plays the purchase sound; one they can't
+-- afford goes through requestUnaffordable instead. A maxed slot is a silent no-op.
 local function onInteract(uniqueId: string)
 	local inventory = DataService:get({ "Inventory" })
 	local item = if type(inventory) == "table" and type(inventory[uniqueId]) == "table"
@@ -296,7 +309,7 @@ local function onInteract(uniqueId: string)
 			PurchaseItem:FireServer(uniqueId)
 			playFeedback(PURCHASE_SOUND)
 		else
-			playFeedback(PURCHASE_FAILED_SOUND)
+			requestUnaffordable(PurchaseItem, uniqueId)
 		end
 		return
 	end
@@ -313,7 +326,7 @@ local function onInteract(uniqueId: string)
 		UpgradeItem:FireServer(uniqueId)
 		playFeedback(PURCHASE_SOUND)
 	else
-		playFeedback(PURCHASE_FAILED_SOUND)
+		requestUnaffordable(UpgradeItem, uniqueId)
 	end
 end
 

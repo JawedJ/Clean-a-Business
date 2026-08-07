@@ -203,18 +203,12 @@ local DataTemplate = {
 	} :: Ratings,
 
 	BusinessList = {
-		-- Every business starts LOCKED; BusinessService grants unlocks as requirements are met
-		-- when the player joins (see ServerScriptService.BusinessService). Keep this list in sync
-		-- with the BusinessConfig catalog -- one entry per business.
-		["mcDonalds"] = {
-			BaseReward = 6000,
-			Unlocked = false,
-			Name = "McDonalds",
-			UniqueID = "mcDonalds",
-			Completions = 0,
-			XpReward = 600
-		},
-
+		-- Deliberately minimal: the authoritative list of businesses is the BusinessConfig
+		-- catalog, and BusinessService seeds a locked record for every catalog entry missing
+		-- from the profile on join (see ServerScriptService.BusinessService). Do NOT mirror the
+		-- catalog here -- a template entry wins over seeding, so a stale copy silently pins the
+		-- wrong Name/reward onto every profile forever. One entry is kept only so the table has
+		-- a shape for reconcile to key off.
 		["starbucks"] = {
 			BaseReward = 2500,
 			Unlocked = false,
@@ -223,45 +217,6 @@ local DataTemplate = {
 			Completions = 0,
 			XpReward = 350
 		},
-
-		["apple"] = {
-			BaseReward = 4000,
-			Unlocked = false,
-			Name = "Starbucks",
-			UniqueID = "starbucks",
-			Completions = 0,
-			XpReward = 500
-		},
-
-		["gasStation"] = {
-			BaseReward = 1500,
-			Unlocked = true,
-			Name = "Frosty's",
-			UniqueID = "gasStation",
-			Completions = 0,
-			XpReward = 250
-		},
-
-		["chipotle"] = {
-			BaseReward = 8000,
-			Unlocked = false,
-			Name = "Chipotle",
-			UniqueID = "chipotle",
-			Completions = 0,
-			XpReward = 950
-		},
-
-		["fiveGuys"] = {
-			BaseReward = 10000,
-			Unlocked = false,
-			Name = "Five Guys",
-			UniqueID = "Five Guys",
-			Completions = 0,
-			XpReward = 1150
-		},
-
-		
-
 	} :: { [string]: Business },
 
 	Inventory = {

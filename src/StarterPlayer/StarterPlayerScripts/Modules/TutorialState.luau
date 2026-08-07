@@ -66,6 +66,13 @@ function TutorialState.isToolAllowed(uniqueId: string): boolean
 	return not toolRestricted or toolAllowed == uniqueId
 end
 
+-- Whether the tutorial is narrowing purchases at all right now. Every step sets the tool
+-- restriction and only clear() lifts it, so this doubles as "the tutorial is running" for callers
+-- that need to suppress a path outright (e.g. the shop's Robux fallback) rather than allow-list it.
+function TutorialState.isRestricting(): boolean
+	return toolRestricted
+end
+
 function TutorialState.setUpgradesAllowed(value: boolean)
 	upgradesAllowed = value
 end
