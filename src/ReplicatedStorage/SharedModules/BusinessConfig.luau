@@ -94,7 +94,19 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 		-- Walls, stains and spills -- all three tools required.
 		RequiredItems = { "pressureWasher", "startingBroom", "mop" },
 	},
-	--next level req 23
+
+	dollarTree = {
+		BaseReward = 23000,
+		Unlocked = false,
+		Name = "Dollar Store",
+		UniqueID = "dollarTree",
+		Completions = 0,
+		XpReward = 5000,
+		RequiredLevel = 24,
+		RequiredItems = { "pressureWasher", "startingBroom", "mop", "vacuum" },
+	},
+	--next level req 24
+	--photo images are 1022x926
 }
 
 return BusinessConfig

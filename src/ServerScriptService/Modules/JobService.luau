@@ -83,14 +83,18 @@ local function pinBusinessesPersistent()
 	folder.ChildAdded:Connect(pin)
 end
 
+-- A building's TeleportPart, or nil if it's missing/isn't a BasePart. Resolved BEFORE a job is
+-- started (see accept): a job the player can't be dropped into is refused outright rather than
+-- accepted and left with them standing wherever they were, on the clock for a building they never
+-- entered. Non-recursive by design -- the part is authored as a direct child of the building.
+local function teleportPartFor(building: Instance): BasePart?
+	local teleportPart = building:FindFirstChild(Config.TeleportPartName)
+	return if teleportPart and teleportPart:IsA("BasePart") then teleportPart else nil
+end
+
 -- Drop the character onto a building's TeleportPart (upright, slightly above it),
 -- facing the same direction as the part's Front face (flattened so we never pitch/roll).
-local function teleportToJob(character: Model, building: Instance)
-	local teleportPart = building:FindFirstChild(Config.TeleportPartName)
-	if not teleportPart or not teleportPart:IsA("BasePart") then
-		warn(string.format("[JobService] Building %s has no %q part.", building.Name, Config.TeleportPartName))
-		return
-	end
+local function teleportToJob(character: Model, teleportPart: BasePart)
 	character:WaitForChild("HumanoidRootPart")
 	local pos = teleportPart.Position + Config.TeleportOffset
 	local front = teleportPart.CFrame.LookVector
@@ -149,6 +153,19 @@ local function accept(player: Player, businessId: any)
 		return
 	end
 
+	-- Everything the teleport needs is resolved up front, because accepting is all-or-nothing: a
+	-- job that can't put the player inside the building must not start at all. Without this the
+	-- player would be on the clock, HUD and all, standing outside a building they can't clean.
+	local teleportPart = teleportPartFor(building)
+	if not teleportPart then
+		warn(string.format("[JobService] Building %s has no %q part; refusing the job.", building.Name, Config.TeleportPartName))
+		return
+	end
+	local character = player.Character
+	if not character then
+		return -- mid-respawn: nothing to teleport, so there's no job to start
+	end
+
 	-- One at a time: drop whatever they were on first. Re-accepting the same business is
 	-- exactly the "redo" path -- a fresh JobServer with progress reset to zero.
 	JobService.endJob(player)
@@ -171,10 +188,7 @@ local function accept(player: Player, businessId: any)
 	end)
 	player:SetAttribute(Config.ActiveJobAttribute, businessId)
 
-	local character = player.Character
-	if character then
-		teleportToJob(character, building)
-	end
+	teleportToJob(character, teleportPart)
 
 	-- Starting a job is what ends the tutorial's "pick a job" step. A no-op otherwise -- including
 	-- for the PlayAgain re-accept, which lands on a later step than the one this advances.

@@ -64,6 +64,7 @@ local ToolConfig: { [string]: DataTemplate.Item } = {
 		Cost = 500000,
 		UniqueID = "vacuum",
 		Level = 0,
+		Image = "rbxassetid://125399145196978",
 		SlotNumber = 4,
 		-- Cleans webs exactly like the broom cleans stains: same Range + UseTime (server-authoritative
 		-- clean timer) and the same per-upgrade tuning.
