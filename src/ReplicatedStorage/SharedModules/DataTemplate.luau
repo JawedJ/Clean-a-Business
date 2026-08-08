@@ -70,6 +70,18 @@ export type ShopBoosts = {
 	SpeedBonus: number,
 }
 
+-- Highest step already reported into each progression analytics funnel (see FunnelService). These
+-- funnels track LIFETIME progress, so they span sessions -- persisting the high-water mark is what
+-- stops a rejoin from re-reporting steps the player passed long ago, and what lets a single jump
+-- fill in every step it skipped so the funnel stays contiguous. Analytics bookkeeping only: nothing
+-- in the game reads these.
+export type FunnelProgress = {
+	-- 1..10, one per 10% of the player's plot buttons bought.
+	PlotCompletion: number,
+	-- Number of businesses unlocked, one step each.
+	JobsUnlocked: number,
+}
+
 -- Running tally of the player's per-job star ratings (1..5 per job -- see JobRating), used to
 -- show their business's AVERAGE rating in the Company UI. We store the running Sum + Count rather
 -- than the average itself so each new job folds in exactly (average = Sum / Count). A fresh
@@ -204,6 +216,15 @@ local DataTemplate = {
 		SFXVolume = 0.5,
 		HidePlayers = false,
 	} :: Settings,
+
+	-- Analytics funnel high-water marks (see FunnelProgress type). Both start at 0 -- a fresh player
+	-- has reported nothing. Reconciled onto existing profiles, which is what makes an already-
+	-- progressed player report their passed steps once, on their next advance, instead of appearing
+	-- to enter the funnel partway through.
+	FunnelProgress = {
+		PlotCompletion = 0,
+		JobsUnlocked = 0,
+	} :: FunnelProgress,
 
 	-- Permanent Robux store perks (see ShopBoosts type). A fresh player has none: multipliers at
 	-- 1 (no change) and no speed bonus. Reconciled onto existing profiles like the other tables.

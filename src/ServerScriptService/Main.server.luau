@@ -22,6 +22,7 @@ local GemProductsService = require(game.ServerScriptService.Modules.GemProductsS
 local ShopProductsService = require(game.ServerScriptService.Modules.ShopProductsService)
 local LeaderboardService = require(game.ServerScriptService.Modules.LeaderboardService)
 local TutorialService = require(game.ServerScriptService.Modules.TutorialService)
+local FunnelService = require(game.ServerScriptService.Modules.FunnelService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
 
 DataService:init({
@@ -82,6 +83,10 @@ LeaderboardService.init()
 -- JobService/ShopService are required, since both call into it. It starts a player's tutorial off
 -- PlayerAdded, so it must be initialised before anyone can join -- i.e. anywhere in this file.
 TutorialService.init()
+-- The plot-completion and jobs-unlocked analytics funnels. Purely an observer -- it registers a
+-- PlotButtonService purchase listener (so, like TutorialService's, this must be in before anyone
+-- can buy) and watches each player's BusinessList. Nothing depends on it.
+FunnelService.init()
 -- Owner-only dev chat commands (e.g. /completejob <id> <amount>).
 AdminCommands.init()
 

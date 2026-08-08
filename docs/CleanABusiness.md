@@ -469,6 +469,33 @@ setting `.Visible` alone.
 (e.g. `RatingText_STATIC`, `EarningsTxt_STATIC`) is designer-authored copy and is **never read or
 written in code** — leave its text alone. Only the non-`_STATIC` value labels are code-driven.
 
+### Analytics funnels (implemented)
+**`FunnelService`** (server) — two **progression** funnels via `AnalyticsService:LogFunnelStepEvent`,
+kept apart from the systems they watch so each is just a listener plus a step number. (The tutorial's
+**Onboarding** funnel is separate — it uses `LogOnboardingFunnelStepEvent`, the single per-experience
+funnel, and lives in `TutorialService`.)
+
+- **`PlotCompletion`** — 10 steps, one per 10% of the player's plot purchase buttons bought
+  (`"10% Plot Complete"` … `"100% Plot Complete"`). Driven off `PlotButtonService.onPurchased`, the
+  only thing that moves plot completion, with the bought/total pair read from the player's **live
+  plot state** via `getPlotProgress` so the denominator is the plot as actually built. A plotless
+  player reports nothing.
+- **`JobsUnlocked`** — one step per business unlocked (`"1 Job Unlocked"`, `"2 Jobs Unlocked"`, …).
+  Driven off the player's **`BusinessList` changing**, which is where `BusinessService`'s unlocks
+  land — so it needs no hook of its own and catches an unlock however it was earned (level-up, tool
+  purchase, or the join-time resolve). The count is **recomputed from the profile**, never tracked
+  incrementally, so it can't drift.
+
+Both are **lifetime** funnels spanning every session, which drives two decisions: the
+`funnelSessionId` is the player's **UserId** (a per-session id would restart the funnel each join,
+reading as pure drop-off), and the highest step reported is **persisted**
+(`DataTemplate.FunnelProgress`) so a rejoin can't re-report old steps. Steps are always reported
+**contiguously** — advancing to step N reports every step from the stored mark + 1 up to N — which
+covers both a jump past a threshold and, once, a player who was already mid-progression when the
+funnels were added. The mark is written only **after** the reports, so a throw retries rather than
+skipping a step. Every write is best-effort inside a `pcall`: analytics are unavailable in Studio,
+and a funnel write must never take a purchase or an unlock down with it.
+
 ### `CleanableSurface` (client OOP class)
 One instance per cleanable part. Owns the dirt overlay and the erase logic.
 - **Shared dirt template:** the initial dirt image is identical for every surface, so
@@ -1038,6 +1065,9 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   **permanent** Robux store perks (multipliers default `1`, speed bonus `0`). Read through
   `ShopPerks`; applied by `ProgressionService` (cash/gem awards) and by `SkillsService` /
   `JobServer` (walk speed, added after the `Speedy` multiplier). See *Robux store*.
+- `FunnelProgress: { PlotCompletion: number, JobsUnlocked: number }` — highest step already reported
+  into each progression funnel, so a rejoin can't re-report it. Analytics bookkeeping only; nothing
+  in the game reads it. See *Analytics funnels*.
 - `PlotButtonsBought: { [string]: boolean }` — set of plot **purchase buttons** the player has
   bought (e.g. `{ Button1 = true }`). Layout-agnostic (button names are the same on every plot),
   so `PlotButtonService` replays it onto whichever plot the player is assigned. Empty on a fresh

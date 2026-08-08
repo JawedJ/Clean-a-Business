@@ -787,6 +787,28 @@ function PlotButtonService.onPurchased(listener: (Player, string) -> ())
 	table.insert(purchaseListeners, listener)
 end
 
+-- How far the player is through building their plot: how many of its purchase buttons they've
+-- bought, and how many it has in total. Read off their LIVE plot state rather than off saved data,
+-- so the denominator is the plot as actually built and the two figures can't come from different
+-- places. Returns (0, 0) when they have no plot assigned -- callers should treat that as "unknown"
+-- rather than as 0%, since a plotless player has no completion to speak of.
+function PlotButtonService.getPlotProgress(player: Player): (number, number)
+	for _, state in stateByPlot do
+		if state.player == player then
+			local bought = 0
+			for _ in state.bought do
+				bought += 1
+			end
+			local total = 0
+			for _ in state.buttons do
+				total += 1
+			end
+			return bought, total
+		end
+	end
+	return 0, 0
+end
+
 -- The gems/sec the player's plot was last SEEN producing (0 if they have no plot / it earns
 -- nothing). This is the gem loop's most recent tick, so it can be up to a second stale -- fine for
 -- its callers (AfkEarningsService's leave snapshot, the Company UI's rate card), which want the
