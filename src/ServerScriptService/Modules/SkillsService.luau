@@ -21,6 +21,7 @@ local StarterPlayer = game:GetService("StarterPlayer")
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
 local PurchaseService = require(script.Parent.PurchaseService)
+local ShopPerks = require(script.Parent.ShopPerks)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local PurchaseSkill = Remotes:WaitForChild("PurchaseSkill") :: RemoteEvent
@@ -53,19 +54,21 @@ function SkillsService.getMultiplier(player: Player, skillName: string): number
 	return SkillsConfig.multiplier(skillName, getLevel(player, skillName))
 end
 
--- Set a character's Humanoid walk speed to the player's Speedy-boosted free-roam speed. No-op
--- until the Humanoid exists. Kept idempotent so it's safe to reassert (respawn, purchase).
+-- Set a character's Humanoid walk speed to the player's free-roam speed: the base scaled by their
+-- Speedy skill, plus the flat studs/sec of the store's permanent speed perk (added AFTER the
+-- multiplier so the perk is worth exactly what it advertises). No-op until the Humanoid exists.
+-- Kept idempotent so it's safe to reassert (respawn, purchase).
 local function applyWalkSpeed(player: Player, character: Model)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if not humanoid then
 		return
 	end
-	humanoid.WalkSpeed = baseWalkSpeed() * SkillsService.getMultiplier(player, "Speedy")
+	humanoid.WalkSpeed = baseWalkSpeed() * SkillsService.getMultiplier(player, "Speedy") + ShopPerks.getSpeedBonus(player)
 end
 
--- Re-apply the player's Speedy-boosted walk speed to their current character, if any. Called
--- after a successful Speedy purchase so the boost takes effect immediately (JobServer independently
--- pins the boosted speed during a job).
+-- Re-apply the player's boosted walk speed to their current character, if any. Called after a
+-- successful Speedy purchase -- and after the store's speed perk is granted -- so the boost takes
+-- effect immediately (JobServer independently pins the boosted speed during a job).
 function SkillsService.refreshWalkSpeed(player: Player)
 	local character = player.Character
 	if character then

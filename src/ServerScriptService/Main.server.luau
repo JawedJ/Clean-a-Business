@@ -19,6 +19,7 @@ local CompanyService = require(game.ServerScriptService.Modules.CompanyService)
 local PurchaseService = require(game.ServerScriptService.Modules.PurchaseService)
 local AfkEarningsService = require(game.ServerScriptService.Modules.AfkEarningsService)
 local GemProductsService = require(game.ServerScriptService.Modules.GemProductsService)
+local ShopProductsService = require(game.ServerScriptService.Modules.ShopProductsService)
 local LeaderboardService = require(game.ServerScriptService.Modules.LeaderboardService)
 local TutorialService = require(game.ServerScriptService.Modules.TutorialService)
 local AdminCommands = require(game.ServerScriptService.Modules.AdminCommands)
@@ -69,6 +70,10 @@ AfkEarningsService.init()
 -- The Company UI's two Robux products: the 24-hour earnings claim and the 10x gem boost. Init after
 -- PurchaseService (it registers both with the receipt dispatcher).
 GemProductsService.init()
+-- The Robux store (ShopUI): currency packs, the permanent 2x cash/gem and speed perks, and the
+-- starter pack. Init after PurchaseService (it registers a handler per product it owns) and after
+-- SkillsService, whose product the skills pack reuses -- SkillsService must claim that one.
+ShopProductsService.init()
 -- Global top-100 boards on the Leaderboard wall models. Init after CompanyService (whose flushes
 -- keep PlaytimeSeconds current) so the first publish reports a real figure, not a stale one.
 LeaderboardService.init()

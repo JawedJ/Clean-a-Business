@@ -234,7 +234,8 @@ local function goHome(player: Player)
 		-- actual trip home rather than back there.
 		--
 		-- Routed through SkillsService rather than a value captured at job start, so there's one
-		-- definition of free-roam speed (StarterPlayer.CharacterWalkSpeed x Speedy) shared with
+		-- definition of free-roam speed (StarterPlayer.CharacterWalkSpeed x Speedy, plus the
+		-- store's flat speed perk) shared with
 		-- respawn and skill purchases -- and buying Speedy mid-job restores the new speed instead
 		-- of a stale pre-purchase one. Safe to run when the pin is already gone: the job's
 		-- connections were dropped in destroy, so nothing reasserts over this.

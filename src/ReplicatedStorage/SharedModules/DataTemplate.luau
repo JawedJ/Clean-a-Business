@@ -55,6 +55,21 @@ export type Settings = {
 	HidePlayers: boolean,
 }
 
+-- Permanent perks bought with Robux from the store (PlayerGui.ScreenGui.ShopUI -- see
+-- ShopProducts / ShopPerks). Unlike the store's cash/gem packs, which are spent the moment they're
+-- credited, these are standing effects that must survive a rejoin, so they live in the profile:
+--   * CashMultiplier / GemMultiplier -- multiply every Cash/Gem award (ProgressionService), on top
+--     of the Greed/Hoarding skills. 1 = not bought.
+--   * SpeedBonus -- studs/sec ADDED to walk speed after the Speedy skill's multiplier, both
+--     free-roam (SkillsService) and on the job (JobServer). 0 = not bought.
+-- Each is written as an idempotent "at least this much" set, never accumulated, so a re-delivered
+-- receipt can't stack a perk the player paid for once.
+export type ShopBoosts = {
+	CashMultiplier: number,
+	GemMultiplier: number,
+	SpeedBonus: number,
+}
+
 -- Running tally of the player's per-job star ratings (1..5 per job -- see JobRating), used to
 -- show their business's AVERAGE rating in the Company UI. We store the running Sum + Count rather
 -- than the average itself so each new job folds in exactly (average = Sum / Count). A fresh
@@ -189,6 +204,14 @@ local DataTemplate = {
 		SFXVolume = 0.5,
 		HidePlayers = false,
 	} :: Settings,
+
+	-- Permanent Robux store perks (see ShopBoosts type). A fresh player has none: multipliers at
+	-- 1 (no change) and no speed bonus. Reconciled onto existing profiles like the other tables.
+	ShopBoosts = {
+		CashMultiplier = 1,
+		GemMultiplier = 1,
+		SpeedBonus = 0,
+	} :: ShopBoosts,
 
 	-- Free-text description the player writes for their business in the Company UI, persisted so it
 	-- re-displays each session. Empty on a fresh profile (the UI shows its placeholder then).

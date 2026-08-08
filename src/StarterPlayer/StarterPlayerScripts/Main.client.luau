@@ -24,6 +24,7 @@ local WarehouseBoardProximity = require(Modules:WaitForChild("WarehouseBoardProx
 local BoardTextVisibility = require(Modules:WaitForChild("BoardTextVisibility"))
 local UpgradesUiController = require(Modules:WaitForChild("UpgradesUiController"))
 local SkillsUiController = require(Modules:WaitForChild("SkillsUiController"))
+local ShopUiController = require(Modules:WaitForChild("ShopUiController"))
 local PurchaseSoundController = require(Modules:WaitForChild("PurchaseSoundController"))
 local PlotButtonSoundController = require(Modules:WaitForChild("PlotButtonSoundController"))
 local WorkerGemPopupController = require(Modules:WaitForChild("WorkerGemPopupController"))
@@ -112,6 +113,8 @@ safeInit("WarehouseBoardProximity", WarehouseBoardProximity.init)
 safeInit("BoardTextVisibility", BoardTextVisibility.init)
 safeInit("UpgradesUiController", UpgradesUiController.init)
 safeInit("SkillsUiController", SkillsUiController.init)
+-- Robux store panel (StoreButton + ShopUI): currency packs and the permanent perks.
+safeInit("ShopUiController", ShopUiController.init)
 safeInit("PurchaseSoundController", PurchaseSoundController.init)
 -- PlotButtonSoundController (purchase SFX) and WorkerGemPopupController (worker popups) are
 -- connected first, up top, so their remote events aren't dropped during startup.

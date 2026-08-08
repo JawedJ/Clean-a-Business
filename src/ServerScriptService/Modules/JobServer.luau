@@ -20,6 +20,7 @@ local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
 local JobRating = require(ReplicatedStorage.SharedModules.JobRating)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local ProgressionService = require(script.Parent.ProgressionService)
+local ShopPerks = require(script.Parent.ShopPerks)
 local SkillsService = require(script.Parent.SkillsService)
 
 -- Fired to the owning player when the job ends (full completion OR finish-early) so their
@@ -156,7 +157,11 @@ function JobServer._pinWalkSpeed(self: JobServer)
 				return
 			end
 			local function apply()
+				-- Same shape as the free-roam speed (SkillsService.applyWalkSpeed), off the job's
+				-- own base: the Speedy multiplier scales it, then the store's permanent speed perk
+				-- is added flat -- the perk is explicitly meant to apply on the clock too.
 				local target = Config.JobWalkSpeed * SkillsService.getMultiplier(self.player, "Speedy")
+					+ ShopPerks.getSpeedBonus(self.player)
 				-- Guard the reassign so setting it back to target doesn't re-fire us in a loop
 				-- (a same-value write wouldn't fire Changed anyway, but this is explicit).
 				if humanoid.WalkSpeed ~= target then

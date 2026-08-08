@@ -354,6 +354,61 @@ All upgrade math lives in the shared **`ItemUpgrades`** module: cap **`MAX_LEVEL
 has no `Radius`. `UseTime` steps *down* (faster) with a **`MIN_USE_TIME = 0.1`** floor so it can
 never reach zero or go negative.
 
+### Robux store (implemented)
+**`ShopProductsService`** (server) + **`ShopUiController`** (client) — `ScreenGui.ShopUI`, toggled
+from `HUD.AllButtons.Buttons2.StoreButton` through the shared `ExclusivePanels` coordinator like
+every other board. Every label on the offers is authored static, so the controller **paints
+nothing**: it only wires each `ScrollingFrame` offer frame's `BuyBtn`, coupling that button's hover
+grow to the sibling `PriceTxt_STATIC` so the price grows with it.
+
+`ScreenGui.ShopAlternateBtn` is a second, standalone entry point that toggles the same panel. It
+exists to sell the **starter pack**, so it hides once that pack has nothing left to give — the same
+condition that stops its click from prompting, so it can never be a dead end — and during a job
+(nothing else hides it, as it sits outside the HUD clusters).
+
+The catalog is the shared **`ShopProducts`** module, keyed by the offer frame's **name**
+(`25kCashFrame`, `SpeedFrame`, …): flat cash/gem packs, the permanent **2x Cash** / **2x Gems**
+multipliers, a permanent **+12 walk speed**, the **starter pack** (unlock every tool and max each
+one's upgrade level), and the **skills pack** (the SkillsDisplay's own "unlock all" product).
+
+- **Two kinds of purchase.** The cash/gem packs, the speed perk and the skills pack are **developer
+  products**; the 2x multipliers (`1941048632`) and the starter pack (`1943706546`) are
+  **gamepasses**. Each id is listed in exactly one of `DevProductFallbacks` / `GamePasses`, and that
+  membership decides which prompt the client raises (the wrong one just errors) and how the server
+  delivers it.
+- **Dev products: several offers share one id** (25k cash and 25k gems are both `3644862015`), so
+  the receipt alone can't say what to grant. The client fires the frame name over **`ShopIntent`**
+  just before prompting; the server stores it **keyed by product id** (so two different products'
+  intents can't shadow each other) and the receipt grants it. An intent lost to a restart falls back
+  to `DevProductFallbacks[productId]` rather than swallowing the purchase. A forged frame name can
+  only ever redirect a purchase of the product that frame actually sells.
+- **Gamepasses have no receipt** — ownership is one permanent boolean, so the grant is re-derived
+  from it in **two** places: `PromptGamePassPurchaseFinished` (lands the perk at once) and a **join
+  sweep** (`UserOwnsGamePassAsync` per pass), which also covers a pass bought on the website, one
+  bought while the server was down, and every session after the first. A failed ownership check is
+  warned and **skipped**, never treated as "doesn't own it". This only works because every grant is
+  idempotent. An intent can't be used here (a player who bought via one frame could never re-prompt
+  from the other), so a pass grants the **union** of every offer sold on it — two frames on one pass
+  are two shop-fronts for the same purchase.
+- **`SkillsPackFrame` is granted elsewhere.** Only one `ProcessReceipt` handler may exist per
+  product, and `SkillsService` already owns `3609731896`; the store just prompts it. It is absent
+  from both lists — `DevProductFallbacks` doubles as the list of products `ShopProductsService`
+  registers receipt handlers for.
+- **Currency packs are credited raw**, not through `ProgressionService` — a paid 100k pack must pay
+  exactly 100k, not 100k inflated by the buyer's `Greed`/`Hoarding` or by the 2x perk the same store
+  sold them. Same reasoning as `GemProductsService`'s claim.
+- **Permanent perks live in `DataTemplate.ShopBoosts`** and are read through **`ShopPerks`**, a
+  DataService-only leaf module so `ProgressionService`, `SkillsService`, and `JobServer` can apply
+  them without pulling in the purchase pipeline. Every grant is an **"at least this much" write**,
+  never an accumulate, so a re-delivered receipt can't stack a perk.
+- **Walk speed** adds the bonus **after** the `Speedy` multiplier (`base × Speedy + SpeedBonus`) in
+  both places speed is set — free-roam (`SkillsService.applyWalkSpeed`) and pinned on the job
+  (`JobServer._pinWalkSpeed`) — so +12 is worth exactly +12, on or off the clock. The grant calls
+  `refreshWalkSpeed` so it lands without a respawn.
+- A click **refuses to prompt** when the offer would grant nothing (perk already owned, all skills
+  maxed, all tools unlocked and maxed). The grants are idempotent regardless; this is about never
+  taking Robux for a no-op.
+
 ### Settings (implemented)
 **`SettingsService`** (server) + **`SettingsUiController`** (client), persisted under
 `DataTemplate.Settings`. The client applies changes **locally for instant feedback**, but a
@@ -979,6 +1034,10 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   tools `Power` is (still) a planned **tool tier** that will gate **which surface types a tool can
   clean** (clean only if `Power` ≥ the surface's required power) — defined in `ToolConfig`, not yet
   enforced in that role.
+- `ShopBoosts: { CashMultiplier: number, GemMultiplier: number, SpeedBonus: number }` — the
+  **permanent** Robux store perks (multipliers default `1`, speed bonus `0`). Read through
+  `ShopPerks`; applied by `ProgressionService` (cash/gem awards) and by `SkillsService` /
+  `JobServer` (walk speed, added after the `Speedy` multiplier). See *Robux store*.
 - `PlotButtonsBought: { [string]: boolean }` — set of plot **purchase buttons** the player has
   bought (e.g. `{ Button1 = true }`). Layout-agnostic (button names are the same on every plot),
   so `PlotButtonService` replays it onto whichever plot the player is assigned. Empty on a fresh
