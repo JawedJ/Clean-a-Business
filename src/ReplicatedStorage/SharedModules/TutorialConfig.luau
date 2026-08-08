@@ -282,4 +282,44 @@ function TutorialConfig.get(number: number): Step?
 	return TutorialConfig.Steps[number]
 end
 
+-- Where a player who left partway through should pick the tutorial back up, given the step they
+-- were on. Usually that step exactly -- but two kinds of step can't simply be re-entered, because
+-- they assume a world state a fresh join doesn't have:
+--
+--   * A step that ends on finishing a JOB. The job doesn't survive the disconnect, and a respawn
+--     always puts the player back on their plot rather than in the business, so the step could
+--     never end on its own trigger -- it would strand them. They were doing the job when they
+--     dropped, so it counts as done and they resume on the step after it.
+--
+--   * A step that runs with a PANEL already open (it names a `panel` but isn't the step that has
+--     them open it). Nothing is open on a fresh join, so its highlight would point at a panel
+--     that isn't there. They go back to the step that walks them to that panel and opens it --
+--     the nearest earlier step on the SAME panel ending on BoardOpen. A panel step with no such
+--     predecessor (the shop, which is opened and used within one step) is re-entered as-is: its
+--     own beam already walks them back to the board.
+--
+-- Derived from the step table rather than hardcoding numbers, so reordering or inserting steps
+-- keeps the resume rules right.
+function TutorialConfig.resumeStep(number: number): number
+	local step = TutorialConfig.get(number)
+	if not step then
+		return number
+	end
+
+	if step.advance == "JobDone" then
+		return number + 1
+	end
+
+	if step.panel and step.advance ~= "BoardOpen" then
+		for earlier = number - 1, 1, -1 do
+			local candidate = TutorialConfig.Steps[earlier]
+			if candidate and candidate.panel == step.panel and candidate.advance == "BoardOpen" then
+				return earlier
+			end
+		end
+	end
+
+	return number
+end
+
 return TutorialConfig

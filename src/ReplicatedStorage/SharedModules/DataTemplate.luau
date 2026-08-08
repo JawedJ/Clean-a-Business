@@ -167,14 +167,23 @@ local DataTemplate = {
 	-- to tell them apart from a genuinely new player after the fact.
 	HasSpawnedBefore = false,
 
-	-- Whether the player has already been through the onboarding tutorial, and so must never see it
-	-- again. Set the moment the tutorial STARTS, not when it finishes: a player who leaves partway
-	-- through has still had their one run at it, and replaying a half-finished tutorial on their next
-	-- join would re-lock a plot they've already started building. So the flag means "has been offered
-	-- the tutorial", and a rejoining player always lands in the normal, fully-unlocked game whether
-	-- they finished or not. Reconciled onto existing profiles -- which means every EXISTING player
-	-- reconciles in at false and gets the tutorial once on their next join, exactly like a new one.
+	-- Whether the player has FINISHED the onboarding tutorial, and so must never see it again. Set
+	-- when the last step ends -- not when the tutorial starts -- because a player who leaves partway
+	-- through resumes where they left off on their next join rather than losing their run (see
+	-- TutorialStep). Reconciled onto existing profiles.
+	--
+	-- Note this flag USED to mean "has been offered the tutorial", written at the first step. Players
+	-- carrying that older true still skip the tutorial, which is what they'd have got anyway -- but
+	-- one who abandoned it back then has no step recorded to resume from, so they stay skipped.
 	TutorialComplete = false,
+
+	-- Which tutorial step the player is on, so leaving partway through resumes there instead of
+	-- forfeiting the run. Written on every step change while the tutorial runs; 0 means they have
+	-- never started it (and is what it goes back to once they finish). Their next join doesn't
+	-- necessarily re-enter this exact step -- a couple of steps assume a world state a fresh join
+	-- doesn't have and resume elsewhere; TutorialConfig.resumeStep owns that. Reconciled onto
+	-- existing profiles, where 0 correctly reads as "no run in progress".
+	TutorialStep = 0,
 
 	-- Lifetime seconds the player has spent in-game ("Business Age" in the Company UI). Accrued by
 	-- CompanyService: flushed into the profile periodically while online and once more on leave, so

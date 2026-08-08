@@ -469,6 +469,38 @@ setting `.Visible` alone.
 (e.g. `RatingText_STATIC`, `EarningsTxt_STATIC`) is designer-authored copy and is **never read or
 written in code** — leave its text alone. Only the non-`_STATIC` value labels are code-driven.
 
+### Tutorial resume (implemented)
+The onboarding run **survives disconnection**. `TutorialService` persists the current step on every
+change (`DataTemplate.TutorialStep`) and writes `TutorialComplete` only when the **last step ends**,
+so a player who leaves halfway picks up where they left off instead of forfeiting the tutorial.
+
+Where they pick up is `TutorialConfig.resumeStep`, which lives next to the step table because it's
+derived from it — reordering or inserting steps keeps the rules right. Usually it's the same step,
+with two exceptions for steps that assume a world state a fresh join doesn't have:
+
+- **A step ending on `JobDone`** (step 9, *CleanJob*). The job doesn't survive the disconnect and a
+  respawn always returns the player to their plot, so the step could never end on its own trigger —
+  it would strand them. They were doing the job when they dropped, so it counts as **done** and they
+  resume on the step after it (→ 10).
+- **A step running with a panel already open** — it names a `panel` but isn't the step that opens it
+  (steps 8 and 11). Nothing is open on a fresh join, so its highlight would point at a panel that
+  isn't there; they go **back a step**, to before the panel was involved, and are walked to it again.
+  Where an explicit "go and open it" step exists — the nearest earlier step on the **same panel**
+  ending on `BoardOpen` — that's the one (8 → 7). Otherwise it's simply the preceding step, whose own
+  ending re-delivers this one cleanly (11 → 10, since the shop is opened *and* used within step 11).
+
+**Locks need no special handling on resume.** Every restriction is a function of the current step and
+nothing else — the server gates (`canPurchasePlotButton` / `canPurchaseTool` / `canUpgradeTool`) read
+it live, and the client's come from `applyRestrictions` off the step attribute — so *entering* the
+step is what re-arms them. The plot matches too: `replayFromSave` rebuilds its reveal state from
+`PlotButtonsBought`, so a resumed step sees exactly the plot it left. Entering a step as a resume is
+**not** reported to the Onboarding funnel; it isn't forward progress, and a backward resume would
+otherwise re-report an earlier step.
+
+`TutorialComplete` previously meant "has been offered the tutorial", written at the *first* step.
+Players carrying that older `true` still skip — which is what they'd have got anyway — but one who
+abandoned a run back then has no step recorded to resume from, so they stay skipped.
+
 ### Analytics funnels (implemented)
 **`FunnelService`** (server) — two **progression** funnels via `AnalyticsService:LogFunnelStepEvent`,
 kept apart from the systems they watch so each is just a listener plus a step number. (The tutorial's
@@ -1065,6 +1097,11 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   **permanent** Robux store perks (multipliers default `1`, speed bonus `0`). Read through
   `ShopPerks`; applied by `ProgressionService` (cash/gem awards) and by `SkillsService` /
   `JobServer` (walk speed, added after the `Speedy` multiplier). See *Robux store*.
+- `TutorialComplete: boolean` — whether the player **finished** onboarding, set when the last step
+  ends. See *Tutorial resume* for the older meaning this flag used to carry.
+- `TutorialStep: number` — the step a partway-through run resumes at; `0` = never started (and what
+  it returns to on finish). The next join doesn't always re-enter this exact step —
+  `TutorialConfig.resumeStep` decides. See *Tutorial resume*.
 - `FunnelProgress: { PlotCompletion: number, JobsUnlocked: number }` — highest step already reported
   into each progression funnel, so a rejoin can't re-report it. Analytics bookkeeping only; nothing
   in the game reads it. See *Analytics funnels*.

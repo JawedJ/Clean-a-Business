@@ -15,10 +15,17 @@
 -- back over the TutorialEvent remote, validated against the step we believe is current so a
 -- replayed or late message can't skip anyone ahead.
 --
--- ONCE ONLY, AND ONLY FOR NEW PLAYERS. TutorialComplete is written the moment the tutorial starts,
--- not when it ends (see DataTemplate) -- a player who leaves halfway has had their run, and rejoins
--- into the ordinary unlocked game. So there is no such thing as a rejoining player in the tutorial
--- state, and no restriction can outlive a session.
+-- ONCE ONLY, AND ONLY FOR NEW PLAYERS -- but a run SURVIVES DISCONNECTION. The step is persisted on
+-- every change (DataTemplate.TutorialStep) and TutorialComplete is written only when the last step
+-- ends, so a player who leaves halfway picks up where they left off on their next join instead of
+-- forfeiting the tutorial. Two kinds of step resume somewhere other than themselves, because they
+-- assume a world state a fresh join doesn't have -- see TutorialConfig.resumeStep, which owns those
+-- rules so they live next to the step table that decides them.
+--
+-- Every lock is derived from the current step and nothing else, so resuming needs no separate work
+-- to re-apply them: entering the step is what re-arms the server gates (below) and, through the
+-- attributes, the client's. That's the reason the locks are written as functions of the step rather
+-- than as state toggled on and off at the boundaries.
 
 local AnalyticsService = game:GetService("AnalyticsService")
 local Players = game:GetService("Players")
@@ -77,18 +84,28 @@ local function resolveText(player: Player, step: TutorialConfig.Step): string
 	return (string.gsub(step.text, "{gems}", shown))
 end
 
--- Leave the tutorial state: drop the player's step and clear the attributes, which is the signal
--- the client tears its restrictions down on. TutorialComplete was already written at start, so
--- nothing is persisted here -- this is purely the end of the live state.
+-- Leave the tutorial state: drop the player's step, clear the attributes (the signal the client
+-- tears its restrictions down on), and record that the run is DONE. TutorialComplete is written
+-- here rather than at the first step, so only actually reaching the end retires the tutorial --
+-- and the resume point goes back to 0 alongside it, so a finished profile can't be read as a run
+-- still in progress.
 local function finish(player: Player)
 	currentStep[player] = nil
+	DataService:set(player, { "TutorialComplete" }, true)
+	DataService:set(player, { "TutorialStep" }, 0)
 	player:SetAttribute(TutorialConfig.StepAttribute, nil)
 	player:SetAttribute(TutorialConfig.ActiveAttribute, nil)
 end
 
--- Move the player onto step `number`: log it into the funnel and publish it (with its resolved
--- text) to their client. Past the last step this finishes the tutorial instead.
-local function enterStep(player: Player, number: number)
+-- Move the player onto step `number`: record it (in memory and in their profile), log it into the
+-- funnel, and publish it with its resolved text to their client. Past the last step this finishes
+-- the tutorial instead.
+--
+-- `isResume` marks the one case that isn't forward progress: picking a run back up on a rejoin.
+-- Everything about the step is applied identically -- that's what re-arms the locks -- except the
+-- funnel report, which would otherwise count the same player reaching the same step twice (and,
+-- for a step that resumes BACKWARD, count them reaching an earlier one again).
+local function enterStep(player: Player, number: number, isResume: boolean?)
 	local step = TutorialConfig.get(number)
 	if not step then
 		finish(player)
@@ -96,7 +113,12 @@ local function enterStep(player: Player, number: number)
 	end
 
 	currentStep[player] = number
-	logFunnelStep(player, step)
+	-- Persist before publishing: if anything below fails, the resume point is already the step the
+	-- player is actually on rather than the one before it.
+	DataService:set(player, { "TutorialStep" }, number)
+	if not isResume then
+		logFunnelStep(player, step)
+	end
 
 	-- Text first, then the step number: the client reads the text off the attribute when the step
 	-- changes, so writing them the other way round would render the previous step's line for a frame.
@@ -221,9 +243,14 @@ end
 
 -- === Lifecycle ======================================================================
 
--- Start a joining player's tutorial, if they've never been offered it. Writing TutorialComplete
--- here -- before the first step, not after the last -- is what guarantees it can never replay:
--- however this session ends, their next join reads the flag and skips straight past.
+-- Start or RESUME a joining player's tutorial. Three cases, decided entirely by their profile:
+--   * finished it before -> nothing happens, they land in the ordinary unlocked game.
+--   * never started      -> step 1.
+--   * left mid-run       -> back in at TutorialConfig.resumeStep of where they were, which re-arms
+--                           every lock that step carries (see the header). Entering counts as a
+--                           resume, not progress, so it isn't re-reported to the funnel.
+-- A stored step past the end of the table can't be entered, and enterStep retires the run instead
+-- -- so a step table that shrinks under a saved profile heals rather than stranding anyone.
 local function onPlayerAdded(player: Player)
 	DataService:waitForData(player)
 	-- They left again while we waited for their profile; nothing to start.
@@ -233,8 +260,14 @@ local function onPlayerAdded(player: Player)
 	if DataService:get(player, { "TutorialComplete" }) == true then
 		return
 	end
-	DataService:set(player, { "TutorialComplete" }, true)
-	enterStep(player, 1)
+
+	local saved = DataService:get(player, { "TutorialStep" })
+	local savedStep = if type(saved) == "number" then saved else 0
+	if savedStep < 1 then
+		enterStep(player, 1)
+		return
+	end
+	enterStep(player, TutorialConfig.resumeStep(savedStep), true)
 end
 
 function TutorialService.init()
