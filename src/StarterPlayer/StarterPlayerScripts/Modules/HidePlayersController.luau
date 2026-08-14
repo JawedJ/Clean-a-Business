@@ -1,9 +1,14 @@
 --!strict
 
--- Client-side toggle that hides every OTHER player's character for the local player only. Driven
--- by the persisted Settings.HidePlayers preference (wired in SettingsUiController): when on, other
--- players vanish for you; when off, they render normally. Nothing here replicates, so everyone
--- still looks normal to themselves and to players who leave the toggle off.
+-- Client-side hiding of every OTHER player's character for the local player only. Two independent
+-- reasons ask for a player to be hidden, and this module is the single owner of the actual hiding
+-- so they can't fight over the restore values:
+--   * the persisted Settings.HidePlayers preference (wired in SettingsUiController) -- hides
+--     everyone, all the time, while it's on.
+--   * being on the same job as us (JobGhostController) -- hides just the players working the
+--     business we're currently cleaning, for as long as that job lasts.
+-- A player is hidden while EITHER reason holds, and revealed only once both drop. Nothing here
+-- replicates, so everyone still looks normal to themselves and to other clients.
 --
 -- How a character is hidden: every BasePart gets LocalTransparencyModifier = 1 (the same
 -- client-only, non-replicated knob the engine uses to hide your own body in first person -- it
@@ -13,10 +18,7 @@
 -- stream in later (accessories, a tool on equip) are caught via DescendantAdded. Revealing restores
 -- every value we touched.
 --
--- The hidden set is re-evaluated on respawn (CharacterAdded) and as players join / leave. This is
--- independent of JobGhostController's in-job blue highlight; if both would apply, fully hidden wins
--- (an invisible part writes no depth, so the Occluded ghost highlight simply doesn't show -- which
--- is the intended result while HidePlayers is on).
+-- The hidden set is re-evaluated on respawn (CharacterAdded) and as players join / leave.
 
 local Players = game:GetService("Players")
 
@@ -25,8 +27,11 @@ local localPlayer = Players.LocalPlayer
 local HidePlayersController = {}
 
 -- Whether the preference is currently on. Applied lazily: turning it on hides everyone tracked,
--- turning it off reveals them.
+-- turning it off reveals everyone the job reason doesn't still cover.
 local enabled = false
+
+-- Players the job reason currently wants hidden (same business as us), kept as a set.
+local jobHidden: { [Player]: true } = {}
 
 -- Per hidden player: the character we applied to, the watcher catching late descendants, the parts
 -- we dimmed mapped to their prior LocalTransparencyModifier, the emitters we disabled mapped to
@@ -132,9 +137,9 @@ function HidePlayersController._reveal(player: Player)
 	hidden[player] = nil
 end
 
--- Apply the current `enabled` state to one player (hide if on, reveal if off).
+-- Apply the current state to one player: hidden while either reason holds, revealed once neither does.
 local function refreshPlayer(player: Player)
-	if enabled then
+	if enabled or jobHidden[player] then
 		hidePlayer(player)
 	else
 		HidePlayersController._reveal(player)
@@ -153,6 +158,7 @@ local function trackPlayer(player: Player)
 end
 
 local function untrackPlayer(player: Player)
+	jobHidden[player] = nil
 	HidePlayersController._reveal(player)
 	local conn = tracking[player]
 	if conn then
@@ -171,6 +177,28 @@ function HidePlayersController.setEnabled(value: boolean)
 		if player ~= localPlayer then
 			refreshPlayer(player)
 		end
+	end
+end
+
+-- Called by JobGhostController as players join / leave our job. Independent of the preference:
+-- clearing it only reveals the player if the preference isn't hiding them too.
+function HidePlayersController.setJobHidden(player: Player, value: boolean)
+	if player == localPlayer then
+		return
+	end
+	local current = jobHidden[player] ~= nil
+	if current == value then
+		return
+	end
+	jobHidden[player] = if value then true else nil
+	refreshPlayer(player)
+end
+
+-- Re-apply the current state to a player (used when their character is replaced or their job
+-- membership is re-evaluated against an already-hidden character).
+function HidePlayersController.refresh(player: Player)
+	if player ~= localPlayer then
+		refreshPlayer(player)
 	end
 end
 

@@ -45,7 +45,7 @@ PortalService.init()
 -- are met (level now, permanent once earned). Runs before JobService so accepts see the list.
 BusinessService.init()
 JobService.init()
--- Players never collide with each other (visual ghosting is client JobGhostController, job-only).
+-- Players never collide with each other (visual hiding is client JobGhostController, job-only).
 PlayerCollisionService.init()
 CleaningService.init()
 DecalCleaningService.init()

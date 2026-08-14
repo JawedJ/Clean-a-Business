@@ -7,8 +7,8 @@
 --
 -- Collision is mutual and physics-authoritative, so it belongs here on the server (a client
 -- CanCollide=false on a remote character just gets overwritten by replication). The matching
--- VISUAL side -- hiding same-job players and drawing them as a blue highlight -- is per-viewer
--- and lives on the client (JobGhostController); that stays job-only.
+-- VISUAL side -- making same-job players invisible for you -- is per-viewer and lives on the
+-- client (JobGhostController); that stays job-only.
 
 local Players = game:GetService("Players")
 local PhysicsService = game:GetService("PhysicsService")
