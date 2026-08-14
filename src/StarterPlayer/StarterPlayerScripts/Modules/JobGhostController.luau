@@ -5,6 +5,11 @@
 -- the way of the surface you're cleaning. Their collision is dropped separately, on the server
 -- (PlayerCollisionService); this module owns only the visuals.
 --
+-- OUR PARTY IS THE EXCEPTION. Party members share the job on purpose (see PartyService), so they
+-- stay fully visible -- the whole point is cleaning it together. Only same-business players from
+-- OUTSIDE our party are hidden. Membership is read off the replicated PartyId attribute via
+-- PartyController, so it's answerable for any player at any time.
+--
 -- The hiding itself is done by HidePlayersController, which is the single owner of the
 -- transparency / name / emitter values (the Settings.HidePlayers preference hides players too, and
 -- one owner keeps the two from clobbering each other's restore values). All this module does is
@@ -19,7 +24,9 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local PartyConfig = require(ReplicatedStorage.SharedModules.PartyConfig)
 local HidePlayersController = require(script.Parent.HidePlayersController)
+local PartyController = require(script.Parent.PartyController)
 
 local localPlayer = Players.LocalPlayer
 
@@ -34,13 +41,17 @@ local function localBusinessId(): string?
 	return if type(id) == "string" then id else nil
 end
 
--- A player is hidden by us iff we're on a job and they're on the same business.
+-- A player is hidden by us iff we're on a job, they're on the same business, and they aren't in
+-- our party.
 local function shouldHide(player: Player): boolean
 	if player == localPlayer then
 		return false
 	end
 	local mine = localBusinessId()
-	return mine ~= nil and player:GetAttribute(Config.ActiveJobAttribute) == mine
+	if mine == nil or player:GetAttribute(Config.ActiveJobAttribute) ~= mine then
+		return false
+	end
+	return not PartyController.sharesParty(player)
 end
 
 local function refreshPlayer(player: Player)
@@ -64,6 +75,10 @@ local function trackPlayer(player: Player)
 		player:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(function()
 			refreshPlayer(player)
 		end),
+		-- Their party changed: joining ours reveals them mid-job, leaving it hides them again.
+		player:GetAttributeChangedSignal(PartyConfig.PartyIdAttribute):Connect(function()
+			refreshPlayer(player)
+		end),
 		-- Respawn: re-apply to the fresh character if they should still be hidden.
 		player.CharacterAdded:Connect(function()
 			refreshPlayer(player)
@@ -85,8 +100,10 @@ local function untrackPlayer(player: Player)
 end
 
 function JobGhostController.init()
-	-- Our own job changing flips whether -- and against which business -- we hide anyone.
+	-- Our own job changing flips whether -- and against which business -- we hide anyone, and our
+	-- own party changing flips which of them are exempt.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(refreshAll)
+	localPlayer:GetAttributeChangedSignal(PartyConfig.PartyIdAttribute):Connect(refreshAll)
 
 	for _, player in Players:GetPlayers() do
 		trackPlayer(player)

@@ -125,6 +125,22 @@ function SurfaceManager.getSurface(part: BasePart): CleanableSurface.CleanableSu
 	return surfaces[part]
 end
 
+-- Replay a party member's erase stroke on OUR overlay for `part`, so a wall washed by anyone on a
+-- shared job comes clean on every member's screen (and moves every member's completion bar). The
+-- stroke arrives via the WallStroke remote, batched and validated by the server; JobController
+-- routes it here. Identical to what the local washer does -- the surface can't tell the difference,
+-- which is exactly why the images stay in step.
+--
+-- Silently ignored for a wall we haven't built an overlay for yet (still in the build queue) or one
+-- that's already finished here. The queue drains within a frame or two of the job starting, long
+-- before anyone has erased anything worth relaying.
+function SurfaceManager.applyRemoteStroke(part: BasePart, to: Vector3, from: Vector3?, radius: number?)
+	local surface = surfaces[part]
+	if surface and not surface.cleaned then
+		surface:clean(to, from, radius)
+	end
+end
+
 -- Long-lived drainer: whenever the desired glow state differs from what's applied, flip a
 -- few walls per frame until they all match, so a reveal never recolors + re-uploads every
 -- wall's image in one hitchy frame. setGlow no-ops on walls already at the target, so a

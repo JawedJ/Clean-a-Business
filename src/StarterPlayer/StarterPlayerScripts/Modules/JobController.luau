@@ -8,6 +8,13 @@
 -- It also routes the server's DecalCleaned confirmations to hiding the stain locally,
 -- independent of the JobClient's lifetime -- so the final stain that *completes* a job
 -- (which clears ActiveJob and tears the JobClient down) still vanishes on this client.
+--
+-- SHARED (PARTY) JOBS. The same routing is what makes a party's job shared on screen: the server
+-- sends DecalCleaned / WebCleaned to every member of the session rather than only the cleaner, and
+-- adds SpillCleaned (spills are client-driven, so the mopper hides their own and the server relays
+-- to the rest) and WallStroke (a member's erase strokes, replayed onto our own wall overlays). Every
+-- one of these paths also feeds the JobClient, so the completion bar counts the group's work, not
+-- just ours.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,10 +24,13 @@ local JobClient = require(script.Parent.JobClient)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 local SpillVisibility = require(script.Parent.SpillVisibility)
 local WebVisibility = require(script.Parent.WebVisibility)
+local SurfaceManager = require(script.Parent.SurfaceManager)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local DecalCleaned = Remotes:WaitForChild("DecalCleaned") :: RemoteEvent
 local WebCleaned = Remotes:WaitForChild("WebCleaned") :: RemoteEvent
+local SpillCleaned = Remotes:WaitForChild("SpillCleaned") :: RemoteEvent
+local WallStroke = Remotes:WaitForChild("WallStroke") :: RemoteEvent
 
 local localPlayer = Players.LocalPlayer
 
@@ -107,6 +117,39 @@ function JobController.init()
 		WebVisibility.hideOne(web)
 		if current then
 			current:onWebCleaned(web)
+		end
+	end)
+
+	-- A party member fully mopped a spill: hide it here and count it, exactly as if we had. The
+	-- server sends this to the OTHER members only (the mopper's own client already did both when its
+	-- fade finished), so it can't double-count anyone.
+	SpillCleaned.OnClientEvent:Connect(function(model)
+		if typeof(model) ~= "Instance" or not model:IsA("Model") then
+			return
+		end
+		SpillVisibility.hideOne(model)
+		if current then
+			current:onSpillCleaned(model)
+		end
+	end)
+
+	-- A batch of erase strokes from a party member's washer. Replaying them on our own overlays is
+	-- what keeps every member's EditableImages -- and therefore the shared completion bar -- showing
+	-- the same wall. A wall finished by the replay reports itself to the server through the normal
+	-- path (SurfaceManager -> JobClient -> WallCleaned), which the session dedupes.
+	WallStroke.OnClientEvent:Connect(function(strokes)
+		if type(strokes) ~= "table" then
+			return
+		end
+		for _, stroke in strokes :: { any } do
+			if
+				type(stroke) == "table"
+				and typeof(stroke.part) == "Instance"
+				and stroke.part:IsA("BasePart")
+				and typeof(stroke.to) == "Vector3"
+			then
+				SurfaceManager.applyRemoteStroke(stroke.part, stroke.to, stroke.from, stroke.radius)
+			end
 		end
 	end)
 

@@ -1,10 +1,19 @@
 --!strict
 
--- Owner-only chat commands for dev/testing. Parsed server-side off Player.Chatted (which still
--- fires under the default TextChatService), so nothing is exposed to the client and only the
--- OWNER_ID can trigger anything.
+-- Chat commands, parsed server-side off Player.Chatted (which still fires under the default
+-- TextChatService), so nothing is exposed to the client.
 --
--- Commands:
+-- Everything here is owner-only (OWNER_ID) EXCEPT the public commands listed first, which any
+-- player may run -- they're player-facing features that happen to be typed rather than clicked, so
+-- they live with the other chat parsing rather than in a second Chatted hook.
+--
+-- Public commands:
+--   /skiptutorial
+--     Ends the caller's tutorial immediately, exactly as finishing it does: the profile is marked
+--     complete (so it never runs again) and every UI lock the current step had armed is dropped.
+--     Does nothing if they aren't in the tutorial.
+--
+-- Owner-only commands:
 --   /completejob <businessId> <amount>
 --     Adds `amount` (default 1) to the player's lifetime Completions on <businessId>, which is
 --     what drives job mastery (stars + the compounding XP boost -- see Mastery/BusinessService),
@@ -26,6 +35,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local ProgressionService = require(script.Parent.ProgressionService)
+local TutorialService = require(script.Parent.TutorialService)
 
 local AdminCommands = {}
 
@@ -98,10 +108,6 @@ local function setLevel(player: Player, levelText: string?)
 end
 
 local function onChatted(player: Player, message: string)
-	if player.UserId ~= OWNER_ID then
-		return
-	end
-
 	-- Tokenize on whitespace runs (tolerates extra spaces): {command, arg1, arg2, ...}.
 	local tokens = {}
 	for token in string.gmatch(message, "%S+") do
@@ -109,6 +115,17 @@ local function onChatted(player: Player, message: string)
 	end
 
 	local command = string.lower(tokens[1] or "")
+
+	-- Public commands, handled before the owner gate.
+	if command == "/skiptutorial" then
+		TutorialService.skip(player)
+		return
+	end
+
+	if player.UserId ~= OWNER_ID then
+		return
+	end
+
 	if command == "/completejob" then
 		completeJob(player, tokens[2], tokens[3])
 	elseif command == "/addcash" then

@@ -1,20 +1,30 @@
 --!strict
 
--- The job board MANAGER. Owns the per-player active JobServer instances and the AcceptJob
--- flow: validate the player has Unlocked the business and still meets its requirements
--- (BusinessService.meetsRequirements -- level + owned tools), end any job they're already on,
--- spin up a fresh JobServer, publish the businessId on the ActiveJob player attribute (so
--- their client loads the wall overlays + restores the stains), and teleport them onto the
--- building's TeleportPart. One job at a time.
+-- The job board MANAGER. Owns the active JobServer sessions and the AcceptJob flow: validate that
+-- everyone who will be on the job has Unlocked the business and still meets its requirements
+-- (BusinessService.meetsRequirements -- level + owned tools), end any job they're already on, spin
+-- up a fresh JobServer, publish the businessId on each player's ActiveJob attribute (so their
+-- client loads the wall overlays + restores the stains), and teleport them onto the building's
+-- TeleportPart. One job at a time, per player.
 --
--- The shared buildings -- including their Cleanables -- are authored in the Workspace, so
--- nothing is spawned here; accepting a job is a fresh, per-session clean. When a job
--- finishes, its JobServer pays the completion reward and calls back here to end it, which
--- clears the ActiveJob attribute (ending the state on the client). Pressing the button
--- again starts a brand-new job and reloads everything -- that's the redo.
+-- PARTIES (see PartyService): accepting a job while in a party starts ONE shared session for every
+-- member -- they are all teleported in, all put on the clock, and all cleaning the same cleanables
+-- with the same completion bar. Only the LEADER may accept, and the job is refused unless EVERY
+-- member qualifies for the business (the party UI is expected to keep unqualified players out in
+-- the first place; this is the server-side backstop). A player with no party gets a session of one,
+-- which behaves exactly as a solo job always did.
 --
--- The cleaning services authorize cleans through getActiveJob (a player may only clean
--- the business they currently hold) and report cleans through getJob.
+-- The shared buildings -- including their Cleanables -- are authored in the Workspace, so nothing is
+-- spawned here; accepting a job is a fresh, per-session clean. When a session finishes, JobServer
+-- pays the completion reward to every member and calls back here to end it for each of them, which
+-- clears their ActiveJob attribute (ending the state on their client). Pressing the button again
+-- starts a brand-new job and reloads everything -- that's the redo.
+--
+-- The cleaning services authorize cleans through getActiveJob (a player may only clean the business
+-- they currently hold) and report cleans through getJob. Because a party's members share ONE
+-- JobServer, a clean by any of them is recorded once and counts for all -- and the services use
+-- getSessionMembers to mirror the visual result (stain/web/spill hidden, wall strokes applied) onto
+-- everyone else on the session.
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -24,6 +34,7 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessService = require(script.Parent.BusinessService)
 local JobServer = require(script.Parent.JobServer)
+local PartyService = require(script.Parent.PartyService)
 local PlotService = require(script.Parent.PlotService)
 local SkillsService = require(script.Parent.SkillsService)
 local TutorialService = require(script.Parent.TutorialService)
@@ -41,7 +52,8 @@ local REPLAY_BONUS = 1.5
 
 local JobService = {}
 
--- The JobServer each player is currently on the clock for, or nil.
+-- The JobServer session each player is currently on the clock for, or nil. Every member of a shared
+-- session maps to the SAME JobServer instance.
 local jobs: { [Player]: JobServer.JobServer } = {}
 
 -- The businessId a player just finished (full completion or finish-early) that is eligible
@@ -84,7 +96,7 @@ local function pinBusinessesPersistent()
 end
 
 -- A building's TeleportPart, or nil if it's missing/isn't a BasePart. Resolved BEFORE a job is
--- started (see accept): a job the player can't be dropped into is refused outright rather than
+-- started (see accept): a job the players can't be dropped into is refused outright rather than
 -- accepted and left with them standing wherever they were, on the clock for a building they never
 -- entered. Non-recursive by design -- the part is authored as a direct child of the building.
 local function teleportPartFor(building: Instance): BasePart?
@@ -107,16 +119,21 @@ local function isUnlocked(player: Player, businessId: string): boolean
 	return DataService:get(player, { "BusinessList", businessId, "Unlocked" }) == true
 end
 
--- End a player's current job: drop the JobServer and clear the ActiveJob attribute (which
--- tears the job state down on their client). Safe to call with no active job.
+-- End a player's run: drop them from their session (destroying it once its last member is gone)
+-- and clear the ActiveJob attribute, which tears the job state down on their client. Everyone else
+-- on a shared session is untouched -- their job, and its progress, continues. Safe to call with no
+-- active job.
 function JobService.endJob(player: Player)
 	local job = jobs[player]
 	if not job then
 		return
 	end
-	job:destroy()
 	jobs[player] = nil
 	player:SetAttribute(Config.ActiveJobAttribute, nil)
+	job:removeMember(player)
+	if job:getMemberCount() == 0 then
+		job:destroy()
+	end
 end
 
 -- The businessId the player is currently on the clock for, or nil. Used by the cleaning
@@ -129,24 +146,68 @@ function JobService.getActiveJob(player: Player): string?
 	return nil
 end
 
--- The player's active JobServer, or nil. The cleaning services report cleans into it.
+-- The player's active JobServer session, or nil. The cleaning services report cleans into it.
 function JobService.getJob(player: Player): JobServer.JobServer?
 	return jobs[player]
+end
+
+-- Everyone else sharing this player's session (empty when they're solo or have no job). The
+-- cleaning services fire their "this is cleaned now" confirmations at these players too, so a
+-- cleanable removed by one member disappears for the whole party.
+function JobService.getOtherMembers(player: Player): { Player }
+	local job = jobs[player]
+	if not job then
+		return {}
+	end
+	local others: { Player } = {}
+	for _, member in job:getMembers() do
+		if member ~= player then
+			table.insert(others, member)
+		end
+	end
+	return others
+end
+
+-- Everyone on this player's session, themselves included (empty when they have no job).
+function JobService.getSessionMembers(player: Player): { Player }
+	local job = jobs[player]
+	return if job then job:getMembers() else {}
+end
+
+-- Can this player be put on this business's job right now? Checked for EVERY member of a party
+-- before the job starts, so a shared job never begins with someone who isn't entitled to it.
+local function qualifies(player: Player, businessId: string): boolean
+	if not isUnlocked(player, businessId) then
+		return false
+	end
+	-- Unlocking is one-way, so the Unlocked flag alone can outlive the requirements that earned it
+	-- (a config change adding a gate to a business someone already owns). Re-check them here so the
+	-- live requirements always win. The client board hides the Wash button on the same gates.
+	return BusinessService.meetsRequirements(player, businessId)
 end
 
 local function accept(player: Player, businessId: any)
 	if type(businessId) ~= "string" then
 		return
 	end
-	if not isUnlocked(player, businessId) then
-		return -- not unlocked: ignore (button shouldn't have been offered)
-	end
-	-- Unlocking is one-way, so the Unlocked flag alone can outlive the requirements that earned it
-	-- (a config change adding a gate to a business someone already owns). Re-check them here so the
-	-- live requirements always win. The client board hides the Wash button on the same gates.
-	if not BusinessService.meetsRequirements(player, businessId) then
+
+	-- Resolve who this accept covers. In a party that's every member, and only the leader may press
+	-- the button -- a member accepting is ignored rather than starting a second, competing job.
+	local party = PartyService.getParty(player)
+	if party and party.leader ~= player then
 		return
 	end
+	local members = PartyService.getMembers(player)
+
+	-- All-or-nothing on entitlement: a party job needs EVERY member to qualify. (The party UI is
+	-- expected to keep unqualified players from joining in the first place, so this only fires on a
+	-- stale party -- someone who lost the requirement, or a forged accept.)
+	for _, member in members do
+		if not qualifies(member, businessId) then
+			return
+		end
+	end
+
 	local building = buildingFor(businessId)
 	if not building then
 		warn(string.format("[JobService] No building %q under Workspace.%s.", businessId, Config.BusinessesFolderName))
@@ -154,45 +215,59 @@ local function accept(player: Player, businessId: any)
 	end
 
 	-- Everything the teleport needs is resolved up front, because accepting is all-or-nothing: a
-	-- job that can't put the player inside the building must not start at all. Without this the
-	-- player would be on the clock, HUD and all, standing outside a building they can't clean.
+	-- job that can't put the players inside the building must not start at all. Without this they
+	-- would be on the clock, HUD and all, standing outside a building they can't clean.
 	local teleportPart = teleportPartFor(building)
 	if not teleportPart then
 		warn(string.format("[JobService] Building %s has no %q part; refusing the job.", building.Name, Config.TeleportPartName))
 		return
 	end
-	local character = player.Character
-	if not character then
-		return -- mid-respawn: nothing to teleport, so there's no job to start
+	-- Same reasoning for characters: a member mid-respawn has nothing to teleport, so the job waits
+	-- rather than starting without them.
+	local characters: { [Player]: Model } = {}
+	for _, member in members do
+		local character = member.Character
+		if not character then
+			return
+		end
+		characters[member] = character
 	end
 
-	-- One at a time: drop whatever they were on first. Re-accepting the same business is
-	-- exactly the "redo" path -- a fresh JobServer with progress reset to zero.
-	JobService.endJob(player)
+	-- One at a time: drop whatever each member was on first. Re-accepting the same business is
+	-- exactly the "redo" path -- a fresh session with progress reset to zero.
+	for _, member in members do
+		JobService.endJob(member)
+	end
 
-	-- Claim the replay bonus if this accept is the eligible business (PlayAgain on the same
-	-- job you just finished); otherwise pay normal rate. Either way the pending eligibility
-	-- is spent -- accepting anything clears it, so the bonus only ever applies to the very
-	-- next run after a finish.
-	local multiplier = if replayBonusBusiness[player] == businessId then REPLAY_BONUS else 1
-	replayBonusBusiness[player] = nil
+	-- Claim each member's replay bonus if this accept is the business THEY are eligible on
+	-- (PlayAgain on the job they just finished); otherwise they pay normal rate. Either way the
+	-- pending eligibility is spent -- accepting anything clears it, so the bonus only ever applies
+	-- to the very next run after a finish.
+	local multipliers: { [Player]: number } = {}
+	for _, member in members do
+		multipliers[member] = if replayBonusBusiness[member] == businessId then REPLAY_BONUS else 1
+		replayBonusBusiness[member] = nil
+	end
 
-	-- This callback runs when the job ends -- genuine completion OR finish-early (both go
-	-- through JobServer -> onComplete), never a job switch or leave. End the job right away
-	-- (clearing ActiveJob hides the HUD, stops cleaning, and cues the client's 1s camera
-	-- pull-back + JobSummary reveal) and mark this business eligible for one replay bonus.
-	-- We no longer teleport home here -- the JobSummary's GoHome button does that on demand.
-	jobs[player] = JobServer.new(player, businessId, building, multiplier, function(_job)
-		JobService.endJob(player)
-		replayBonusBusiness[player] = businessId
+	-- This callback runs when a member's run ends -- genuine completion OR finish-early (both go
+	-- through JobServer), never a job switch or leave. End their job right away (clearing ActiveJob
+	-- hides the HUD, stops cleaning, and cues the client's 1s camera pull-back + JobSummary reveal)
+	-- and mark this business eligible for one replay bonus for them. We no longer teleport home
+	-- here -- the JobSummary's GoHome button does that on demand.
+	local session = JobServer.new(businessId, building, members, multipliers, function(member: Player)
+		JobService.endJob(member)
+		replayBonusBusiness[member] = businessId
 	end)
-	player:SetAttribute(Config.ActiveJobAttribute, businessId)
 
-	teleportToJob(character, teleportPart)
-
-	-- Starting a job is what ends the tutorial's "pick a job" step. A no-op otherwise -- including
-	-- for the PlayAgain re-accept, which lands on a later step than the one this advances.
-	TutorialService.notifyJobAccepted(player)
+	for _, member in members do
+		jobs[member] = session
+		member:SetAttribute(Config.ActiveJobAttribute, businessId)
+		teleportToJob(characters[member], teleportPart)
+		-- Starting a job is what ends the tutorial's "pick a job" step. A no-op otherwise --
+		-- including for the PlayAgain re-accept, which lands on a later step than the one this
+		-- advances, and for anyone not in the tutorial.
+		TutorialService.notifyJobAccepted(member)
+	end
 end
 
 -- Client's periodic wall-completion report (whole-wall units): trusted for the prorated
@@ -201,22 +276,23 @@ end
 local function reportWallCompletion(player: Player, amount: any)
 	local job = jobs[player]
 	if job and type(amount) == "number" then
-		job:reportWallProgress(amount)
+		job:reportWallProgress(player, amount)
 	end
 end
 
--- Player asked to stop their job early: fold in the wall completion they report at press
--- time (so the payout matches the % they were shown), pay the prorated reward, and end the
--- job. Ignored if they aren't on a job (nothing to finish).
+-- Player asked to stop their job early: fold in the wall completion they report at press time (so
+-- the payout matches the % they were shown), pay the prorated reward, and end the job FOR THEM.
+-- On a shared job everyone else keeps cleaning, with the session's progress untouched. Ignored if
+-- they aren't on a job (nothing to finish).
 local function finishEarly(player: Player, wallAmount: any)
 	local job = jobs[player]
 	if not job then
 		return
 	end
 	if type(wallAmount) == "number" then
-		job:reportWallProgress(wallAmount)
+		job:reportWallProgress(player, wallAmount)
 	end
-	job:finishEarly()
+	job:finishEarly(player)
 end
 
 -- Player pressed GoHome on the JobSummary: send them back to their plot spawn. This is the
@@ -256,6 +332,17 @@ function JobService.init()
 	FinishEarly.OnServerEvent:Connect(finishEarly)
 	WallCompletion.OnServerEvent:Connect(reportWallCompletion)
 	GoHome.OnServerEvent:Connect(goHome)
+
+	-- Leaving a party (by choice, kick or disband) while on a SHARED job ends that player's run the
+	-- same way pressing FinishEarly would: they're paid for the group's progress and get their
+	-- summary, and the members left behind keep the job. A solo session isn't a party job at all,
+	-- so it just carries on.
+	PartyService.onMemberRemoved(function(player: Player)
+		local job = jobs[player]
+		if job and job:getMemberCount() > 1 then
+			job:finishEarly(player)
+		end
+	end)
 
 	Players.PlayerRemoving:Connect(function(player)
 		JobService.endJob(player)

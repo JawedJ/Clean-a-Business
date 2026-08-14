@@ -10,12 +10,18 @@
 -- job, has the broom equipped, and hasn't already cleaned this stain on this job), then
 -- runs the UseTime timer itself. When its own timer elapses it re-validates, pays the
 -- per-stain reward, records the stain in the player's JobServer (which may complete the
--- job), and -- because the stains are SHARED across every player -- it does NOT destroy
--- the model. Instead it tells the cleaning player's client (DecalCleaned remote) to hide
--- that model locally, so the stain vanishes for them while everyone else still sees it.
+-- job), and -- because the stains are SHARED across every player in the game -- it does NOT
+-- destroy the model. Instead it tells the cleaning player's client (DecalCleaned remote) to
+-- hide that model locally, so the stain vanishes for them while players on OTHER jobs still
+-- see it.
 --
--- Which stains a player has cleaned lives in their JobServer, so it resets every time the
--- job is (re)accepted -- letting them redo the job for the reward again.
+-- On a PARTY job that confirmation goes to every member of the session, not just the cleaner:
+-- the members share one JobServer, so a stain cleaned by one of them is cleaned for all of
+-- them (recorded once, paid once -- to whoever did the work) and has to vanish on all their
+-- screens. The per-clean reward stays with the cleaner.
+--
+-- Which stains a session has cleaned lives in its JobServer, so it resets every time the job
+-- is (re)accepted -- letting them redo the job for the reward again.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -120,11 +126,14 @@ local function tryStartClean(player: Player, target: Instance)
 		-- may have changed during the wait.
 		local job = JobService.getJob(player)
 		if identity.model.Parent ~= nil and job and validate(player, identity.model) then
-			-- Reward them, tell THEIR client to hide its copy of the shared model, and
-			-- record the stain in the job (which may complete it). The server model is
-			-- left intact so other players can still clean it independently.
+			-- Reward the cleaner, tell every client ON THIS SESSION to hide its copy of the
+			-- shared model (just the cleaner when they're solo; the whole party otherwise),
+			-- and record the stain in the job (which may complete it). The server model is
+			-- left intact so players on other jobs still see -- and can clean -- their own.
 			ProgressionService.reward(player, DECAL_XP, DECAL_CASH)
-			DecalCleaned:FireClient(player, identity.model)
+			for _, member in JobService.getSessionMembers(player) do
+				DecalCleaned:FireClient(member, identity.model)
+			end
 			job:markDecalCleaned(identity.surfaceId)
 		end
 

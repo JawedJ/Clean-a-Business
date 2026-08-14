@@ -21,10 +21,15 @@ local DataService = require(game.ReplicatedStorage.Packages.DataService).client
 local SkillsConfig = require(game.ReplicatedStorage.SharedModules.SkillsConfig)
 local SoundManager = require(game.ReplicatedStorage.SharedModules.SoundManager)
 local CleanableSurface = require(script.Parent.CleanableSurface)
+local PartyController = require(script.Parent.PartyController)
 
 type Surface = CleanableSurface.CleanableSurface
 
-local CleanProgress = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanProgress") :: RemoteEvent
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local CleanProgress = Remotes:WaitForChild("CleanProgress") :: RemoteEvent
+-- Our erase strokes, relayed by the server to the other members of a party job so their overlays
+-- come clean where ours did. See the stroke queue below and JobController's receiving end.
+local WallStroke = Remotes:WaitForChild("WallStroke") :: RemoteEvent
 
 local TOOL_ID = ToolConfig.pressureWasher.UniqueID
 local MAX_BRIDGE_DIST = Config.MaxBridgeWorldDistance
@@ -140,6 +145,49 @@ local missedLast = true
 
 -- os.clock() of the last CleanProgress report, for client-side throttling.
 local lastProgressReport = 0
+
+-- === Stroke relay (party jobs only) ===
+-- Every erase we perform is queued as { part, to, from?, radius } and shipped in batches, so a
+-- party member's client can replay the exact same brush path onto its own overlay for that wall
+-- (there's no way to send the pixels themselves -- see CleaningService's header). We batch rather
+-- than send per frame because cleaning runs on Heartbeat: one message per stroke would be ~60/s per
+-- firing player. A batch keeps the full path -- every stamp is still in there, just delivered
+-- together -- so the replay is as accurate as sending each one.
+local STROKE_FLUSH_INTERVAL = 0.1
+-- Hard cap on a single batch. Only reachable if a flush is somehow starved for a second or more;
+-- past this we drop strokes rather than send an unbounded table (the server caps its relay too).
+local MAX_QUEUED_STROKES = 60
+
+local strokeQueue: { { part: BasePart, to: Vector3, from: Vector3?, radius: number } } = {}
+local lastStrokeFlush = 0
+
+-- Record one erase for relay. No-op when nobody would receive it, so a solo player's cleaning costs
+-- nothing extra.
+local function queueStroke(part: BasePart, to: Vector3, from: Vector3?, radius: number)
+	if not PartyController.hasCompany() then
+		return
+	end
+	if #strokeQueue >= MAX_QUEUED_STROKES then
+		return
+	end
+	table.insert(strokeQueue, { part = part, to = to, from = from, radius = radius })
+end
+
+-- Ship whatever has accumulated. Called every frame (not just while firing) so the tail of a stroke
+-- still goes out after the player lets go of the trigger.
+local function flushStrokes()
+	if #strokeQueue == 0 then
+		return
+	end
+	local now = os.clock()
+	if now - lastStrokeFlush < STROKE_FLUSH_INTERVAL then
+		return
+	end
+	lastStrokeFlush = now
+	WallStroke:FireServer(strokeQueue)
+	-- A fresh table, not table.clear: the queue was handed to the remote and is being serialized.
+	strokeQueue = {}
+end
 
 local function resetStroke()
 	lastSurface = nil
@@ -305,6 +353,9 @@ local function aim(): (RaycastResult?, Ray?)
 end
 
 local function onHeartbeat()
+	-- Outside the `firing` gate so the last batch of a stroke still ships once the player stops.
+	flushStrokes()
+
 	if not firing then
 		return
 	end
@@ -365,10 +416,13 @@ local function onHeartbeat()
 	-- toward this hit so its edge by the seam gets cleaned too.
 	if fromPos and lastSurface and lastSurface ~= surface and not lastSurface.cleaned then
 		lastSurface:clean(result.Position, fromPos, radius)
+		queueStroke(lastSurface.part, result.Position, fromPos, radius)
 	end
 
 	local erasedBefore = surface.cleanedCount
 	surface:clean(result.Position, fromPos, radius)
+	-- Relay the identical stamp to any party members (no-op when we're alone on the job).
+	queueStroke(part, result.Position, fromPos, radius)
 
 	-- Only report when dirt actually came off (the player is genuinely modifying the
 	-- image, not aiming at already-clean pixels), throttled to keep traffic low. The

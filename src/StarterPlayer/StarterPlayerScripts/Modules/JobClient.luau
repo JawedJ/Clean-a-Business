@@ -50,6 +50,11 @@ export type JobClient = typeof(setmetatable(
 		cleanedDecals: number,
 		cleanedSpills: number,
 		cleanedWebs: number,
+		-- Which cleanables we've already counted, so counting one twice can't happen. It otherwise
+		-- can on a shared (party) job: a spill is client-driven, so two members mopping the same one
+		-- at the same time each count it locally AND one of them then receives the other's relayed
+		-- SpillCleaned. Keyed by the shared instance, which every member resolves identically.
+		counted: { [Instance]: boolean },
 		-- Called with the new 0..1 completion after every clean (and once totals load), so
 		-- the completion UI can track progress. nil if no one is listening.
 		onProgress: ((number) -> ())?,
@@ -79,6 +84,7 @@ function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobCl
 	self.cleanedDecals = 0
 	self.cleanedSpills = 0
 	self.cleanedWebs = 0
+	self.counted = {}
 	self.onProgress = onProgress
 
 	task.spawn(function()
@@ -174,35 +180,46 @@ function JobClient._onWallCleaned(self: JobClient, part: BasePart)
 	WallCleaned:FireServer(part)
 end
 
--- Called by JobController when the server confirms a stain this client cleaned. The
--- actual hiding is done by JobController (so the last stain of a job still hides even if
--- this JobClient is torn down by completion); here we just track progress.
-function JobClient.onDecalCleaned(self: JobClient, _model: Model)
-	if not self.alive then
+-- True the first time this cleanable is reported, false every time after. Guards the counters
+-- against a cleanable being reported twice (see `counted`).
+function JobClient._claim(self: JobClient, instance: Instance): boolean
+	if self.counted[instance] then
+		return false
+	end
+	self.counted[instance] = true
+	return true
+end
+
+-- Called by JobController when the server confirms a stain cleaned on this job -- by us, or by a
+-- party member (the server sends it to every member of the session). The actual hiding is done by
+-- JobController (so the last stain of a job still hides even if this JobClient is torn down by
+-- completion); here we just track progress.
+function JobClient.onDecalCleaned(self: JobClient, model: Model)
+	if not self.alive or not self:_claim(model) then
 		return
 	end
 	self.cleanedDecals += 1
 	self:_notifyProgress()
 end
 
--- Called by JobController when this client finishes mopping a spill (client-driven, like a
--- wall). The hiding is done by JobController/SpillVisibility; here we just track progress for
--- the completion bar. The server is told separately (MopController -> CleanSpill) for the
--- reward + authoritative completion.
-function JobClient.onSpillCleaned(self: JobClient, _model: Model)
-	if not self.alive then
+-- Called by JobController when a spill is fully mopped -- by this client (client-driven, like a
+-- wall) or by a party member (relayed as SpillCleaned). The hiding is done by
+-- JobController/SpillVisibility; here we just track progress for the completion bar. The server is
+-- told separately (MopController -> CleanSpill) for the reward + authoritative completion.
+function JobClient.onSpillCleaned(self: JobClient, model: Model)
+	if not self.alive or not self:_claim(model) then
 		return
 	end
 	self.cleanedSpills += 1
 	self:_notifyProgress()
 end
 
--- Called by JobController when the server confirms a web this client vacuumed. The actual hiding
--- is done by JobController (so the last web of a job still hides even if this JobClient is torn
--- down by completion); here we just track progress. Mirrors onDecalCleaned. A web is a BasePart or
--- Model, hence Instance.
-function JobClient.onWebCleaned(self: JobClient, _web: Instance)
-	if not self.alive then
+-- Called by JobController when the server confirms a web vacuumed on this job -- by us or by a
+-- party member. The actual hiding is done by JobController (so the last web of a job still hides
+-- even if this JobClient is torn down by completion); here we just track progress. Mirrors
+-- onDecalCleaned. A web is a BasePart or Model, hence Instance.
+function JobClient.onWebCleaned(self: JobClient, web: Instance)
+	if not self.alive or not self:_claim(web) then
 		return
 	end
 	self.cleanedWebs += 1

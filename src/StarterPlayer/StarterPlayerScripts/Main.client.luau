@@ -43,6 +43,8 @@ local ToolFloatController = require(Modules:WaitForChild("ToolFloatController"))
 local MissingHighlightController = require(Modules:WaitForChild("MissingHighlightController"))
 local JobGhostController = require(Modules:WaitForChild("JobGhostController"))
 local HidePlayersController = require(Modules:WaitForChild("HidePlayersController"))
+local PartyController = require(Modules:WaitForChild("PartyController"))
+local PlayTogetherController = require(Modules:WaitForChild("PlayTogetherController"))
 local AfkEarningsController = require(Modules:WaitForChild("AfkEarningsController"))
 local GemBuffController = require(Modules:WaitForChild("GemBuffController"))
 local GemBurst = require(Modules:WaitForChild("GemBurst"))
@@ -78,6 +80,10 @@ safeInit("WorkerGemPopupController", WorkerGemPopupController.init)
 -- Belongs in this early block for the same reason: the server aims the camera the instant it
 -- places a first-ever character, which is right at join -- a listener connected any later misses it.
 safeInit("FirstSpawnCameraController", FirstSpawnCameraController.init)
+-- Party roster mirror. Also belongs up here: the server pushes the roster the moment anything
+-- changes, and a snapshot sent before we connect would be lost -- leaving the UI (and the washer's
+-- stroke relay) thinking we're alone.
+safeInit("PartyController", PartyController.init)
 
 safeInit("DataService", function()
 	DataService:init()
@@ -136,10 +142,12 @@ safeInit("InventoryController", InventoryController.init)
 safeInit("ToolFloatController", ToolFloatController.init)
 -- Press R on a job to flash a yellow, through-walls highlight over what's left to clean.
 safeInit("MissingHighlightController", MissingHighlightController.init)
--- On a job, other players working the same business show as a blue highlight, not their model.
+-- On a job, other players working the same business are hidden entirely (model, name and VFX).
 safeInit("JobGhostController", JobGhostController.init)
 -- Optional (Settings.HidePlayers) hiding of every other player's character, toggled from the tab.
 safeInit("HidePlayersController", HidePlayersController.init)
+-- Standalone "play together" button: hidden during a job, and inert for the tutorial's duration.
+safeInit("PlayTogetherController", PlayTogetherController.init)
 -- Offline-earnings claim screen: shown on join when the server reports AFK gems to collect.
 safeInit("AfkEarningsController", AfkEarningsController.init)
 -- HUD countdown for the purchased 10x gem boost, shown only while one is running.

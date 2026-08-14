@@ -10,11 +10,15 @@
 -- (the player holds this business's job, has the vacuum equipped, and hasn't already cleaned this
 -- web on this job), then runs the UseTime timer itself. When its own timer elapses it re-validates,
 -- pays the per-web reward, records the web in the player's JobServer (which may complete the job),
--- and -- because webs are SHARED across every player -- it does NOT destroy the model. Instead it
--- tells the cleaning player's client (WebCleaned remote) to hide that model locally, so the web
--- vanishes for them while everyone else still sees it.
+-- and -- because webs are SHARED across every player in the game -- it does NOT destroy the model.
+-- Instead it tells the cleaning player's client (WebCleaned remote) to hide that model locally, so
+-- the web vanishes for them while players on other jobs still see it.
 --
--- Which webs a player has cleaned lives in their JobServer, so it resets every time the job is
+-- On a PARTY job that confirmation goes to every member of the session (they share one JobServer,
+-- so the web is cleaned once for the group and has to vanish on every member's screen); the
+-- per-clean reward stays with whoever vacuumed it.
+--
+-- Which webs a session has cleaned lives in its JobServer, so it resets every time the job is
 -- (re)accepted -- letting them redo the job for the reward again.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -119,11 +123,14 @@ local function tryStartClean(player: Player, target: Instance)
 		-- changed during the wait.
 		local job = JobService.getJob(player)
 		if identity.web.Parent ~= nil and job and validate(player, identity.web) then
-			-- Reward them, tell THEIR client to hide its copy of the shared model, and record the
-			-- web in the job (which may complete it). The server model is left intact so other
-			-- players can still clean it independently.
+			-- Reward the cleaner, tell every client ON THIS SESSION to hide its copy of the shared
+			-- model (just the cleaner when they're solo; the whole party otherwise), and record the
+			-- web in the job (which may complete it). The server model is left intact so players on
+			-- other jobs still see -- and can clean -- their own.
 			ProgressionService.reward(player, WEB_XP, WEB_CASH)
-			WebCleaned:FireClient(player, identity.web)
+			for _, member in JobService.getSessionMembers(player) do
+				WebCleaned:FireClient(member, identity.web)
+			end
 			job:markWebCleaned(identity.surfaceId)
 		end
 

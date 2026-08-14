@@ -97,6 +97,20 @@ local function finish(player: Player)
 	player:SetAttribute(TutorialConfig.ActiveAttribute, nil)
 end
 
+-- End the tutorial for a player who asked to skip it (the /skiptutorial chat command -- see
+-- AdminCommands, where it's the one command anyone may run). Identical to reaching the end: the
+-- profile is marked complete so it never runs again, and clearing the attributes is what makes the
+-- client drop every UI lock the current step had armed. No-op if they aren't in the tutorial.
+--
+-- Deliberately does NOT log the remaining funnel steps: they didn't reach them, and reporting them
+-- would make the Onboarding funnel read as a completion.
+function TutorialService.skip(player: Player)
+	if currentStep[player] == nil then
+		return
+	end
+	finish(player)
+end
+
 -- Move the player onto step `number`: record it (in memory and in their profile), log it into the
 -- funnel, and publish it with its resolved text to their client. Past the last step this finishes
 -- the tutorial instead.

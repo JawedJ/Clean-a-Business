@@ -5,6 +5,7 @@ local PlotButtonService = require(game.ServerScriptService.Modules.PlotButtonSer
 local PlotSignService = require(game.ServerScriptService.Modules.PlotSignService)
 local PortalService = require(game.ServerScriptService.Modules.PortalService)
 local BusinessService = require(game.ServerScriptService.Modules.BusinessService)
+local PartyService = require(game.ServerScriptService.Modules.PartyService)
 local JobService = require(game.ServerScriptService.Modules.JobService)
 local PlayerCollisionService = require(game.ServerScriptService.Modules.PlayerCollisionService)
 local CleaningService = require(game.ServerScriptService.Modules.CleaningService)
@@ -44,6 +45,9 @@ PortalService.init()
 -- Seeds every catalog business into each player's profile and grants unlocks as requirements
 -- are met (level now, permanent once earned). Runs before JobService so accepts see the list.
 BusinessService.init()
+-- Party grouping (leader + up to PartyConfig.MaxSize members). Init BEFORE JobService, which
+-- registers its "member left the party" hook against it and resolves the party on every accept.
+PartyService.init()
 JobService.init()
 -- Players never collide with each other (visual hiding is client JobGhostController, job-only).
 PlayerCollisionService.init()
