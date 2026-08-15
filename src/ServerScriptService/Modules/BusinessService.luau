@@ -62,6 +62,19 @@ function BusinessService.meetsRequirements(player: Player, businessId: string): 
 	return true
 end
 
+-- Whether this player may PLAY a business's job right now: they've unlocked it AND they still meet
+-- its live requirements. Unlocking is one-way, so the Unlocked flag alone can outlive the
+-- requirements that earned it (a config change adding a gate to a business someone already owns) --
+-- hence both halves. The single definition of the entitlement, shared by JobService.accept (which
+-- checks every member of a party before starting the job) and PartyService (which checks it before
+-- letting a player create or join a party for that business).
+function BusinessService.canPlay(player: Player, businessId: string): boolean
+	if DataService:get(player, { "BusinessList", businessId, "Unlocked" }) ~= true then
+		return false
+	end
+	return BusinessService.meetsRequirements(player, businessId)
+end
+
 -- Seed any missing businesses into the player's list, then unlock any that are still locked but
 -- now qualify. Only writes when something actually changes, so it's cheap to call repeatedly
 -- (join + every level change) and never re-locks an already-unlocked business.

@@ -32,6 +32,11 @@ export type PartyState = {
 	leader: Player,
 	-- Join order, leader first.
 	members: { Player },
+	-- The business the party formed around, fixed when the leader created it.
+	businessId: string,
+	-- PARALLEL TO `members`: members[i] has readied up iff ready[i] is true. An array rather than a
+	-- player-keyed map because remotes only serialize string/number keys -- see PartyService.snapshot.
+	ready: { boolean },
 }
 
 -- What the server pushes on every change: BOTH the party we're in and the parties we could join,
@@ -88,6 +93,14 @@ end
 -- The party we're in, or nil.
 function PartyController.getParty(): PartyState?
 	return view.party
+end
+
+-- Whether a member of `party` has readied up. Takes the party rather than reading our own so the
+-- roster UI can ask it of every member, and keeps the parallel-array indexing (see PartyState.ready)
+-- in one place instead of spread through the screens.
+function PartyController.isReady(party: PartyState, member: Player): boolean
+	local index = table.find(party.members, member)
+	return index ~= nil and party.ready[index] == true
 end
 
 -- Every party we could join right now (empty while we're in one). Live: the server re-pushes it

@@ -15,10 +15,16 @@
 -- Rewards line whose XP figure includes the current mastery boost, all driven off the player's
 -- lifetime Completions on that business (see Mastery, and JobServer.complete which pays the boost).
 --
+-- The board is also where a PARTY picks its job: PartyUiController opens it through
+-- openForSelection, which makes the next Wash press report that businessId back instead of starting
+-- anything (the party is then created around it). See selectionHandler.
+--
 -- While a job is active the whole job UI hides (the Buttons frame + JobFrame) -- you can't
--- start another until this one finishes. When the job completes the server clears ActiveJob
--- and the Buttons frame returns. So visibility of the job UI is driven off that one attribute,
--- exactly like JobController drives the overlays.
+-- start another until this one finishes. Every other open panel is snapped shut at the same moment
+-- (ExclusivePanels.hideAll): a job start takes the screen, and in a party it can be triggered by
+-- someone else entirely. When the job completes the server clears ActiveJob and the Buttons frame
+-- returns. So visibility of the job UI is driven off that one attribute, exactly like JobController
+-- drives the overlays.
 --
 -- Unlock state comes from DataService and is re-read whenever BusinessList changes or the
 -- frame is opened, so unlocking a business flips its row from Locked to Wash live.
@@ -31,15 +37,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
-local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
 local Mastery = require(ReplicatedStorage.SharedModules.Mastery)
-local NumberFormat = require(ReplicatedStorage.SharedModules.NumberFormat)
-local SkillsConfig = require(ReplicatedStorage.SharedModules.SkillsConfig)
-local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
-local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local UiAnimations = require(ReplicatedStorage.SharedModules.UiAnimations)
 
+local BusinessGates = require(script.Parent.BusinessGates)
 local ExclusivePanels = require(script.Parent.ExclusivePanels)
 
 local AcceptJob = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AcceptJob") :: RemoteEvent
@@ -60,16 +62,8 @@ local CLICK_SOUND = "UIClick"
 -- one a button is hovered in: frames above it slide up by this much, frames below slide down, and
 -- the hovered one holds. Y scale, so it tracks the screen at any resolution.
 local CLUSTER_HOVER_SPREAD = 0.017
--- Requirement colors, shared by the level-gate label and the RequiredItems icons: green once the
--- player meets the gate (level reached / tool owned), the authored red-orange (matching the
--- Studio-authored default) while they don't.
-local REQ_MET_COLOR = Color3.fromRGB(78, 214, 94)
-local REQ_UNMET_COLOR = Color3.fromRGB(225, 62, 30)
--- The RequiredItems frame each row authors, holding Item1..Item{MAX_REQUIRED_ITEM_SLOTS} icon
--- slots. A business shows one slot per tool in its BusinessConfig.RequiredItems (in order) and
--- hides the rest, so a two-tool business lights up Item1 + Item2 only.
+-- The RequiredItems frame each row authors, holding the per-tool icon slots BusinessGates paints.
 local REQUIRED_ITEMS_FRAME = "RequiredItems"
-local MAX_REQUIRED_ITEM_SLOTS = 5
 
 local JobUiController = {}
 
@@ -80,72 +74,31 @@ local buttonsFrame: Frame? = nil
 local buttons2Frame: Frame? = nil
 local buttons3Frame: Frame? = nil
 local jobFrame: Frame? = nil
--- Drives the board's open/close (slide + expand) animation; rebuilt per bind alongside
--- jobFrame since the ScreenGui is re-cloned each respawn.
-local jobPanel: UiAnimations.Panel? = nil
 
 -- One refresher per TaskDesign row, rebuilt on each bind; re-evaluates its lock state.
 local taskRefreshers: { () -> () } = {}
+
+-- Set while the board has been borrowed to PICK a business instead of to start one: the party flow
+-- opens the same board to choose the job a party will form around (see openForSelection). While it
+-- holds, a Wash press reports the businessId here and starts nothing. One-shot -- cleared by the
+-- pick itself, and by closing the board without picking, so the board can never be left silently
+-- refusing to start jobs.
+local selectionHandler: ((string) -> ())? = nil
 
 -- True while a finished job's JobSummary is up: the ActiveJob attribute has cleared, but we
 -- keep the whole job UI hidden (the board button must NOT pop back over the summary) until the
 -- player leaves the summary via GoHome, which calls releaseSummaryHold. See JobSummaryController.
 local summaryHold = false
 
+-- Told whenever the HUD's visibility flips. For the standalone buttons authored OUTSIDE the HUD
+-- clusters (PlayTogetherFrame), which no cluster hides for them: rather than each re-deriving
+-- "hidden on a job, and still hidden while the summary is up", they follow the clusters through
+-- here, so they appear and disappear on exactly the same frame.
+local hudVisibilityListeners: { (boolean) -> () } = {}
+
 -- Whether the local player currently holds a job (drives whole-UI visibility).
 local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
-end
-
--- BusinessList only holds records for businesses the player has, so index it defensively:
--- a not-yet-unlocked business simply has no entry (and so counts as locked).
-local function isUnlocked(businessId: string): boolean
-	local list = DataService:get({ "BusinessList" })
-	local record = if type(list) == "table" then list[businessId] else nil
-	return type(record) == "table" and record.Unlocked == true
-end
-
--- Lifetime completions the player has on a business, read the same defensive way as isUnlocked
--- (BusinessList only holds records for businesses they have). 0 if there's no record yet.
-local function completionsFor(businessId: string): number
-	local list = DataService:get({ "BusinessList" })
-	local record = if type(list) == "table" then list[businessId] else nil
-	local count = if type(record) == "table" then record.Completions else nil
-	return if type(count) == "number" then count else 0
-end
-
--- The player's current multiplier for a gem-purchased skill (1.0 with none bought), read from
--- their replicated Skills data. Lets the board predict the boosted reward a completion will pay,
--- matching what ProgressionService credits server-side.
-local function skillMultiplier(skillName: string): number
-	local level = DataService:get({ "Skills", skillName })
-	return SkillsConfig.multiplier(skillName, if type(level) == "number" then level else 0)
-end
-
--- The local player's current level (defaults to 1 before Level data is available).
-local function playerLevel(): number
-	local level = DataService:get({ "Level" })
-	local current = if type(level) == "table" then level.CurrentLevel else nil
-	return if type(current) == "number" then current else 1
-end
-
--- Minimum level a business needs to be accepted (BusinessConfig.RequiredLevel, defaulting to 1).
-local function requiredLevelFor(businessId: string): number
-	local def = BusinessConfig[businessId]
-	return (def and def.RequiredLevel) or 1
-end
-
--- Tool UniqueIDs a business needs to be accepted, in board display order. Empty when the
--- business declares no BusinessConfig.RequiredItems (no tool gate).
-local function requiredItemsFor(businessId: string): { string }
-	local def = BusinessConfig[businessId]
-	return (def and def.RequiredItems) or {}
-end
-
--- Whether the player owns a tool. Inventory records are seeded from the ToolConfig catalog, so a
--- missing record just means not-yet-owned -- read it as defensively as isUnlocked does.
-local function ownsItem(toolId: string): boolean
-	return DataService:get({ "Inventory", toolId, "Unlocked" }) == true
 end
 
 -- Render a mastery boost percent for the requirement label: whole numbers stay bare (5 -> "5"),
@@ -184,12 +137,32 @@ local function applyActiveJobState()
 	if buttons3 and buttons3.Parent then
 		buttons3.Visible = visible
 	end
-	local frame = jobFrame
-	local panel = jobPanel
-	if active and frame and frame.Parent and panel then
-		panel:hideInstant()
-		ExclusivePanels.markHidden(PANEL_NAME)
+	if active then
+		-- A job starting takes the screen: snap away EVERY open panel, not just the board. That
+		-- matters most for a party, where the job starts on the last member's ready press rather
+		-- than on anything the other members did -- they'd otherwise be dropped into the business
+		-- still looking at the party window (or the shop, or the settings tab) they had up.
+		ExclusivePanels.hideAll()
 	end
+	-- Carry the same state to the standalone buttons that live outside the clusters, so they come
+	-- back on the GoHome that releases the summary hold rather than the earlier moment the job ended.
+	for _, listener in hudVisibilityListeners do
+		listener(visible)
+	end
+end
+
+-- Whether the HUD is currently showing: false on a job, and still false while a finished job's
+-- summary is up. The one definition of "the player is looking at the world, not at a job", for the
+-- standalone buttons that have to match the clusters.
+function JobUiController.isHudVisible(): boolean
+	return not hasActiveJob() and not summaryHold
+end
+
+-- Follow the HUD's visibility. Fires immediately with the current value, so a button binding after
+-- a change doesn't sit wrong until the next one.
+function JobUiController.onHudVisibilityChanged(callback: (boolean) -> ())
+	table.insert(hudVisibilityListeners, callback)
+	callback(JobUiController.isHudVisible())
 end
 
 -- ActiveJob flipped: a job starting clears any summary hold; a job ending enters one (its
@@ -215,6 +188,9 @@ local function toggleBoard(): boolean
 	if hasActiveJob() or summaryHold then
 		return false
 	end
+	-- Leaving the board any way but picking abandons a party flow's claim on it (see
+	-- selectionHandler), so the next opener gets a board that starts jobs again.
+	selectionHandler = nil
 	return ExclusivePanels.toggle(PANEL_NAME)
 end
 
@@ -234,6 +210,25 @@ end
 -- the coordinator so its open-panel bookkeeping stays in sync.
 function JobUiController.closeBoard()
 	ExclusivePanels.close(PANEL_NAME)
+end
+
+-- Open the board to PICK a business rather than to start one: the next Wash press calls `handler`
+-- with that businessId and starts no job. Used by the party flow, where choosing the job is what
+-- creates the party -- so the player picks from the one board they already know rather than a second
+-- copy of it that would have to be kept in step with this one.
+--
+-- Opened INSTANTLY (see ExclusivePanels.openInstant), because it's a step within the party screens
+-- rather than a panel of its own: the party window simply becomes the board. Refused, with the claim
+-- left unset, while on a job or during the summary hold -- exactly what toggleBoard refuses on.
+function JobUiController.openForSelection(handler: (string) -> ()): boolean
+	if hasActiveJob() or summaryHold then
+		return false
+	end
+	if not ExclusivePanels.openInstant(PANEL_NAME) then
+		return false
+	end
+	selectionHandler = handler
+	return true
 end
 
 -- Whether the board frame is currently shown -- lets the proximity trigger skip a redundant
@@ -282,10 +277,8 @@ local function bindTask(row: Instance): (() -> ())?
 	-- Redraw the mastery stars, the Rewards line's boosted XP, and the next-milestone
 	-- requirement from the player's lifetime completions on this business.
 	local function refreshMastery()
-		local def = BusinessConfig[businessId]
-		local completions = completionsFor(businessId)
+		local completions = BusinessGates.completionsFor(businessId)
 		local stars = Mastery.starsForCompletions(completions)
-		local multiplier = Mastery.xpMultiplier(stars)
 
 		if starAmount then
 			-- No stars yet: show "0/MAX" so the row still communicates the mastery track
@@ -300,10 +293,8 @@ local function bindTask(row: Instance): (() -> ())?
 		-- Rewards line: cash boosted by the Greed skill, and XP boosted by both the mastery star
 		-- level and the Inteligence skill -- matching what a completion at this star level will
 		-- actually pay (see JobServer.complete + ProgressionService's skill boosts).
-		if rewards and def then
-			local cash = math.floor(def.BaseReward * skillMultiplier("Greed"))
-			local xp = math.floor(def.XpReward * multiplier * skillMultiplier("Inteligence"))
-			rewards.Text = string.format("$%s    +%s EXP", NumberFormat.commas(cash), NumberFormat.commas(xp))
+		if rewards then
+			rewards.Text = BusinessGates.rewardsText(businessId)
 		end
 
 		-- Requirement line: once every star is earned there's nothing left to unlock, so hide it;
@@ -328,63 +319,18 @@ local function bindTask(row: Instance): (() -> ())?
 		end
 	end
 
-	-- Paint the level-gate line: text from the business's RequiredLevel, green when the player
-	-- meets it and red-orange while they're still short.
-	local function refreshRequirement()
-		local required = requiredLevelFor(businessId)
-		if requirements then
-			requirements.Text = string.format("REQUIRED: Level %d", required)
-			requirements.TextColor3 = if playerLevel() >= required then REQ_MET_COLOR else REQ_UNMET_COLOR
-		end
-	end
-
-	-- Paint the tool-gate icons: one slot per tool the business requires, showing that tool's
-	-- catalog icon over a green background when the player owns it and red while they don't.
-	-- Unused slots (a business needing fewer tools than the row authors) stay hidden.
-	local function refreshRequiredItems()
-		if not requiredItems then
-			return
-		end
-		local required = requiredItemsFor(businessId)
-		for slot = 1, MAX_REQUIRED_ITEM_SLOTS do
-			local frame = requiredItems:FindFirstChild("Item" .. slot) :: Frame?
-			local toolId = required[slot]
-			if frame then
-				frame.Visible = toolId ~= nil
-				if toolId then
-					frame.BackgroundColor3 = if ownsItem(toolId) then REQ_MET_COLOR else REQ_UNMET_COLOR
-					local icon = frame:FindFirstChild("ImageLabel") :: ImageLabel?
-					local def = ToolConfig[toolId]
-					if icon and def and def.Image then
-						icon.Image = def.Image
-					end
-				end
-			end
-		end
-	end
-
-	-- Whether the player may accept this business right now: it's unlocked, they're high enough
-	-- level, and they own every tool it requires. Kept as one predicate so the Wash button's
-	-- visibility and its click guard can never disagree. The server enforces the same three gates
-	-- in JobService.accept.
-	local function isPlayable(): boolean
-		if not isUnlocked(businessId) or playerLevel() < requiredLevelFor(businessId) then
-			return false
-		end
-		for _, toolId in requiredItemsFor(businessId) do
-			if not ownsItem(toolId) then
-				return false
-			end
-		end
-		return true
-	end
-
 	local function refresh()
 		-- Repaint the gate displays first (they own the row's requirement visuals), then offer the
-		-- Wash button only if every gate passes; otherwise show the Locked button.
-		refreshRequirement()
-		refreshRequiredItems()
-		local playable = isPlayable()
+		-- Wash button only if every gate passes; otherwise show the Locked button. Both the painting
+		-- and the predicate come from BusinessGates, which the party browser paints its own slots
+		-- with -- so a row and a party for the same business always agree.
+		if requirements then
+			BusinessGates.paintRequirements(requirements, businessId)
+		end
+		if requiredItems then
+			BusinessGates.paintRequiredItems(requiredItems, businessId)
+		end
+		local playable = BusinessGates.canPlay(businessId)
 		washButton.Visible = playable
 		lockedButton.Visible = not playable
 		resetHoverScale(if playable then lockedButton else washButton)
@@ -392,7 +338,16 @@ local function bindTask(row: Instance): (() -> ())?
 	end
 
 	washButton.Activated:Connect(function()
-		if not isPlayable() or hasActiveJob() then
+		if not BusinessGates.canPlay(businessId) or hasActiveJob() then
+			return
+		end
+		-- Someone borrowed the board to PICK a business rather than to start one (the party flow --
+		-- see openForSelection): hand them the pick and start nothing. The claim is one-shot, so the
+		-- board is back to its normal behaviour immediately.
+		local handler = selectionHandler
+		if handler then
+			selectionHandler = nil
+			handler(businessId)
 			return
 		end
 		-- On success the server sets ActiveJob, which hides the whole job UI via
@@ -421,7 +376,6 @@ local function bind(screenGui: Instance)
 	buttons2Frame = buttons2 :: Frame
 	buttons3Frame = buttons3 :: Frame
 	jobFrame = frame
-	jobPanel = panel
 	frame.Visible = false
 
 	-- Register with the coordinator so open/close is sequenced against the other panels; it
@@ -447,6 +401,8 @@ local function bind(screenGui: Instance)
 	}, CLUSTER_HOVER_SPREAD)
 
 	exitButton.Activated:Connect(function()
+		-- Closing without picking abandons any party flow's claim on the board (see selectionHandler).
+		selectionHandler = nil
 		ExclusivePanels.close(PANEL_NAME)
 	end)
 
@@ -466,15 +422,10 @@ function JobUiController.init()
 
 	-- Persistent subscriptions; each reads whichever elements/rows are currently bound.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(onActiveJobChanged)
-	DataService:getChangedSignal({ "BusinessList" }):Connect(refreshTasks)
-	-- Leveling up can clear a business's level gate, so re-run the rows when Level changes.
-	DataService:getChangedSignal({ "Level" }):Connect(refreshTasks)
-	-- Buying a tool can clear a business's item gate (and repaints its RequiredItems icons), so
-	-- re-run the rows when the Inventory changes too.
-	DataService:getChangedSignal({ "Inventory" }):Connect(refreshTasks)
-	-- Buying the Greed/Inteligence skills changes the boosted reward the rows predict, so repaint
-	-- them when Skills change too.
-	DataService:getChangedSignal({ "Skills" }):Connect(refreshTasks)
+	-- Re-run the rows whenever anything they display can have moved: unlocking a business, leveling
+	-- up past a gate, buying a required tool, or buying a Greed/Inteligence skill that changes the
+	-- reward they predict. The party browser watches the same list for the same reasons.
+	BusinessGates.onChanged(refreshTasks)
 
 	-- TOGGLE_KEY opens/closes the board just like the JobButton. Ignore it when the
 	-- keystroke was already consumed by the game (e.g. typing in a TextBox).

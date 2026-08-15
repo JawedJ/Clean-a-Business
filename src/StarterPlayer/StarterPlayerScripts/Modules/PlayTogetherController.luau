@@ -1,25 +1,27 @@
 --!strict
 
--- The standalone "play together" button (PlayerGui.ScreenGui.PlayTogetherFrame.PlayTogetherBtn).
--- The button has no action wired to it yet; this controller owns the two rules it already needs:
+-- The standalone "play together" button (PlayerGui.ScreenGui.PlayTogetherFrame.PlayTogetherBtn):
+-- the way into the party screens. Pressing it opens the party you're in, or the create/browse choice
+-- if you aren't in one -- PartyUiController owns both, and everything past that first press. This
+-- controller owns only the two rules the BUTTON has:
 --
---   * the whole frame hides while the local player is on a job, so it doesn't sit over the job UI
---     (it's authored as a direct child of the ScreenGui, so no HUD cluster hides it for us -- the
---     same reason ShopUiController hides its ShopAlternateBtn), and
+--   * the whole frame is shown exactly when the HUD clusters are, which it has to be TOLD (it's
+--     authored as a direct child of the ScreenGui, so no cluster hides it for us -- the same reason
+--     ShopUiController hides its ShopAlternateBtn). That's a job's whole duration AND the finished
+--     job's summary afterwards: the button comes back on the GoHome that dismisses the summary, not
+--     the earlier moment the job ended, so it can't pop up over the summary. JobUiController owns
+--     that hold, so this follows it through onHudVisibilityChanged rather than re-deriving it from
+--     the ActiveJob attribute, which would come back a screen too early.
 --   * clicking it does nothing for the tutorial's duration -- no step invites it, and the onboarding
---     flow shouldn't be interruptible by it once it does something.
---
--- When the button gains its real behaviour, put it in onActivated below the guard; both rules then
--- apply to it for free.
+--     flow shouldn't be interruptible by it.
 --
 -- The ScreenGui is re-cloned on every respawn, so we re-bind to the fresh instances each time one
 -- appears (same pattern as MissingHighlightController).
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
-
+local JobUiController = require(script.Parent.JobUiController)
+local PartyUiController = require(script.Parent.PartyUiController)
 local TutorialState = require(script.Parent.TutorialState)
 
 local localPlayer = Players.LocalPlayer
@@ -33,16 +35,13 @@ local PlayTogetherController = {}
 -- The currently bound frame, refreshed each time the ScreenGui is (re)bound.
 local frame: Frame? = nil
 
-local function hasActiveJob(): boolean
-	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
-end
-
--- Hide the frame while a job runs, show it otherwise. Guards the post-respawn gap before anything
--- is bound.
-local function applyActiveJobState()
+-- Show the frame exactly when the HUD clusters show, which JobUiController decides (a job hides it,
+-- and it stays hidden through the finished job's summary until GoHome). Guards the post-respawn gap
+-- before anything is bound.
+local function applyHudVisibility()
 	local current = frame
 	if current and current.Parent then
-		current.Visible = not hasActiveJob()
+		current.Visible = JobUiController.isHudVisible()
 	end
 end
 
@@ -51,7 +50,7 @@ local function onActivated()
 	if TutorialState.isRestricting() then
 		return
 	end
-	-- Nothing wired yet -- the button's real action goes here.
+	PartyUiController.openEntry()
 end
 
 local function bind(screenGui: Instance)
@@ -61,11 +60,13 @@ local function bind(screenGui: Instance)
 	frame = playFrame
 	button.Activated:Connect(onActivated)
 
-	applyActiveJobState()
+	applyHudVisibility()
 end
 
 function PlayTogetherController.init()
-	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(applyActiveJobState)
+	-- Fires immediately with the current state, and on every flip after -- including the GoHome that
+	-- releases the summary hold, which is the moment the HUD comes back.
+	JobUiController.onHudVisibilityChanged(applyHudVisibility)
 
 	local playerGui = localPlayer:WaitForChild("PlayerGui")
 	local function onChild(child: Instance)

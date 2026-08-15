@@ -44,6 +44,7 @@ local MissingHighlightController = require(Modules:WaitForChild("MissingHighligh
 local JobGhostController = require(Modules:WaitForChild("JobGhostController"))
 local HidePlayersController = require(Modules:WaitForChild("HidePlayersController"))
 local PartyController = require(Modules:WaitForChild("PartyController"))
+local PartyUiController = require(Modules:WaitForChild("PartyUiController"))
 local PlayTogetherController = require(Modules:WaitForChild("PlayTogetherController"))
 local AfkEarningsController = require(Modules:WaitForChild("AfkEarningsController"))
 local GemBuffController = require(Modules:WaitForChild("GemBuffController"))
@@ -146,6 +147,9 @@ safeInit("MissingHighlightController", MissingHighlightController.init)
 safeInit("JobGhostController", JobGhostController.init)
 -- Optional (Settings.HidePlayers) hiding of every other player's character, toggled from the tab.
 safeInit("HidePlayersController", HidePlayersController.init)
+-- The party screens (create / browse / party room). Init BEFORE the button that opens them, so the
+-- first press always lands on bound panels.
+safeInit("PartyUiController", PartyUiController.init)
 -- Standalone "play together" button: hidden during a job, and inert for the tutorial's duration.
 safeInit("PlayTogetherController", PlayTogetherController.init)
 -- Offline-earnings claim screen: shown on join when the server reports AFK gems to collect.

@@ -7,12 +7,15 @@
 -- client loads the wall overlays + restores the stains), and teleport them onto the building's
 -- TeleportPart. One job at a time, per player.
 --
--- PARTIES (see PartyService): accepting a job while in a party starts ONE shared session for every
--- member -- they are all teleported in, all put on the clock, and all cleaning the same cleanables
--- with the same completion bar. Only the LEADER may accept, and the job is refused unless EVERY
--- member qualifies for the business (the party UI is expected to keep unqualified players out in
--- the first place; this is the server-side backstop). A player with no party gets a session of one,
--- which behaves exactly as a solo job always did.
+-- PARTIES (see PartyService): a party's job starts ONE shared session for every member -- they are
+-- all teleported in, all put on the clock, and all cleaning the same cleanables with the same
+-- completion bar. Two things start it, both covering the whole party: EVERY member readying up
+-- (PartyService.onAllReady), and the LEADER alone firing AcceptJob -- the board's Wash or the
+-- summary's PlayAgain, which replays the run the party already agreed to. A non-leader's AcceptJob
+-- is ignored. Either way the job is refused unless every member qualifies for the business (the
+-- party UI keeps unqualified players out in the first place; this is the server-side backstop). A
+-- player with no party gets a session of one, which behaves exactly as a solo job always did. A
+-- party that COMPLETES its job is disbanded.
 --
 -- The shared buildings -- including their Cleanables -- are authored in the Workspace, so nothing is
 -- spawned here; accepting a job is a fresh, per-session clean. When a session finishes, JobServer
@@ -31,7 +34,6 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
-local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessService = require(script.Parent.BusinessService)
 local JobServer = require(script.Parent.JobServer)
 local PartyService = require(script.Parent.PartyService)
@@ -115,10 +117,6 @@ local function teleportToJob(character: Model, teleportPart: BasePart)
 	character:PivotTo(CFrame.lookAt(pos, pos + flat))
 end
 
-local function isUnlocked(player: Player, businessId: string): boolean
-	return DataService:get(player, { "BusinessList", businessId, "Unlocked" }) == true
-end
-
 -- End a player's run: drop them from their session (destroying it once its last member is gone)
 -- and clear the ActiveJob attribute, which tears the job state down on their client. Everyone else
 -- on a shared session is untouched -- their job, and its progress, continues. Safe to call with no
@@ -134,6 +132,11 @@ function JobService.endJob(player: Player)
 	if job:getMemberCount() == 0 then
 		job:destroy()
 	end
+	-- Going off the clock can reopen their party to newcomers -- a party is unjoinable while ANY
+	-- member is working, so the last one to finish makes it joinable again. Said outright rather than
+	-- left to PartyService's ActiveJob watcher to notice, so a party's return to the browser doesn't
+	-- depend on that side channel. No-op for a player with no party.
+	PartyService.refreshJoinable()
 end
 
 -- The businessId the player is currently on the clock for, or nil. Used by the cleaning
@@ -174,36 +177,20 @@ function JobService.getSessionMembers(player: Player): { Player }
 	return if job then job:getMembers() else {}
 end
 
--- Can this player be put on this business's job right now? Checked for EVERY member of a party
--- before the job starts, so a shared job never begins with someone who isn't entitled to it.
-local function qualifies(player: Player, businessId: string): boolean
-	if not isUnlocked(player, businessId) then
-		return false
-	end
-	-- Unlocking is one-way, so the Unlocked flag alone can outlive the requirements that earned it
-	-- (a config change adding a gate to a business someone already owns). Re-check them here so the
-	-- live requirements always win. The client board hides the Wash button on the same gates.
-	return BusinessService.meetsRequirements(player, businessId)
-end
-
-local function accept(player: Player, businessId: any)
-	if type(businessId) ~= "string" then
+-- Put `members` on `businessId`'s job as ONE session. The single path onto a job: a solo player is
+-- a session of one (from the AcceptJob remote), a party is a session of all its members (from the
+-- all-ready hook). All-or-nothing -- if anything here refuses, nobody starts.
+local function startJob(businessId: any, members: { Player })
+	if type(businessId) ~= "string" or #members == 0 then
 		return
 	end
 
-	-- Resolve who this accept covers. In a party that's every member, and only the leader may press
-	-- the button -- a member accepting is ignored rather than starting a second, competing job.
-	local party = PartyService.getParty(player)
-	if party and party.leader ~= player then
-		return
-	end
-	local members = PartyService.getMembers(player)
-
-	-- All-or-nothing on entitlement: a party job needs EVERY member to qualify. (The party UI is
-	-- expected to keep unqualified players from joining in the first place, so this only fires on a
-	-- stale party -- someone who lost the requirement, or a forged accept.)
+	-- All-or-nothing on entitlement: a party job needs EVERY member to qualify. Unlocking is one-way,
+	-- so canPlay re-checks the live requirements rather than trusting the Unlocked flag alone -- the
+	-- client board hides the Wash button on the same gates, and PartyService refuses a join on them,
+	-- so this only fires on a stale party or a forged accept.
 	for _, member in members do
-		if not qualifies(member, businessId) then
+		if not BusinessService.canPlay(member, businessId) then
 			return
 		end
 	end
@@ -254,9 +241,19 @@ local function accept(player: Player, businessId: any)
 	-- hides the HUD, stops cleaning, and cues the client's 1s camera pull-back + JobSummary reveal)
 	-- and mark this business eligible for one replay bonus for them. We no longer teleport home
 	-- here -- the JobSummary's GoHome button does that on demand.
-	local session = JobServer.new(businessId, building, members, multipliers, function(member: Player)
+	--
+	-- A party that FINISHES its job is also disbanded here: the group formed around this one
+	-- business, they played it, and each of them is now on their own summary free to play again or
+	-- go home -- none of which should silently keep them queued up together for another run. Only on
+	-- full completion; a single member bailing early leaves the party (and the job) intact for the
+	-- rest. The first member's disband takes the whole party down, so the later calls no-op.
+	local session: JobServer.JobServer
+	session = JobServer.new(businessId, building, members, multipliers, function(member: Player)
 		JobService.endJob(member)
 		replayBonusBusiness[member] = businessId
+		if session:isComplete() then
+			PartyService.disbandFor(member)
+		end
 	end)
 
 	for _, member in members do
@@ -268,6 +265,29 @@ local function accept(player: Player, businessId: any)
 		-- advances, and for anyone not in the tutorial.
 		TutorialService.notifyJobAccepted(member)
 	end
+
+	-- And the mirror of endJob's: a party that has just started working closes to newcomers.
+	PartyService.refreshJoinable()
+end
+
+-- The AcceptJob remote: one player pressing Wash on the board, or PlayAgain on their summary.
+--
+-- In a party this covers the WHOLE party -- everyone is put back on the clock and teleported in
+-- together -- and only the LEADER may fire it. A member pressing it is ignored rather than starting
+-- a second, competing job, or dragging the group somewhere the leader didn't choose. This is the one
+-- way a party's job starts other than everybody readying up: it's the leader replaying the run the
+-- party already agreed to.
+local function onAcceptJob(player: Player, businessId: any)
+	local party = PartyService.getParty(player)
+	if party then
+		if party.leader ~= player then
+			return
+		end
+		-- Cloned: the roster keeps changing under the session this builds.
+		startJob(businessId, table.clone(party.members))
+		return
+	end
+	startJob(businessId, { player })
 end
 
 -- Client's periodic wall-completion report (whole-wall units): trusted for the prorated
@@ -284,6 +304,13 @@ end
 -- the payout matches the % they were shown), pay the prorated reward, and end the job FOR THEM.
 -- On a shared job everyone else keeps cleaning, with the session's progress untouched. Ignored if
 -- they aren't on a job (nothing to finish).
+--
+-- Bailing also takes them OUT OF THE PARTY. A party exists to play one job together, so a member who
+-- has walked off that job has left the group in every sense that matters: keeping them in would hold
+-- the party closed to newcomers until they happened to press something, and would sweep them back
+-- into the run if the leader hit PlayAgain. Done AFTER the payout, so they're paid for their share
+-- of the group's progress first -- and by then their job is already ended, so the leave can't
+-- double-finish it.
 local function finishEarly(player: Player, wallAmount: any)
 	local job = jobs[player]
 	if not job then
@@ -293,6 +320,7 @@ local function finishEarly(player: Player, wallAmount: any)
 		job:reportWallProgress(player, wallAmount)
 	end
 	job:finishEarly(player)
+	PartyService.leaveFor(player)
 end
 
 -- Player pressed GoHome on the JobSummary: send them back to their plot spawn. This is the
@@ -320,6 +348,14 @@ local function goHome(player: Player)
 		-- Finishing the job and CHOOSING to leave the summary is what ends the tutorial's job step
 		-- -- PlayAgain keeps them on it. A no-op outside the tutorial.
 		TutorialService.notifyGoHome(player)
+
+		-- Going home also takes them out of any party -- the BACKSTOP for the same rule finishEarly
+		-- applies. Whichever way their run ended (bailing early, or finishing it in a party that
+		-- somehow wasn't disbanded), choosing to leave the summary is them done with the group's job,
+		-- so no party should still be holding them. Leaving is what everyone else's browser needs to
+		-- see the party open up again, and it's what stops the leader's PlayAgain from pulling back
+		-- someone who has already walked home.
+		PartyService.leaveFor(player)
 	end
 end
 
@@ -328,10 +364,20 @@ function JobService.init()
 	-- can't despawn mid-job. See pinBusinessesPersistent.
 	pinBusinessesPersistent()
 
-	AcceptJob.OnServerEvent:Connect(accept)
+	AcceptJob.OnServerEvent:Connect(onAcceptJob)
 	FinishEarly.OnServerEvent:Connect(finishEarly)
 	WallCompletion.OnServerEvent:Connect(reportWallCompletion)
 	GoHome.OnServerEvent:Connect(goHome)
+
+	-- A party whose members have ALL readied up is asking to start the job it formed around. This is
+	-- the ONLY way a party's job begins (see onAcceptJob), and it runs through the same startJob a
+	-- solo player's Wash does, so the entitlement, building and teleport checks all still apply.
+	-- Refused starts (a member mid-respawn) simply leave the party un-readied, to try again.
+	PartyService.onAllReady(function(party)
+		-- Cloned: startJob outlives this call through the session it builds, and the party's own
+		-- roster keeps changing under it as members come and go.
+		startJob(party.businessId, table.clone(party.members))
+	end)
 
 	-- Leaving a party (by choice, kick or disband) while on a SHARED job ends that player's run the
 	-- same way pressing FinishEarly would: they're paid for the group's progress and get their

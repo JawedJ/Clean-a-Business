@@ -241,6 +241,52 @@ function ExclusivePanels.open(name: string): boolean
 	return openExclusive(name)
 end
 
+-- Open `name` with NO animation on either side: whatever was open snaps away and this one snaps in.
+-- For handing off between panels that read as one flow rather than as two separate screens -- the
+-- party screens step through each other (and through the job board) this way, so picking a job feels
+-- like the same window changing rather than one panel swooping out while another springs in. Their
+-- FIRST open (from the HUD) and their exit-button close still animate normally, through open/close.
+--
+-- Anything in flight is overridden rather than waited on: both panels are snapped, so there's no
+-- animation left to collide with, and the queue is dropped so nothing pops up behind this.
+function ExclusivePanels.openInstant(name: string): boolean
+	if not canOpen(name) then
+		return false
+	end
+	local entry = entries[name]
+	if not entry then
+		return false
+	end
+
+	table.clear(pendingQueue)
+	local other = openName
+	if other and other ~= name then
+		local closing = entries[other]
+		if closing then
+			closing.panel:hideInstant()
+		end
+	end
+
+	openName = name
+	bringToFront(entry)
+	if entry.beforeOpen then
+		entry.beforeOpen()
+	end
+	entry.panel:showInstant()
+	return true
+end
+
+-- Snap every registered panel hidden, whatever is up. The forced path for "the screen belongs to
+-- something else now" -- a job starting -- so it deliberately ignores the tutorial's close lock, the
+-- same way a panel's own hideInstant + markHidden always has.
+function ExclusivePanels.hideAll()
+	table.clear(pendingQueue)
+	for _, entry in entries do
+		entry.panel:hideInstant()
+	end
+	openName = nil
+end
+
 -- Toggle `name`: close it if it's the open one, otherwise open it (closing any other first).
 -- Returns true if it acted, false if the click was ignored (mid-animation / pending open), so
 -- callers can gate side effects (e.g. a click sound) on the result.
@@ -297,6 +343,13 @@ function ExclusivePanels.close(name: string)
 		openName = nil
 		table.clear(pendingQueue)
 	end
+end
+
+-- Is `name` the panel currently up? True from the moment an open is committed, so it covers a panel
+-- still springing in. Lets a screen decide whether a state change should REDRAW it or move the
+-- player off it, without having to track its own open flag alongside this one.
+function ExclusivePanels.isOpen(name: string): boolean
+	return openName == name
 end
 
 -- `name` was hidden without animation (e.g. a job started, snapping it away): drop it as the
