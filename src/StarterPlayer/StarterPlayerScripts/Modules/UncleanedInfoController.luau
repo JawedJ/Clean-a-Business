@@ -37,7 +37,7 @@ local SCREEN_GUI_NAME = "ScreenGui"
 local LABEL_NAME = "UncleanedInfo"
 
 -- What JobClient.getRemaining reports.
-type Remaining = { walls: number, spills: number, decals: number, webs: number }
+type Remaining = { walls: number, spills: number, decals: number, webs: number, garbage: number }
 
 -- Player-facing names per cleanable kind, in the order they're listed. `plural` is used for
 -- anything but exactly one.
@@ -46,6 +46,7 @@ local KINDS: { { get: (Remaining) -> number, singular: string, plural: string } 
 	{ get = function(r) return r.spills end, singular = "Puddle", plural = "Puddles" },
 	{ get = function(r) return r.decals end, singular = "Stain", plural = "Stains" },
 	{ get = function(r) return r.webs end, singular = "Cobweb", plural = "Cobwebs" },
+	{ get = function(r) return r.garbage end, singular = "Piece of Trash", plural = "Pieces of Trash" },
 }
 
 -- How often (seconds) the line is re-checked while a job is on the clock. Cleans repaint it

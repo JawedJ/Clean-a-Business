@@ -1,0 +1,661 @@
+--!strict
+
+-- Picking up and carrying cleanable garbage: the INPUT + motion half of the mechanic. What we pick
+-- up is never the server's authored piece -- it's this session's own local CLONE of it (see
+-- GarbageVisibility), which is what keeps two players working the same building out of each other's
+-- way. The server (GarbageCarryService) stays the authority on WHO holds WHICH piece, identified by
+-- surfaceId, so a party member can't grab what someone else is already carrying.
+--
+--   * HOVER -- aiming at a piece of the active job's garbage that's within GarbageHoverRange and
+--     free outlines it in white. A piece a party member is holding doesn't highlight, and clicking
+--     it does nothing: the server refuses it too.
+--   * CLICK/TAP -- picks up the piece under the crosshair (out to the longer GarbagePickupRange, so
+--     a piece can be grabbed from slightly further than the outline invites), or lets go of what
+--     we're already holding.
+--   * CARRY -- the held piece is DRAGGED, not teleported: an AlignPosition/AlignOrientation pair
+--     pulls it toward a point in front of the crosshair, keeping its authored tilt and turning with
+--     the camera. Dragging it with physics rather than writing its CFrame is what makes the world's
+--     collisions apply -- a piece shoved at a wall stops at the wall instead of passing through it
+--     and stranding itself out of bounds. (It passes freely through CHARACTERS: the clones sit in a
+--     collision group that ignores players.) The carry point is also clamped to stop short of
+--     whatever we're aiming at, so looking down doesn't grind the piece into the floor.
+--   * PARTY -- our clone is ours alone, so movement can't replicate by itself. Instead the carrier
+--     streams its piece's CFrame (GarbageMove) and the other members position THEIR clone of the
+--     same surfaceId from it, anchored while it's in someone else's hands and released -- to fall
+--     under local physics -- when they let go.
+--   * TOOLS -- carrying is hands-full: picking up unequips whatever tool is held, and equipping a
+--     tool drops the piece. (Both directions, so the two mechanics can never overlap.)
+--
+-- A piece left alone for GarbageResetSeconds goes back to where it was authored, so a run of
+-- kicked-about garbage tidies itself up without waiting for the next job.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local GarbageResolver = require(ReplicatedStorage.SharedModules.GarbageResolver)
+local GarbageVisibility = require(script.Parent.GarbageVisibility)
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local CarryGarbage = Remotes:WaitForChild("CarryGarbage") :: RemoteEvent
+local GarbageCarry = Remotes:WaitForChild("GarbageCarry") :: RemoteEvent
+local GarbageMove = Remotes:WaitForChild("GarbageMove") :: RemoteEvent
+
+local localPlayer = Players.LocalPlayer
+
+-- White hover outline, drawn OVER the piece (AlwaysOnTop) rather than shaded onto it, so it reads
+-- clearly even on pale or busy garbage models -- an occluded outline on a light-coloured piece is
+-- almost invisible. The hover already requires a clear line of sight (it comes from a raycast), so
+-- drawing on top can't reveal anything through a wall.
+local HIGHLIGHT_COLOR = Color3.fromRGB(255, 255, 255)
+local HIGHLIGHT_FILL_TRANSPARENCY = 0.2
+local HIGHLIGHT_DEPTH_MODE = Enum.HighlightDepthMode.AlwaysOnTop
+
+-- How far past the ranges the aim ray is allowed to reach. The range checks themselves are done
+-- from the character (not the camera), so the ray only has to be long enough to still HIT a piece
+-- standing at arm's length.
+local AIM_MARGIN = 4
+
+-- Let go automatically if the carried piece ends up this far (studs) from the player. Measured off
+-- the carry distance so raising how far out the piece floats can't make the guard start misfiring on
+-- a perfectly normal carry; the slack covers the piece lagging behind a sprinting player. What it's
+-- actually for is a piece wedged behind geometry while the player walks off, which would otherwise
+-- be towed around the building by a constraint pulling through a wall.
+local MAX_CARRY_DISTANCE = Config.GarbageCarryDistance + 15
+
+-- Drag tuning. The pull is deliberately FINITE: an infinitely strong constraint would win against
+-- the collision solver and shove the piece through whatever it's pressed against, which is the
+-- behaviour these constraints exist to avoid. Both forces are scaled by the piece's own mass so a
+-- heavy model is carried as responsively as a light one.
+local CARRY_GRAVITIES = 20 -- pull force, in multiples of the piece's weight
+-- Capped well below what the pull could otherwise reach: a small part moving fast enough covers more
+-- than a floor's thickness in a single physics step and tunnels straight through it.
+local CARRY_MAX_VELOCITY = 35
+local CARRY_RESPONSIVENESS = 60
+local CARRY_TORQUE_PER_MASS = 1500
+local CARRY_MIN_TORQUE = 5000
+
+-- The carry point is pulled back to just short of whatever the aim ray hits, and never closer than
+-- this to the camera. Without it, looking down at the floor puts the target UNDERGROUND and the
+-- constraint spends every frame trying to shove the piece through the ground -- which it eventually
+-- wins, dropping the garbage out of the world.
+local CARRY_SURFACE_BUFFER = 1.5
+local CARRY_MIN_DISTANCE = 2.5
+
+-- How often (seconds) the carried piece's position is streamed to the rest of the party, and how far
+-- it must have moved to be worth a packet. A party member's copy is a smoothed follow, not a
+-- frame-exact mirror, so this is deliberately far below the frame rate.
+local RELAY_INTERVAL = 1 / 20
+local RELAY_MIN_DISTANCE = 0.05
+
+-- After letting go, how long we wait for the piece to fall and settle before reporting where it
+-- actually ended up. The relay stops the instant we drop, so without this last word the server still
+-- thinks the piece is up where we released it -- and would refuse a perfectly reasonable re-grab
+-- from beside where it landed.
+local SETTLE_REPORT_DELAY = 2
+
+-- How often (seconds) the idle-reset sweep runs. It only has to notice a piece has been sitting
+-- untouched for a minute, so it can be lazy.
+local RESET_SWEEP_INTERVAL = 2
+
+local TOOL_ID_ATTRIBUTE = "ToolId"
+
+-- Touch-only devices aim from the screen centre (crosshair) rather than the last tap -- same rule
+-- as ToolFloatController.
+local IS_MOBILE = UserInputService.TouchEnabled
+	and not UserInputService.KeyboardEnabled
+	and not UserInputService.MouseEnabled
+	and not UserInputService.GamepadEnabled
+
+local GarbageCarryController = {}
+
+-- The piece the SERVER says we're holding (a surfaceId), and our clone of it. Set only from the
+-- GarbageCarry confirmation, so we never drive a piece we weren't actually given.
+local carriedId: string? = nil
+local carried: PVInstance? = nil
+-- The carried piece's authored rotation and the camera yaw at pickup: the piece keeps its own tilt
+-- and turns with us, rather than snapping to face the camera.
+local carriedRotation = CFrame.identity
+local carriedYaw = 0
+-- The constraints dragging the carried piece, and the attachment they act on. All three are ours,
+-- built on pickup and destroyed on drop.
+local carryAttachment: Attachment? = nil
+local alignPosition: AlignPosition? = nil
+local alignOrientation: AlignOrientation? = nil
+-- Relay bookkeeping: when we last sent, and from where.
+local lastRelayAt = 0
+local lastRelayPosition: Vector3? = nil
+
+-- surfaceId -> the party member holding it, so we don't offer their piece for pickup and know to
+-- drive our copy of it from their relay rather than local physics.
+local carriedByOthers: { [string]: Player } = {}
+
+-- surfaceId -> os.clock() when it was last picked up or dropped by anyone on the session. A piece
+-- untouched for GarbageResetSeconds goes home.
+local lastTouched: { [string]: number } = {}
+
+-- The piece currently outlined, and the Highlight doing it (one instance, re-adorned).
+local hovered: Instance? = nil
+local highlight: Highlight? = nil
+
+-- The aim ray ignores our own character (we're standing right next to what we're aiming at). The
+-- filter is refreshed on each respawn rather than rebuilt per frame -- the hover check runs every
+-- frame, and a fresh table each time is pure collector churn.
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function refreshRayFilter()
+	local model = localPlayer.Character
+	rayParams.FilterDescendantsInstances = if model then { model } else {}
+end
+
+-- The carry ray ignores our character AND the piece we're holding (it sits in the way of its own
+-- target). Rebuilt on pickup, not per frame.
+local carryRayParams = RaycastParams.new()
+carryRayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function refreshCarryRayFilter(garbage: PVInstance?)
+	local model = localPlayer.Character
+	local exclude: { Instance } = {}
+	if model then
+		table.insert(exclude, model)
+	end
+	if garbage then
+		table.insert(exclude, garbage)
+	end
+	carryRayParams.FilterDescendantsInstances = exclude
+end
+
+local function activeJob(): string?
+	local id = localPlayer:GetAttribute(Config.ActiveJobAttribute)
+	return if type(id) == "string" then id else nil
+end
+
+local function humanoid(): Humanoid?
+	local model = localPlayer.Character
+	return if model then model:FindFirstChildOfClass("Humanoid") else nil
+end
+
+-- Where the player is standing, for the range checks (the same point the server measures from).
+local function rootPosition(): Vector3?
+	local model = localPlayer.Character
+	local root = model and model:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root.Position else nil
+end
+
+-- The crosshair ray: origin + direction the player is aiming.
+local function aimRay(): Ray?
+	local cam = Workspace.CurrentCamera
+	if not cam then
+		return nil
+	end
+	local point = if IS_MOBILE then cam.ViewportSize / 2 else UserInputService:GetMouseLocation()
+	return cam:ViewportPointToRay(point.X, point.Y)
+end
+
+-- Free/anchor a piece's parts. A piece being driven from a party member's relay is anchored, so our
+-- local physics doesn't fight the positions we're being told; ours (and any piece nobody holds) is
+-- free to fall and settle.
+local function setPieceAnchored(garbage: PVInstance, anchored: boolean)
+	for _, part in GarbageResolver.getParts(garbage) do
+		part.Anchored = anchored
+		if anchored then
+			part.AssemblyLinearVelocity = Vector3.zero
+			part.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end
+
+-- The piece of garbage under the crosshair within `range` studs of the player, or nil. Also
+-- requires a live job, the piece belonging to it, and no party member holding it. Called with the
+-- (shorter) hover range for the outline and the pickup range for a click. Returns the clone and its
+-- surfaceId -- the id is what the server speaks in.
+local function findTarget(range: number): (PVInstance?, string?)
+	local businessId = activeJob()
+	if not businessId then
+		return nil, nil
+	end
+	local ray = aimRay()
+	local from = rootPosition()
+	if not ray or not from then
+		return nil, nil
+	end
+
+	local result = Workspace:Raycast(ray.Origin, ray.Direction * (range + AIM_MARGIN), rayParams)
+	if not result then
+		return nil, nil
+	end
+
+	local identity = GarbageResolver.resolve(result.Instance)
+	if not identity or identity.businessId ~= businessId then
+		return nil, nil
+	end
+	if carriedByOthers[identity.surfaceId] then
+		return nil, nil
+	end
+
+	local position = GarbageResolver.getPosition(identity.garbage)
+	if not position or (from - position).Magnitude > range then
+		return nil, nil
+	end
+	-- The resolver only ever returns a BasePart or a Model.
+	return identity.garbage :: PVInstance, identity.surfaceId
+end
+
+-- Outline `garbage` in white, or clear the outline when nil.
+local function setHovered(garbage: PVInstance?)
+	if garbage == hovered then
+		return
+	end
+	hovered = garbage
+
+	local outline = highlight
+	if not outline then
+		return
+	end
+	if garbage then
+		outline.Adornee = garbage
+		outline.Enabled = true
+	else
+		outline.Adornee = nil
+		outline.Enabled = false
+	end
+end
+
+-- Put away any held tool. Carrying is hands-full, so picking up empties them.
+local function unequipTools()
+	local human = humanoid()
+	if human then
+		human:UnequipTools()
+	end
+end
+
+-- The part the drag acts on: the piece itself when it's a bare BasePart, else the Model's assembly
+-- root (its PrimaryPart's assembly, or any part's). Pulling the assembly root moves everything
+-- welded to it.
+local function dragPart(garbage: PVInstance): BasePart?
+	local part: BasePart? = if garbage:IsA("BasePart")
+		then garbage
+		else (garbage :: Model).PrimaryPart or garbage:FindFirstChildWhichIsA("BasePart", true)
+	if not part then
+		return nil
+	end
+	return part.AssemblyRootPart or part
+end
+
+-- Tear down the drag (on drop, on losing the piece, on respawn).
+local function releaseDrag()
+	refreshCarryRayFilter(nil)
+	if alignPosition then
+		alignPosition:Destroy()
+		alignPosition = nil
+	end
+	if alignOrientation then
+		alignOrientation:Destroy()
+		alignOrientation = nil
+	end
+	if carryAttachment then
+		carryAttachment:Destroy()
+		carryAttachment = nil
+	end
+end
+
+-- Build the drag for a piece the server just handed us: an attachment sitting at the piece's pivot,
+-- and the two constraints that pull that attachment to wherever we're aiming.
+local function buildDrag(garbage: PVInstance)
+	releaseDrag()
+	refreshCarryRayFilter(garbage)
+
+	local part = dragPart(garbage)
+	if not part then
+		return
+	end
+
+	-- Anchor the drag at the piece's PIVOT rather than the part's centre, so what floats in front of
+	-- the crosshair is the piece as a whole (matters for a multi-part model).
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "GarbageCarryAttachment"
+	attachment.CFrame = part.CFrame:Inverse() * garbage:GetPivot()
+	attachment.Parent = part
+	carryAttachment = attachment
+
+	-- Enough force to lift the piece briskly, not enough to win against a wall (see CARRY_GRAVITIES).
+	local mass = math.max(part.AssemblyMass, 0.1)
+	local position = Instance.new("AlignPosition")
+	position.Name = "GarbageCarryPosition"
+	position.Mode = Enum.PositionAlignmentMode.OneAttachment
+	position.Attachment0 = attachment
+	position.RigidityEnabled = false
+	position.ApplyAtCenterOfMass = true
+	position.MaxForce = mass * Workspace.Gravity * CARRY_GRAVITIES
+	position.MaxVelocity = CARRY_MAX_VELOCITY
+	position.Responsiveness = CARRY_RESPONSIVENESS
+	position.Position = garbage:GetPivot().Position
+	position.Parent = part
+	alignPosition = position
+
+	local orientation = Instance.new("AlignOrientation")
+	orientation.Name = "GarbageCarryOrientation"
+	orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	orientation.Attachment0 = attachment
+	orientation.RigidityEnabled = false
+	orientation.MaxTorque = math.max(mass * CARRY_TORQUE_PER_MASS, CARRY_MIN_TORQUE)
+	orientation.Responsiveness = CARRY_RESPONSIVENESS
+	orientation.CFrame = garbage:GetPivot().Rotation
+	orientation.Parent = part
+	alignOrientation = orientation
+end
+
+-- Ask the server to pick a piece up, or (nil) to let go of what we're holding. The server answers on
+-- GarbageCarry; nothing moves until it does.
+local function request(surfaceId: string?)
+	CarryGarbage:FireServer(surfaceId)
+end
+
+-- Click / tap: drop what we're carrying, else pick up whatever the crosshair is on.
+local function onClick()
+	if carriedId then
+		request(nil)
+		return
+	end
+	local _, surfaceId = findTarget(Config.GarbagePickupRange)
+	if not surfaceId then
+		return
+	end
+	-- Empty our hands up front rather than waiting for the confirmation, so the tool is already
+	-- away by the time the piece appears in front of us.
+	unequipTools()
+	request(surfaceId)
+end
+
+-- Stop carrying locally: drop the drag and forget the piece. The server has its own copy of this
+-- state; this is only our end of it.
+local function clearCarry()
+	carriedId = nil
+	carried = nil
+	lastRelayPosition = nil
+	releaseDrag()
+end
+
+-- Tell the server where a piece we just dropped came to rest, once it's had time to fall. Skipped if
+-- it's back in someone's hands by then -- their carry is a fresher truth than our settle.
+local function reportWhereItLanded(surfaceId: string)
+	task.delay(SETTLE_REPORT_DELAY, function()
+		if carriedId == surfaceId or carriedByOthers[surfaceId] then
+			return
+		end
+		local piece = GarbageVisibility.getPiece(surfaceId)
+		if piece and piece.Parent then
+			GarbageMove:FireServer(surfaceId, piece:GetPivot())
+		end
+	end)
+end
+
+-- The server confirmed a carry state for someone on our session. `surfaceId` nil = they let go.
+local function onCarryChanged(player: Player, surfaceId: string?)
+	-- Either way this piece has just been handled, so its idle reset starts over.
+	if surfaceId then
+		lastTouched[surfaceId] = os.clock()
+	end
+
+	if player == localPlayer then
+		if not surfaceId then
+			local dropped = carriedId
+			if dropped then
+				lastTouched[dropped] = os.clock()
+				reportWhereItLanded(dropped)
+			end
+			clearCarry()
+			return
+		end
+
+		local piece = GarbageVisibility.getPiece(surfaceId)
+		if not piece then
+			return
+		end
+		carriedId = surfaceId
+		carried = piece
+		-- Ours to simulate again (it may have been anchored while a member carried it).
+		setPieceAnchored(piece, false)
+		-- Snapshot the piece's authored tilt + our current yaw, so it keeps its orientation and
+		-- simply turns with the camera while carried. The yaw comes off the same aim ray the carry
+		-- uses, so the piece doesn't twitch on the first frame it's held.
+		carriedRotation = piece:GetPivot().Rotation
+		local ray = aimRay()
+		local look = if ray then ray.Direction else Vector3.new(0, 0, -1)
+		carriedYaw = math.atan2(-look.X, -look.Z)
+		buildDrag(piece)
+		-- Whatever we were about to grab, we're holding something now.
+		setHovered(nil)
+		return
+	end
+
+	-- A party member. Forget anything they were holding before, then take up the new piece: ours is
+	-- anchored and driven by their relay for as long as it's in their hands.
+	for id, holder in carriedByOthers do
+		if holder == player then
+			carriedByOthers[id] = nil
+			local piece = GarbageVisibility.getPiece(id)
+			if piece then
+				-- Released: let it fall and settle on our side too.
+				setPieceAnchored(piece, false)
+				lastTouched[id] = os.clock()
+			end
+		end
+	end
+	if surfaceId then
+		carriedByOthers[surfaceId] = player
+		local piece = GarbageVisibility.getPiece(surfaceId)
+		if piece then
+			setPieceAnchored(piece, true)
+		end
+		if hovered and hovered == GarbageVisibility.getPiece(surfaceId) then
+			setHovered(nil)
+		end
+	end
+end
+
+-- Stream the carried piece's position to the rest of the party, throttled -- it's a follow, not a
+-- frame-exact mirror.
+local function relay(garbage: PVInstance, surfaceId: string)
+	local now = os.clock()
+	if now - lastRelayAt < RELAY_INTERVAL then
+		return
+	end
+	local pivot = garbage:GetPivot()
+	if lastRelayPosition and (pivot.Position - lastRelayPosition).Magnitude < RELAY_MIN_DISTANCE then
+		return
+	end
+	lastRelayAt = now
+	lastRelayPosition = pivot.Position
+	GarbageMove:FireServer(surfaceId, pivot)
+end
+
+-- Per frame: outline what we're aiming at, or aim the drag holding what we're carrying.
+local function onRenderStepped()
+	local garbage = carried
+	local surfaceId = carriedId
+	if not garbage or not surfaceId then
+		local target = findTarget(Config.GarbageHoverRange)
+		setHovered(target)
+		return
+	end
+
+	-- The job (or the piece) can end under us; the server drops the carry, but stop driving it the
+	-- moment it's gone rather than waiting for the round trip.
+	if not garbage.Parent or not activeJob() then
+		return
+	end
+
+	local position = alignPosition
+	local orientation = alignOrientation
+	if not position or not orientation then
+		return
+	end
+
+	local ray = aimRay()
+	if not ray then
+		return
+	end
+
+	-- Hold the piece at the carry distance, but never PAST a surface: if the aim ray hits something
+	-- closer than that (the floor when looking down, a wall when facing one), the carry point stops
+	-- short of it. Otherwise the target sits inside the geometry and the constraint grinds the piece
+	-- into it until it pops through -- which is how carried garbage ends up under the map.
+	local direction = ray.Direction.Unit
+	local distance = Config.GarbageCarryDistance
+	local blocked = Workspace:Raycast(ray.Origin, direction * distance, carryRayParams)
+	if blocked then
+		distance = math.max(blocked.Distance - CARRY_SURFACE_BUFFER, CARRY_MIN_DISTANCE)
+	end
+	position.Position = ray.Origin + direction * distance
+	-- Turn the piece with the camera (about world up) from the yaw it was picked up at, keeping its
+	-- authored tilt intact.
+	local yaw = math.atan2(-direction.X, -direction.Z)
+	orientation.CFrame = CFrame.Angles(0, yaw - carriedYaw, 0) * carriedRotation
+
+	relay(garbage, surfaceId)
+
+	-- Wedged and left behind (see MAX_CARRY_DISTANCE): let go rather than tow it through the level.
+	local from = rootPosition()
+	if from and (from - garbage:GetPivot().Position).Magnitude > MAX_CARRY_DISTANCE then
+		request(nil)
+	end
+end
+
+-- Put any piece that's been sitting untouched for GarbageResetSeconds back where it was authored, so
+-- garbage kicked into a corner tidies itself up without waiting for the next job. Pieces in anyone's
+-- hands are left alone.
+local function sweepIdlePieces()
+	local now = os.clock()
+	for surfaceId, piece in GarbageVisibility.getPieces() do
+		local touched = lastTouched[surfaceId]
+		if not touched or now - touched < Config.GarbageResetSeconds then
+			continue
+		end
+		if surfaceId == carriedId or carriedByOthers[surfaceId] then
+			continue
+		end
+		local home = GarbageVisibility.getHome(surfaceId)
+		if home and piece.Parent then
+			piece:PivotTo(home)
+			for _, part in GarbageResolver.getParts(piece) do
+				if not part.Anchored then
+					part.AssemblyLinearVelocity = Vector3.zero
+					part.AssemblyAngularVelocity = Vector3.zero
+				end
+			end
+		end
+		lastTouched[surfaceId] = nil
+	end
+end
+
+-- Equipping a tool drops the piece: the two are mutually exclusive.
+local boundTools: { [Tool]: boolean } = {}
+
+local function tryBindTool(inst: Instance)
+	if not inst:IsA("Tool") or inst:GetAttribute(TOOL_ID_ATTRIBUTE) == nil or boundTools[inst] then
+		return
+	end
+	boundTools[inst] = true
+	inst.Equipped:Connect(function()
+		if carriedId then
+			request(nil)
+		end
+	end)
+end
+
+local function watchTools(root: Instance)
+	root.DescendantAdded:Connect(tryBindTool)
+	for _, desc in root:GetDescendants() do
+		tryBindTool(desc)
+	end
+end
+
+function GarbageCarryController.init()
+	-- One reusable outline, parented to the PlayerGui so it survives respawns and never has to be
+	-- rebuilt per hover.
+	local outline = Instance.new("Highlight")
+	outline.Name = "GarbageHover"
+	outline.FillColor = HIGHLIGHT_COLOR
+	outline.OutlineColor = HIGHLIGHT_COLOR
+	outline.FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY
+	outline.OutlineTransparency = 0
+	outline.DepthMode = HIGHLIGHT_DEPTH_MODE
+	outline.Enabled = false
+	outline.Parent = localPlayer:WaitForChild("PlayerGui")
+	highlight = outline
+
+	GarbageCarry.OnClientEvent:Connect(function(player, surfaceId)
+		if typeof(player) ~= "Instance" or not player:IsA("Player") then
+			return
+		end
+		if surfaceId ~= nil and type(surfaceId) ~= "string" then
+			return
+		end
+		onCarryChanged(player, surfaceId)
+	end)
+
+	-- A party member's carried piece moved: put OUR clone of it there. It's anchored for as long as
+	-- they hold it (see onCarryChanged), so this is the only thing moving it.
+	GarbageMove.OnClientEvent:Connect(function(player, surfaceId, cframe)
+		if type(surfaceId) ~= "string" or typeof(cframe) ~= "CFrame" then
+			return
+		end
+		if carriedByOthers[surfaceId] ~= player then
+			return
+		end
+		local piece = GarbageVisibility.getPiece(surfaceId)
+		if piece and piece.Parent then
+			piece:PivotTo(cframe)
+		end
+	end)
+
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then
+			return
+		end
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			onClick()
+		end
+	end)
+
+	-- A job ending drops the piece server-side, and GarbageVisibility throws every clone away; clear
+	-- our own state (and the outline) with them.
+	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(function()
+		clearCarry()
+		table.clear(carriedByOthers)
+		table.clear(lastTouched)
+		setHovered(nil)
+	end)
+
+	watchTools(localPlayer)
+	localPlayer.CharacterAdded:Connect(function(model)
+		-- A fresh character holds nothing; the server drops the carry on CharacterRemoving.
+		clearCarry()
+		setHovered(nil)
+		refreshRayFilter()
+		watchTools(model)
+	end)
+	refreshRayFilter()
+	if localPlayer.Character then
+		watchTools(localPlayer.Character)
+	end
+
+	RunService.RenderStepped:Connect(onRenderStepped)
+
+	task.spawn(function()
+		while true do
+			task.wait(RESET_SWEEP_INTERVAL)
+			sweepIdlePieces()
+		end
+	end)
+end
+
+return GarbageCarryController

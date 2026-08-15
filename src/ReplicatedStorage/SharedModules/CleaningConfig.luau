@@ -49,6 +49,42 @@ local CleaningConfig = {
 	-- VacuumController.
 	WebsFolderName = "CleanableWebs",
 
+	-- Cleanable GARBAGE (carryable litter) lives alongside the walls + stains + webs:
+	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableGarbage.<garbage>
+	-- Each <garbage> is the direct child of the folder carrying a GarbageSurfaceIdAttribute, and --
+	-- like a web -- may be authored as a single BasePart (a mesh/part IS the target) OR as a Model
+	-- grouping parts; GarbageResolver climbs to the folder child either way.
+	--
+	-- Garbage is not cleaned in place: the player walks up to it and CARRIES it (see
+	-- GarbageCarryService / GarbageCarryController), floating it in front of their crosshair until
+	-- they click again to let go. The carrier owns it on the network, so its movement replicates to
+	-- everyone without a per-frame remote.
+	--
+	-- A piece is ALWAYS unanchored and always collides with the building: that's what stops a player
+	-- walking their piece through a wall and out of the map, and what makes a dropped piece fall and
+	-- settle on the floor. What it never collides with is a CHARACTER -- every piece sits in its own
+	-- collision group that ignores the players' one (see GarbageCarryService), so garbage can't
+	-- shove, trap or be stood on by anyone. Left alone for GarbageResetSeconds, a piece returns to
+	-- the position it was authored at.
+	GarbageFolderName = "CleanableGarbage",
+	-- Attribute holding a piece of garbage's unique id. Capitalised "SurfaceId" -- the same spelling
+	-- the spill models use, and how the garbage is authored in Studio.
+	GarbageSurfaceIdAttribute = "SurfaceId",
+	-- How close (studs, character root -> the garbage's position) the player must be to pick a piece
+	-- up. The server re-checks this with a small tolerance for lag.
+	GarbagePickupRange = 13,
+	-- How close the player must be for a piece to light up under the crosshair. Kept as its own knob
+	-- (rather than reusing the pickup range) so the outline can be pulled in independently later; at
+	-- the same value, everything you can pick up also lights up.
+	GarbageHoverRange = 13,
+	-- How far in front of the crosshair (studs, from the camera along the aim ray) carried garbage is
+	-- pulled toward -- i.e. how far out from the player the piece floats while held.
+	GarbageCarryDistance = 7,
+	-- How long (seconds) a piece sits untouched where it was dropped before it returns to the
+	-- position it was authored at. Restarts on every pickup/drop, so a piece being worked with is
+	-- never yanked out from under the player.
+	GarbageResetSeconds = 60,
+
 	-- Cleanable spills (mop targets) live alongside the walls + stains:
 	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableSpills.<model>
 	-- Each <model> is a spill whose parts the player mops away by holding click: the mop
@@ -229,6 +265,12 @@ local CleaningConfig = {
 	-- unaffected (their weight is zeroed and the rest renormalised -- see CompletionWeights). Both
 	-- the client bar (JobClient) and the server payout (JobServer) read this so the two stay in sync.
 	DefaultWebWeight = 0.2,
+
+	-- Fraction (0..1) of the completion bar filled by a business's cleanable GARBAGE, when it has
+	-- any. Used for any business whose BusinessConfig entry doesn't set its own GarbageWeight.
+	-- Garbage carves out this slice exactly like spills and webs do; a business with no garbage is
+	-- unaffected (its weight is zeroed and the rest renormalised -- see CompletionWeights).
+	DefaultGarbageWeight = 0.2,
 
 	-- Fraction of the dirt that must be erased before a surface counts as clean.
 	-- Default for every wall; an individual CleanableWall part can override it with a

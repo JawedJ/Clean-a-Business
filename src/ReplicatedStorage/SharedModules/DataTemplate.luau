@@ -127,6 +127,11 @@ export type Business = {
 	-- businesses without webs ignore it entirely. Static catalog property (BusinessConfig), like
 	-- DecalWeight, not a per-player record field. See CompletionWeights.
 	WebWeight: number?,
+	-- Fraction (0..1) of the completion bar this business's cleanable GARBAGE fills, when it has
+	-- any. Optional -- omitted businesses with garbage use CleaningConfig.DefaultGarbageWeight;
+	-- businesses without garbage ignore it entirely. Static catalog property (BusinessConfig), like
+	-- DecalWeight, not a per-player record field. See CompletionWeights.
+	GarbageWeight: number?,
 }
 
 

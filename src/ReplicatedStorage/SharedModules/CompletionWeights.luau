@@ -4,12 +4,13 @@
 -- the server payout (JobServer.getCompletion) so the two can never disagree on how much of a
 -- job a given mix of cleanables represents.
 --
--- A job can have up to four kinds of cleanable: walls, stains (decals), spills and webs. Each kind
--- present contributes its own 0..1 "how done is this kind" share, weighted by how much of the
--- bar that kind owns:
+-- A job can have up to five kinds of cleanable: walls, stains (decals), spills, webs and garbage.
+-- Each kind present contributes its own 0..1 "how done is this kind" share, weighted by how much of
+-- the bar that kind owns:
 --   * spills own the business's SpillWeight (default DefaultSpillWeight) when present,
 --   * decals own its DecalWeight (default DefaultDecalWeight) when present,
 --   * webs own its WebWeight (default DefaultWebWeight) when present,
+--   * garbage owns its GarbageWeight (default DefaultGarbageWeight) when present,
 --   * walls own whatever is left.
 -- Weights for ABSENT kinds are zeroed and the remaining weights are renormalised to sum to 1,
 -- so the bar always reaches 1 when everything is cleaned no matter which kinds a business has.
@@ -25,15 +26,18 @@ export type Shares = {
 	hasDecals: boolean,
 	hasSpills: boolean,
 	hasWebs: boolean,
+	hasGarbage: boolean,
 	-- 0..1 fraction of each kind cleaned (ignored when that kind is absent).
 	wallShare: number,
 	decalShare: number,
 	spillShare: number,
 	webShare: number,
+	garbageShare: number,
 	-- Per-business tuning; the caller resolves the defaults before calling.
 	decalWeight: number,
 	spillWeight: number,
 	webWeight: number,
+	garbageWeight: number,
 }
 
 -- Combine per-kind shares into a single 0..1 completion fraction.
@@ -43,14 +47,19 @@ function CompletionWeights.combine(s: Shares): number
 	local decalW = if s.hasDecals then s.decalWeight else 0
 	local spillW = if s.hasSpills then s.spillWeight else 0
 	local webW = if s.hasWebs then s.webWeight else 0
-	local wallW = if s.hasWalls then math.max(1 - decalW - spillW - webW, 0) else 0
+	local garbageW = if s.hasGarbage then s.garbageWeight else 0
+	local wallW = if s.hasWalls then math.max(1 - decalW - spillW - webW - garbageW, 0) else 0
 
-	local total = wallW + decalW + spillW + webW
+	local total = wallW + decalW + spillW + webW + garbageW
 	if total <= 0 then
 		return 0
 	end
 
-	local sum = s.wallShare * wallW + s.decalShare * decalW + s.spillShare * spillW + s.webShare * webW
+	local sum = s.wallShare * wallW
+		+ s.decalShare * decalW
+		+ s.spillShare * spillW
+		+ s.webShare * webW
+		+ s.garbageShare * garbageW
 	return sum / total
 end
 

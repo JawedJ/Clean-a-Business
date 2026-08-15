@@ -18,6 +18,10 @@ local PLAYER_GROUP = "Players"
 
 local PlayerCollisionService = {}
 
+-- Exposed so other systems can make their own group ignore characters (see GarbageCarryService,
+-- whose carryable garbage collides with the building but never with a player).
+PlayerCollisionService.GROUP = PLAYER_GROUP
+
 local function applyToCharacter(character: Model)
 	for _, d in character:GetDescendants() do
 		if d:IsA("BasePart") then

@@ -24,6 +24,7 @@ local JobClient = require(script.Parent.JobClient)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 local SpillVisibility = require(script.Parent.SpillVisibility)
 local WebVisibility = require(script.Parent.WebVisibility)
+local GarbageVisibility = require(script.Parent.GarbageVisibility)
 local SurfaceManager = require(script.Parent.SurfaceManager)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -74,6 +75,11 @@ local function setJob(businessId: string?)
 	SpillVisibility.setActiveBusiness(businessId)
 	-- Webs (vacuum targets) are shown/hidden/restored the same way, owned by WebVisibility.
 	WebVisibility.setActiveBusiness(businessId)
+	-- Garbage is owned by GarbageVisibility too, but it doesn't merely show and hide: it rebuilds
+	-- this job's own local clones of the business's pieces at their authored positions. That IS the
+	-- garbage reset, and being local is what keeps two players working the same building from
+	-- dragging each other's garbage around.
+	GarbageVisibility.setActiveBusiness(businessId)
 	if businessId then
 		current = JobClient.new(businessId, emitProgress)
 	end

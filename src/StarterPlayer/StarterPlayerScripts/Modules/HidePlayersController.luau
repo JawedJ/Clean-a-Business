@@ -13,10 +13,18 @@
 -- How a character is hidden: every BasePart gets LocalTransparencyModifier = 1 (the same
 -- client-only, non-replicated knob the engine uses to hide your own body in first person -- it
 -- also hides the part's decals/textures), its particle emitters / beams / trails are disabled so
--- no stray spray hangs in the air, and its Humanoid's NameDisplayDistance is zeroed so the floating
+-- no stray spray hangs in the air, and its Humanoid's name display is switched off so the floating
 -- name (which transparency doesn't touch) disappears too. Parts / emitters / the Humanoid that
 -- stream in later (accessories, a tool on equip) are caught via DescendantAdded. Revealing restores
 -- every value we touched.
+--
+-- THE NAME NEEDS DisplayDistanceType, not just NameDisplayDistance. A humanoid's own
+-- NameDisplayDistance is only consulted when its DisplayDistanceType is Subject; the default is
+-- Viewer, under which the LOCAL player's humanoid decides what names they see -- so zeroing the
+-- hidden player's distance alone left their name floating over an invisible body. Setting their
+-- DisplayDistanceType to None turns the name (and health bar) off outright, whatever the viewer's
+-- settings say. We set both, so the hiding holds even if these characters are later authored as
+-- Subject.
 --
 -- The hidden set is re-evaluated on respawn (CharacterAdded) and as players join / leave.
 
@@ -35,14 +43,15 @@ local jobHidden: { [Player]: true } = {}
 
 -- Per hidden player: the character we applied to, the watcher catching late descendants, the parts
 -- we dimmed mapped to their prior LocalTransparencyModifier, the emitters we disabled mapped to
--- their prior Enabled, and the Humanoids we hid the name on mapped to their prior
--- NameDisplayDistance -- so reveal restores every value exactly.
+-- their prior Enabled, and the Humanoids we hid the name on mapped to the two name-display values we
+-- overwrote -- so reveal restores every value exactly.
+type NameDisplay = { distance: number, displayType: Enum.HumanoidDisplayDistanceType }
 type Hidden = {
 	character: Model,
 	descConn: RBXScriptConnection,
 	parts: { [BasePart]: number },
 	emitters: { [Instance]: boolean },
-	humanoids: { [Humanoid]: number },
+	humanoids: { [Humanoid]: NameDisplay },
 }
 local hidden: { [Player]: Hidden } = {}
 
@@ -69,12 +78,14 @@ local function hideInstance(inst: Instance, entry: Hidden)
 		end
 		emitter.Enabled = false
 	elseif inst:IsA("Humanoid") then
-		-- Zero the name-display distance to hide the floating character name (transparency
-		-- doesn't cover it). Client-side only; the server never rewrites it, so it sticks.
+		-- Switch the floating character name off (transparency doesn't cover it). DisplayDistanceType
+		-- None is what actually does it -- see the header on why the distance alone isn't enough.
+		-- Client-side only; the server never rewrites either value, so they stick.
 		if entry.humanoids[inst] == nil then
-			entry.humanoids[inst] = inst.NameDisplayDistance
+			entry.humanoids[inst] = { distance = inst.NameDisplayDistance, displayType = inst.DisplayDistanceType }
 		end
 		inst.NameDisplayDistance = 0
+		inst.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 	end
 end
 
@@ -129,9 +140,10 @@ function HidePlayersController._reveal(player: Player)
 			(emitter :: any).Enabled = wasEnabled
 		end
 	end
-	for humanoid, priorDistance in entry.humanoids do
+	for humanoid, prior in entry.humanoids do
 		if humanoid.Parent then
-			humanoid.NameDisplayDistance = priorDistance
+			humanoid.NameDisplayDistance = prior.distance
+			humanoid.DisplayDistanceType = prior.displayType
 		end
 	end
 	hidden[player] = nil

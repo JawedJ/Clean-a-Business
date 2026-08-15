@@ -21,6 +21,7 @@ local SurfaceManager = require(script.Parent.SurfaceManager)
 local DecalVisibility = require(script.Parent.DecalVisibility)
 local SpillVisibility = require(script.Parent.SpillVisibility)
 local WebVisibility = require(script.Parent.WebVisibility)
+local GarbageVisibility = require(script.Parent.GarbageVisibility)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local WallCleaned = Remotes:WaitForChild("WallCleaned") :: RemoteEvent
@@ -47,9 +48,11 @@ export type JobClient = typeof(setmetatable(
 		totalDecals: number,
 		totalSpills: number,
 		totalWebs: number,
+		totalGarbage: number,
 		cleanedDecals: number,
 		cleanedSpills: number,
 		cleanedWebs: number,
+		cleanedGarbage: number,
 		-- Which cleanables we've already counted, so counting one twice can't happen. It otherwise
 		-- can on a shared (party) job: a spill is client-driven, so two members mopping the same one
 		-- at the same time each count it locally AND one of them then receives the other's relayed
@@ -81,9 +84,11 @@ function JobClient.new(businessId: string, onProgress: ((number) -> ())?): JobCl
 	self.totalDecals = 0
 	self.totalSpills = 0
 	self.totalWebs = 0
+	self.totalGarbage = 0
 	self.cleanedDecals = 0
 	self.cleanedSpills = 0
 	self.cleanedWebs = 0
+	self.cleanedGarbage = 0
 	self.counted = {}
 	self.onProgress = onProgress
 
@@ -145,6 +150,9 @@ function JobClient._load(self: JobClient)
 	self.totalSpills = SpillVisibility.getSpillCount(self.businessId)
 	-- Web visibility works the same way (owned by WebVisibility); read the total here.
 	self.totalWebs = WebVisibility.getWebCount(self.businessId)
+	-- Garbage the same (owned by GarbageVisibility). Note the garbage slice of the bar can't fill
+	-- yet: picking a piece up isn't cleaning it -- see JobServer.markGarbageCleaned.
+	self.totalGarbage = GarbageVisibility.getGarbageCount(self.businessId)
 
 	if walls then
 		self.totalWalls = countChildren(walls, "BasePart")
@@ -226,6 +234,17 @@ function JobClient.onWebCleaned(self: JobClient, web: Instance)
 	self:_notifyProgress()
 end
 
+-- Called when a piece of garbage is cleaned on this job. Nothing calls this yet -- carrying a piece
+-- isn't cleaning it; the disposal half of the mechanic is still to come (see GarbageCarryService).
+-- Mirrors onWebCleaned; a piece is a BasePart or Model, hence Instance.
+function JobClient.onGarbageCleaned(self: JobClient, garbage: Instance)
+	if not self.alive or not self:_claim(garbage) then
+		return
+	end
+	self.cleanedGarbage += 1
+	self:_notifyProgress()
+end
+
 -- Live wall completion in whole-wall units (a half-washed wall counts as 0.5). This is what
 -- we report to the server for the finish-early reward, kept in the same units the server
 -- combines with its stain count.
@@ -237,12 +256,15 @@ end
 -- WHOLE walls -- a half-washed wall is still "uncleaned" -- so this is the wall count minus the
 -- fully finished ones, not the fractional amount the completion bar uses. Kinds the business
 -- doesn't have simply come back 0, since their totals are 0.
-function JobClient.getRemaining(self: JobClient): { walls: number, spills: number, decals: number, webs: number }
+function JobClient.getRemaining(
+	self: JobClient
+): { walls: number, spills: number, decals: number, webs: number, garbage: number }
 	return {
 		walls = math.max(self.totalWalls - SurfaceManager.getCleanedWallCount(), 0),
 		spills = math.max(self.totalSpills - self.cleanedSpills, 0),
 		decals = math.max(self.totalDecals - self.cleanedDecals, 0),
 		webs = math.max(self.totalWebs - self.cleanedWebs, 0),
+		garbage = math.max(self.totalGarbage - self.cleanedGarbage, 0),
 	}
 end
 
@@ -256,19 +278,23 @@ function JobClient.getCompletion(self: JobClient): number
 	local hasDecals = self.totalDecals > 0
 	local hasSpills = self.totalSpills > 0
 	local hasWebs = self.totalWebs > 0
+	local hasGarbage = self.totalGarbage > 0
 	local def = BusinessConfig[self.businessId]
 	return CompletionWeights.combine({
 		hasWalls = hasWalls,
 		hasDecals = hasDecals,
 		hasSpills = hasSpills,
 		hasWebs = hasWebs,
+		hasGarbage = hasGarbage,
 		wallShare = if hasWalls then self:getWallAmount() / self.totalWalls else 0,
 		decalShare = if hasDecals then self.cleanedDecals / self.totalDecals else 0,
 		spillShare = if hasSpills then self.cleanedSpills / self.totalSpills else 0,
 		webShare = if hasWebs then self.cleanedWebs / self.totalWebs else 0,
+		garbageShare = if hasGarbage then self.cleanedGarbage / self.totalGarbage else 0,
 		decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight,
 		spillWeight = (def and def.SpillWeight) or Config.DefaultSpillWeight,
 		webWeight = (def and def.WebWeight) or Config.DefaultWebWeight,
+		garbageWeight = (def and def.GarbageWeight) or Config.DefaultGarbageWeight,
 	})
 end
 

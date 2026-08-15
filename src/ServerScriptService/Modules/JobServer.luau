@@ -4,8 +4,8 @@
 -- when its last member leaves it. It is the AUTHORITY on job progress: it knows how many cleanables
 -- the business has (counted from the shared building), records which have been cleaned (deduped,
 -- fed in by the cleaning services after they validate each clean), and once every wall, stain,
--- spill and web is done it pays the completion reward to every member and hands back to JobService
--- to end the job for them.
+-- spill, web and piece of garbage is done it pays the completion reward to every member and hands
+-- back to JobService to end the job for them.
 --
 -- A session covers ONE OR MORE players: a solo player is a session of one, and a party (see
 -- PartyService) is a session of up to PartyConfig.MaxSize. Everything about the WORK is shared --
@@ -72,15 +72,18 @@ export type JobServer = typeof(setmetatable(
 		totalDecals: number,
 		totalSpills: number,
 		totalWebs: number,
+		totalGarbage: number,
 		-- SHARED across the session: cleaned by anyone means cleaned for everyone, counted once.
 		cleanedWalls: { [string]: boolean },
 		cleanedDecals: { [string]: boolean },
 		cleanedSpills: { [string]: boolean },
 		cleanedWebs: { [string]: boolean },
+		cleanedGarbage: { [string]: boolean },
 		cleanedWallCount: number,
 		cleanedDecalCount: number,
 		cleanedSpillCount: number,
 		cleanedWebCount: number,
+		cleanedGarbageCount: number,
 		-- True once the session has fully completed (every cleanable done). Not the same as a member
 		-- being finished -- see finishEarly.
 		completed: boolean,
@@ -107,18 +110,19 @@ local function countChildren(building: Instance, folderName: string, className: 
 	return n
 end
 
--- Count the cleanable webs authored in a building. Unlike walls/stains/spills a web may be a bare
--- BasePart OR a Model (see WebResolver), so count every direct child of the CleanableWebs folder
--- carrying a SurfaceIdAttribute -- exactly what the client counts (WebVisibility) so the two agree.
-local function countWebs(building: Instance): number
+-- Count the cleanables of one kind that may be authored as EITHER a bare BasePart or a Model (webs
+-- and garbage -- see WebResolver / GarbageResolver): every direct child of the folder carrying the
+-- given id attribute. Exactly what the client counts (WebVisibility / GarbageVisibility) so the two
+-- agree.
+local function countIdentified(building: Instance, folderName: string, idAttribute: string): number
 	local cleanables = building:FindFirstChild(Config.CleanablesFolderName)
-	local folder = cleanables and cleanables:FindFirstChild(Config.WebsFolderName)
+	local folder = cleanables and cleanables:FindFirstChild(folderName)
 	if not folder then
 		return 0
 	end
 	local n = 0
 	for _, child in folder:GetChildren() do
-		if (child:IsA("BasePart") or child:IsA("Model")) and child:GetAttribute(Config.SurfaceIdAttribute) ~= nil then
+		if (child:IsA("BasePart") or child:IsA("Model")) and child:GetAttribute(idAttribute) ~= nil then
 			n += 1
 		end
 	end
@@ -143,15 +147,18 @@ function JobServer.new(
 	self.totalWalls = countChildren(building, Config.WallsFolderName, "BasePart")
 	self.totalDecals = countChildren(building, Config.DecalsFolderName, "Model")
 	self.totalSpills = countChildren(building, Config.SpillsFolderName, "Model")
-	self.totalWebs = countWebs(building)
+	self.totalWebs = countIdentified(building, Config.WebsFolderName, Config.SurfaceIdAttribute)
+	self.totalGarbage = countIdentified(building, Config.GarbageFolderName, Config.GarbageSurfaceIdAttribute)
 	self.cleanedWalls = {}
 	self.cleanedDecals = {}
 	self.cleanedSpills = {}
 	self.cleanedWebs = {}
+	self.cleanedGarbage = {}
 	self.cleanedWallCount = 0
 	self.cleanedDecalCount = 0
 	self.cleanedSpillCount = 0
 	self.cleanedWebCount = 0
+	self.cleanedGarbageCount = 0
 	self.completed = false
 	self.alive = true
 
@@ -271,14 +278,22 @@ function JobServer.isWebCleaned(self: JobServer, surfaceId: string): boolean
 	return self.cleanedWebs[surfaceId] == true
 end
 
+function JobServer.isGarbageCleaned(self: JobServer, surfaceId: string): boolean
+	return self.cleanedGarbage[surfaceId] == true
+end
+
 -- Total cleanables, and how many are fully done server-side (deduped WallCleaned + validated
 -- stains) -- the authoritative count the full-completion trigger uses.
 function JobServer.getTotal(self: JobServer): number
-	return self.totalWalls + self.totalDecals + self.totalSpills + self.totalWebs
+	return self.totalWalls + self.totalDecals + self.totalSpills + self.totalWebs + self.totalGarbage
 end
 
 function JobServer.getCleaned(self: JobServer): number
-	return self.cleanedWallCount + self.cleanedDecalCount + self.cleanedSpillCount + self.cleanedWebCount
+	return self.cleanedWallCount
+		+ self.cleanedDecalCount
+		+ self.cleanedSpillCount
+		+ self.cleanedWebCount
+		+ self.cleanedGarbageCount
 end
 
 -- Record a member's latest wall completion (whole-wall units). Client-trusted -- clamped to
@@ -319,6 +334,7 @@ function JobServer.getCompletion(self: JobServer): number
 	local hasDecals = self.totalDecals > 0
 	local hasSpills = self.totalSpills > 0
 	local hasWebs = self.totalWebs > 0
+	local hasGarbage = self.totalGarbage > 0
 	local walls = math.clamp(self:_groupWallAmount(), self.cleanedWallCount, self.totalWalls)
 	local def = BusinessConfig[self.businessId]
 	return CompletionWeights.combine({
@@ -326,13 +342,16 @@ function JobServer.getCompletion(self: JobServer): number
 		hasDecals = hasDecals,
 		hasSpills = hasSpills,
 		hasWebs = hasWebs,
+		hasGarbage = hasGarbage,
 		wallShare = if hasWalls then walls / self.totalWalls else 0,
 		decalShare = if hasDecals then self.cleanedDecalCount / self.totalDecals else 0,
 		spillShare = if hasSpills then self.cleanedSpillCount / self.totalSpills else 0,
 		webShare = if hasWebs then self.cleanedWebCount / self.totalWebs else 0,
+		garbageShare = if hasGarbage then self.cleanedGarbageCount / self.totalGarbage else 0,
 		decalWeight = (def and def.DecalWeight) or Config.DefaultDecalWeight,
 		spillWeight = (def and def.SpillWeight) or Config.DefaultSpillWeight,
 		webWeight = (def and def.WebWeight) or Config.DefaultWebWeight,
+		garbageWeight = (def and def.GarbageWeight) or Config.DefaultGarbageWeight,
 	})
 end
 
@@ -475,6 +494,7 @@ function JobServer._checkComplete(self: JobServer)
 		and self.cleanedDecalCount >= self.totalDecals
 		and self.cleanedSpillCount >= self.totalSpills
 		and self.cleanedWebCount >= self.totalWebs
+		and self.cleanedGarbageCount >= self.totalGarbage
 	then
 		self:complete()
 	end
@@ -517,6 +537,20 @@ function JobServer.markWebCleaned(self: JobServer, surfaceId: string): boolean
 	end
 	self.cleanedWebs[surfaceId] = true
 	self.cleanedWebCount += 1
+	self:_checkComplete()
+	return true
+end
+
+-- Record a piece of garbage as cleaned for the whole session (idempotent). NOTE: nothing calls this
+-- yet -- carrying garbage is only the first half of the mechanic (see GarbageCarryService); the
+-- clean itself (binning it) is still to come. Until then a business with garbage authored can't
+-- reach full completion, and its garbage slice of the bar stays empty.
+function JobServer.markGarbageCleaned(self: JobServer, surfaceId: string): boolean
+	if self.cleanedGarbage[surfaceId] then
+		return false
+	end
+	self.cleanedGarbage[surfaceId] = true
+	self.cleanedGarbageCount += 1
 	self:_checkComplete()
 	return true
 end
