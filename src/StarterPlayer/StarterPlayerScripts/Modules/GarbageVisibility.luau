@@ -161,15 +161,25 @@ function GarbageVisibility.getPieces(): { [string]: PVInstance }
 	return clones
 end
 
--- Drop a single piece out of the world once it's been cleaned. (Unused until the disposal half of
--- the mechanic lands -- a clone is ours to destroy, unlike the shared instances the other cleanables
--- have to reparent.)
+-- Drop a single piece out of the world once it's been cleaned. A clone is ours to destroy, unlike
+-- the shared instances the other cleanables have to reparent.
 function GarbageVisibility.hideOne(surfaceId: string)
 	local clone = clones[surfaceId]
 	if clone then
 		clone:Destroy()
 		clones[surfaceId] = nil
 	end
+end
+
+-- Hand a piece over to somebody else: it stops being one of the job's pieces (so nothing carries,
+-- hovers or idle-resets it any more) but is NOT destroyed -- the caller owns the instance from here
+-- and must destroy it. Used by GarbageShredController, which needs the clone to stay in the world
+-- for the length of the disposal animation while being untouchable by everything else.
+function GarbageVisibility.takePiece(surfaceId: string): PVInstance?
+	local clone = clones[surfaceId]
+	clones[surfaceId] = nil
+	cloneHome[surfaceId] = nil
+	return clone
 end
 
 function GarbageVisibility.init()

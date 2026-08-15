@@ -56,8 +56,10 @@ export type JobClient = typeof(setmetatable(
 		-- Which cleanables we've already counted, so counting one twice can't happen. It otherwise
 		-- can on a shared (party) job: a spill is client-driven, so two members mopping the same one
 		-- at the same time each count it locally AND one of them then receives the other's relayed
-		-- SpillCleaned. Keyed by the shared instance, which every member resolves identically.
-		counted: { [Instance]: boolean },
+		-- SpillCleaned. Keyed by the shared instance, which every member resolves identically --
+		-- except garbage, whose instances are per-client CLONES, so it's keyed by surfaceId instead
+		-- (hence the loose key type).
+		counted: { [any]: boolean },
 		-- Called with the new 0..1 completion after every clean (and once totals load), so
 		-- the completion UI can track progress. nil if no one is listening.
 		onProgress: ((number) -> ())?,
@@ -150,8 +152,8 @@ function JobClient._load(self: JobClient)
 	self.totalSpills = SpillVisibility.getSpillCount(self.businessId)
 	-- Web visibility works the same way (owned by WebVisibility); read the total here.
 	self.totalWebs = WebVisibility.getWebCount(self.businessId)
-	-- Garbage the same (owned by GarbageVisibility). Note the garbage slice of the bar can't fill
-	-- yet: picking a piece up isn't cleaning it -- see JobServer.markGarbageCleaned.
+	-- Garbage the same (owned by GarbageVisibility). Its slice of the bar fills as pieces are fed
+	-- into the business's shredder -- see GarbageShredController / GarbageShredService.
 	self.totalGarbage = GarbageVisibility.getGarbageCount(self.businessId)
 
 	if walls then
@@ -189,12 +191,13 @@ function JobClient._onWallCleaned(self: JobClient, part: BasePart)
 end
 
 -- True the first time this cleanable is reported, false every time after. Guards the counters
--- against a cleanable being reported twice (see `counted`).
-function JobClient._claim(self: JobClient, instance: Instance): boolean
-	if self.counted[instance] then
+-- against a cleanable being reported twice (see `counted`). The key is the shared instance for
+-- everything except garbage, which uses its surfaceId.
+function JobClient._claim(self: JobClient, key: any): boolean
+	if self.counted[key] then
 		return false
 	end
-	self.counted[instance] = true
+	self.counted[key] = true
 	return true
 end
 
@@ -234,11 +237,12 @@ function JobClient.onWebCleaned(self: JobClient, web: Instance)
 	self:_notifyProgress()
 end
 
--- Called when a piece of garbage is cleaned on this job. Nothing calls this yet -- carrying a piece
--- isn't cleaning it; the disposal half of the mechanic is still to come (see GarbageCarryService).
--- Mirrors onWebCleaned; a piece is a BasePart or Model, hence Instance.
-function JobClient.onGarbageCleaned(self: JobClient, garbage: Instance)
-	if not self.alive or not self:_claim(garbage) then
+-- Called by JobController when a piece of garbage is fed into the business's shredder -- by us or by
+-- a party member (the server confirms it to the whole session). The piece is disposed of by
+-- GarbageShredController, which owns the animation; here we just track progress. Identified by
+-- surfaceId rather than by instance, because every client's piece is its OWN clone.
+function JobClient.onGarbageCleaned(self: JobClient, surfaceId: string)
+	if not self.alive or not self:_claim(surfaceId) then
 		return
 	end
 	self.cleanedGarbage += 1

@@ -85,6 +85,33 @@ local CleaningConfig = {
 	-- never yanked out from under the player.
 	GarbageResetSeconds = 60,
 
+	-- === The Shredder: how a piece of garbage is actually CLEANED ===
+	-- Every business that has cleanable garbage authors one shredder model directly in the building:
+	--   Workspace.<BusinessesFolderName>.<businessId>.<ShredderModelName>
+	-- holding three invisible parts: a Hitbox the garbage is fed into, and two markers p1/p2 the
+	-- piece is drawn through on its way in. Touching the hitbox with a piece takes it out of the
+	-- player's hands and runs the disposal animation (see GarbageShredController), after which the
+	-- piece is gone and counts toward the job (GarbageShredService -> JobServer.markGarbageCleaned).
+	ShredderModelName = "Shredder",
+	-- The part a piece has to touch to be fed in. Named the same as the stains'/spills' hitbox.
+	ShredderHitboxName = "Hitbox",
+	-- The two markers the piece is pulled through: p1 is the mouth (where it's held for a beat) and
+	-- p2 is inside/below the machine (where it's destroyed).
+	ShredderEntryPartName = "p1",
+	ShredderExitPartName = "p2",
+	-- The disposal animation's three beats, in seconds: snap to the mouth, hold there, then get
+	-- dragged down through the blades (shaking violently) and vanish. Shared rather than
+	-- client-local because the SERVER waits out the same total before marking the piece cleaned, so
+	-- the completion bar ticks as the piece disappears rather than as it starts moving.
+	GarbageShredEntrySeconds = 0.3,
+	GarbageShredHoldSeconds = 1,
+	GarbageShredDropSeconds = 2,
+	-- The SFX (ReplicatedStorage.Audios.SFX.<name>) started once the piece reaches the mouth and cut
+	-- off the instant it's shredded -- the sound is the machine chewing, so it lasts exactly as long
+	-- as there's something in it. Played POSITIONALLY, out of the shredder's hitbox (see
+	-- SoundManager.playAt), so it fades with distance like the machine it's coming from.
+	ShredderSoundName = "ShredderSFX",
+
 	-- Cleanable spills (mop targets) live alongside the walls + stains:
 	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableSpills.<model>
 	-- Each <model> is a spill whose parts the player mops away by holding click: the mop

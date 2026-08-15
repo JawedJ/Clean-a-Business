@@ -9,11 +9,13 @@ Simulator-style Roblox game. Players clean businesses with tools (broom, pressur
 washer, mop, vacuum) and continuously unlock more content — tools, businesses, upgrades, plot
 expansions — as they progress.
 
-- **Four cleanable kinds, one per tool.** A business can hold **walls** (pressure washer —
-  per-pixel `EditableImage` erase), **stains** (broom — server-timed scrub), **spills**
-  (mop — client-driven Transparency fade), and **webs** (vacuum — server-timed removal, like
-  stains). Each kind is optional; a business declares whichever it authors, and the completion
-  bar weights the kinds it has (see `CompletionWeights`).
+- **Five cleanable kinds.** Four are tool-driven: **walls** (pressure washer — per-pixel
+  `EditableImage` erase), **stains** (broom — server-timed scrub), **spills** (mop —
+  client-driven Transparency fade), and **webs** (vacuum — server-timed removal, like stains).
+  The fifth, **garbage**, is handled bare-handed: the player picks a piece up, carries it, and
+  feeds it into the business's **shredder** (see *Garbage carrying* and *Garbage shredding*). Each
+  kind is optional; a business declares whichever it authors, and the completion bar weights the
+  kinds it has (see `CompletionWeights`). `gasStation` is the one business with garbage today.
 
 - **6 players per server** (target), each with their own **plot** (a personal
   home/spawn base, assigned on join). Set by `CleaningConfig.PlotCount`. Each plot hosts a
@@ -74,20 +76,31 @@ report, so a player can only ever clean the one business they've accepted. Concr
   against the active job and throttles per a cooldown; spills grant a **flat per-spill reward** on
   the single `CleanSpill` completion report (deduped). Neither can be farmed off a job the player
   doesn't hold.
+- **Garbage is the exception to all of this, deliberately.** Because garbage *moves*, a shared
+  instance would let two sessions drag each other's pieces around — so what a player carries is a
+  **client-local clone**, and its position is never server state (see *Garbage carrying*). The
+  server owns only **who holds which `surfaceId`, per session**, and relays the carrier's position
+  to the rest of *their* party. Position is therefore client-trusted; that's acceptable while
+  carrying pays nothing. The **act of cleaning** it — feeding it into the shredder — *is* validated
+  and paid server-side like every other kind: the carry is presentation, the clean is authority
+  (see *Garbage shredding*).
 - **Completion is server-authoritative.** The player's `JobServer` counts the building's
-  cleanables (walls, stains, spills, **and webs**) and only counts cleans the cleaning services
-  have already validated (deduped), so the job completes — and pays its `BaseReward` (Cash) +
-  `XpReward` (XP) bonus — exactly once, when every wall, stain, spill, and web is genuinely done.
-  Webs are cleaned like stains (a server-timed vacuum click — see *Web cleaning*).
+  cleanables (walls, stains, spills, webs, **and garbage**) and only counts cleans the cleaning
+  services have already validated (deduped), so the job completes — and pays its `BaseReward`
+  (Cash) + `XpReward` (XP) bonus — exactly once, when every wall, stain, spill, web and piece of
+  garbage is genuinely done. Webs are cleaned like stains (a server-timed vacuum click — see *Web
+  cleaning*); garbage is cleaned by being shredded (`GarbageShredService` → `markGarbageCleaned`
+  — see *Garbage shredding*).
 - **Finishing early is a deliberate client/server hybrid.** The prorated finish-early payout
   needs the *partial* completion %, but wall pixel-erasing is client-only (unverifiable), so
   walls are **client-reported**: the client pushes its wall completion (`WallCompletion`
   remote, ~1/s while changing, plus a fresh value with `FinishEarly`) and the server trusts
   it, clamped to `[server-verified full walls, totalWalls]`. Stains, spills **and webs** stay
-  server-authoritative (`cleanedDecalCount` / `cleanedSpillCount` / `cleanedWebCount` — spills and
-  webs only ever report at full completion, so there's no partial fraction to trust). So
-  finish-early reward =
-  `weighted(reportedWalls, cleanedStains, cleanedSpills, cleanedWebs) / total × bonus` (per `CompletionWeights`),
+  server-authoritative (`cleanedDecalCount` / `cleanedSpillCount` / `cleanedWebCount` /
+  `cleanedGarbageCount` — spills, webs and garbage only ever report at full completion, so there's
+  no partial fraction to trust). So finish-early reward =
+  `weighted(reportedWalls, cleanedStains, cleanedSpills, cleanedWebs, cleanedGarbage) / total × bonus`
+  (per `CompletionWeights`),
   and it does **not** count as a completion. This is intentionally exploitable on the wall fraction
   — accepted so the payout can track the live % shown to the player. **Full** completion is
   unaffected: it still gates on the authoritative deduped counts only.
@@ -139,11 +152,12 @@ report, so a player can only ever clean the one business they've accepted. Concr
   - **`JobServer`** (class) is one **session**, covering one *or more* players (a solo player is
     a session of one). It is the authority on progress: it counts the business's cleanables from
     the shared building, records validated cleans (`markWallCleaned` / `markDecalCleaned` /
-    `markSpillCleaned` / `markWebCleaned`, deduped **across the whole session**), and exposes
+    `markSpillCleaned` / `markWebCleaned` / `markGarbageCleaned` — deduped **across the whole
+    session**), and exposes
     `getCompletion`/`isComplete`. The *work* is shared — one set of cleaned cleanables, one
     completion percentage — while the *payout* is per member (own replay multiplier, own
     mastery/skill boosts, own `Completions` tally, own summary).
-    When every wall, stain, spill, and web is done it pays **every member still on the session**
+    When every wall, stain, spill, web and piece of garbage is done it pays **every member still on the session**
     the `BaseReward` (Cash) + `XpReward` (XP) **completion bonus** and calls back to `JobService`
     to end the job for each (clearing `ActiveJob`, which ends the state on the client).
     `finishEarly(player)` instead ends **one** member's run, paying a **prorated** share of that
@@ -159,10 +173,12 @@ report, so a player can only ever clean the one business they've accepted. Concr
     per-client wall **EditableImage overlays** (via the `SurfaceManager` engine) and tracks
     local completion for the UI. Completion is **smooth** — it sums each wall's live erased
     fraction (`SurfaceManager.getCleanedWallAmount`), so the bar moves mid-wall — and combines
-    walls + stains + spills + webs through the shared **`CompletionWeights`** (same weighting the
-    server uses), pushed to listeners via `JobController.onProgressChanged` on every stroke/clean.
-    Stains, spills, and webs each step whole (`cleanedDecals`/`cleanedSpills`/`cleanedWebs`, fed in
-    by `JobController`).
+    walls + stains + spills + webs + garbage through the shared **`CompletionWeights`** (same
+    weighting the server uses), pushed to listeners via `JobController.onProgressChanged` on every
+    stroke/clean. Stains, spills, webs and garbage each step whole
+    (`cleanedDecals`/`cleanedSpills`/`cleanedWebs`/`cleanedGarbage`, fed in by `JobController`).
+    Everything is deduped by the **shared instance** except garbage, whose instances are per-client
+    clones — that one is deduped by `surfaceId`.
   - **`JobCompletionController`** (client) drives the completion HUD
     (`ScreenGui.JobCompletion`): a progress bar + `PercentageLabel` that fill from
     `JobClient`'s live completion, a `CurrentReward` label showing the Cash you'd bank by
@@ -243,13 +259,18 @@ Play a job **with friends**: one job, one set of cleanables, one completion bar,
   when its members finish is an *ordered* statement from the job layer. `PartyService`'s own
   `ActiveJob` attribute watcher remains as a backstop; both just recompute from live state, so the
   double call is harmless.
-- **Shared cleaning.** All four cleanable kinds are deduped once per session, and the confirmation
+- **Shared cleaning.** All four *cleanable* kinds are deduped once per session, and the confirmation
   is mirrored to the whole session so the cleanable disappears on *everyone's* screen:
   `DecalCleaned` / `WebCleaned` are fired to every member (not just the cleaner), and spills — which
   are client-driven — add **`SpillCleaned`**, relayed to the *other* members after the mopper's own
   client has already hidden it. The per-clean Cash/XP stays with whoever did the work;
   `JobClient` counts each cleanable **once** (`_claim`), so a relay racing a local clean can't
   double-count the bar.
+- **Shared garbage is a different shape**, because each member holds their **own clone** of a piece
+  rather than one shared instance. What's mirrored is the carry: `GarbageCarry` tells the session who
+  holds which `surfaceId` (so two members can't grab the same piece), and the carrier's `GarbageMove`
+  stream drives the other members' copies. Nothing crosses to another session. See *Garbage
+  carrying*.
 - **Shared wall overlays.** Each client builds its own `EditableImage` per wall and the pixels never
   leave that client, so what's shared is the **strokes**, not the image: `PressureWasherController`
   queues every erase as `{ part, to, from?, radius }` and flushes the batch ~10×/s over
@@ -748,9 +769,16 @@ saved per player is the **`Unlocked`** flag (gates accepting a job, resolved by
 ### `CleaningConfig` (shared)
 Single source of truth for cleaning tunables, consumed by client and server:
 the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`/
-`DecalsFolderName`/`SpillsFolderName`/`WebsFolderName`/`InteriorFolderName` (props/windows the
-cleaning ray ignores), `HitboxName`/`SurfaceIdAttribute` (stains/walls, and also the web id) +
-`SpillSurfaceIdAttribute` (the capital-S spill id), `PlotCount`/`PlotAttribute`/
+`DecalsFolderName`/`SpillsFolderName`/`WebsFolderName`/`GarbageFolderName`/`InteriorFolderName`
+(props/windows the cleaning ray ignores), `HitboxName`/`SurfaceIdAttribute` (stains/walls, and also
+the web id) + `SpillSurfaceIdAttribute`/`GarbageSurfaceIdAttribute` (the capital-S spill and garbage
+ids), the garbage carry tunables `GarbagePickupRange` (13) / `GarbageHoverRange` (13, its own knob so
+the outline can be pulled in independently) / `GarbageCarryDistance` (7, how far out front a held
+piece floats) / `GarbageResetSeconds` (60), the shredder's layout
+`ShredderModelName`/`ShredderHitboxName`/`ShredderEntryPartName`/`ShredderExitPartName` and its three
+animation beats `GarbageShredEntrySeconds` (0.3) / `GarbageShredHoldSeconds` (1) /
+`GarbageShredDropSeconds` (2) — shared because the server waits out the same total before counting
+the piece — plus `ShredderSoundName`, `PlotCount`/`PlotAttribute`/
 `PlotSpawnPartName`, the plot-progression names `PlotButtonsFolderName`/
 `PlotSpawnablesFolderName`/`PlotButtonInteractPartName`, the button attribute names
 `PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`, the
@@ -759,8 +787,8 @@ attributes `PlotSpawnableGemFlatAttribute`/`PlotSpawnableGemMultiplierAttribute`
 `PlotSpawnableGemRateAttribute`, `ActiveJobAttribute`, `TeleportPartName`/`TeleportOffset`,
 `DirtAsset`, `ImageSize`, `BrushWorldRadius`, `MaxBridgeWorldDistance`,
 `CompletionThreshold`, the completion-bar weights `DefaultDecalWeight`/`DefaultSpillWeight`/
-`DefaultWebWeight` (the slice of the bar stains/spills/webs own when a business has them; walls get
-the rest — see `CompletionWeights`), brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
+`DefaultWebWeight`/`DefaultGarbageWeight` (the slice of the bar stains/spills/webs/garbage own when a
+business has them; walls get the rest — see `CompletionWeights`), brown fallback, and `FlipU`/`FlipV` (flip if the cleaned spot
 appears mirrored from where you aim).
 
 **Walk speed** comes from two distinct sources, deliberately not shared:
@@ -916,6 +944,146 @@ fires `CleanWeb` and animates a billboard bar over the web for the same UseTime.
 cosmetic (the server owns timing/completion); it tears down early if the web is hidden/removed. The
 aim ray excludes the player's own character and every business's spill folders.
 
+### Garbage carrying (implemented)
+The **fifth** cleanable kind, and the only one with no tool: the player walks up to a piece of
+litter, clicks it, and **carries** it in front of them. Getting rid of it is *Garbage shredding*,
+below.
+
+- A piece of **garbage** is a **direct child of** a business's `CleanableGarbage` folder, at:
+  `Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableGarbage.<garbage>`.
+  - Like a web, it may be a single **`BasePart`** *or* a **`Model`**. `GarbageResolver`
+    (SharedModules) climbs from any hit part to the folder's direct child and reads its
+    **`SurfaceId`** attribute (capital-S, like spills; a number is normalised to a string),
+    yielding `{ businessId, surfaceId, garbage }`, plus `getPosition`/`getParts` helpers both
+    sides share.
+
+- **Why garbage can't be a shared instance.** Every other cleanable is one server instance that
+  never moves, so each client can simply hide or show its own view of it. Garbage moves — and a
+  shared instance has **one position for the whole server**, which means two players (or two
+  parties) working the same building would drag each other's pieces around, and one starting a job
+  would reset the other's mid-run. So:
+  - The **authored pieces are templates**. `GarbageCarryService` pins them at startup (`Anchored`,
+    `CanCollide = false`) and never moves them again; their CFrame at that moment is each piece's
+    **home**.
+  - Every client takes them **off-world** and, when a job starts, **clones** that business's pieces
+    back into the very same `CleanableGarbage` folder (`GarbageVisibility`). Cloning them *in
+    place* is what keeps `GarbageResolver` — and everything downstream of it — working unchanged.
+  - A clone exists on one machine only, so carrying, dropping and resetting it are invisible to
+    every other session. **Rebuilding the clones IS the job-start reset**, the same fresh slate
+    re-accepting a job gives the stains and webs.
+
+- **Physics, not teleporting.** A carried piece is **dragged** by an `AlignPosition` +
+  `AlignOrientation` pair toward a point `GarbageCarryDistance` studs down the crosshair ray,
+  keeping its authored tilt and turning with the camera. Dragging rather than writing its `CFrame`
+  is what makes the building's collisions apply — shove a piece at a wall and it stops at the wall
+  instead of passing through and stranding itself out of bounds. Guards, each learned from a real
+  failure:
+  - The pull is **finite** (`CARRY_GRAVITIES` = 20× the piece's own weight). An infinitely strong
+    constraint beats the collision solver and pushes the piece through whatever it's pressed on.
+  - The carry point is **raycast-clamped** to stop `CARRY_SURFACE_BUFFER` short of whatever the aim
+    ray hits. Without it, looking down puts the target *underground* and the constraint grinds the
+    piece through the floor.
+  - `MaxVelocity` is capped at **35**; faster than that, a small part clears a thin floor in a
+    single physics step and tunnels through it.
+  - A piece that ends up more than `GarbageCarryDistance + 15` studs away (wedged behind geometry
+    while the player walks off) is **dropped automatically** rather than towed through the level.
+  - Clones sit in a **`CleanableGarbage` collision group**, registered in the place and paired
+    non-collidable against `PlayerCollisionService.GROUP` — so garbage collides with the building
+    but **never with a character**: it can't shove a player, trap them, or be stood on.
+
+- **Flow.** `GarbageCarryController` (client) raycasts each frame; a free piece of the active job's
+  garbage within `GarbageHoverRange` gets a **white `Highlight`** (`AlwaysOnTop` — an occluded
+  outline on a pale model is nearly invisible). A click sends **`CarryGarbage`** with the
+  `surfaceId` (out to the longer `GarbagePickupRange`), or `nil` to let go.
+  `GarbageCarryService` validates the active job, that no **party member** already holds that
+  `surfaceId`, and the range — measured against the last position that *session* reported, falling
+  back to the authored home — then publishes **`GarbageCarry`** `(carrier, surfaceId?)` to the
+  session. Nothing moves until that confirmation arrives.
+- **Party sharing.** A clone can't replicate itself, so the carrier streams its piece's CFrame on
+  **`GarbageMove`** (20 Hz, throttled by distance) and the server forwards it to the **other**
+  members of that session only. They anchor their own clone of that `surfaceId` while it's in
+  someone else's hands and drive it from the relay, then release it to local physics on the drop —
+  so a dropped piece can settle a stud or two differently per screen, the accepted cost of local
+  simulation.
+- **Settle report.** The relay stops the instant the carrier lets go, so the server would still
+  believe the piece is up where it was released — and refuse a legitimate re-grab from beside where
+  it landed. The client therefore sends **one** final `GarbageMove` 2s after its own drop, which
+  the server accepts only from that piece's **last carrier**, and only while nobody else holds it.
+- **Hands-full.** Picking up **unequips** any held tool, and equipping a tool **drops** the piece —
+  both directions, so the carry and the cleaning tools can never overlap. A carry is also dropped
+  automatically on job end/switch, respawn/death, and disconnect.
+- **Idle reset.** A piece untouched for `GarbageResetSeconds` (**60s**) returns to its authored
+  home (velocity zeroed, or it arrives still rolling). Client-side, since the pieces are local.
+- **Session state** lives in a **weak-keyed** table on the shared `JobServer`, so a finished
+  session's carry state is collected with it — nothing to sweep up.
+
+### `GarbageVisibility` (client)
+The garbage counterpart to `DecalVisibility` / `SpillVisibility` / `WebVisibility`, but it does
+more than show and hide. It scans for authored pieces, records each one's **home CFrame** and
+business, counts them (`getGarbageCount(businessId)` feeds the completion total), and moves every
+one **off-world** into a nil-parented `AuthoredGarbage` holder — they are never seen. Then
+`setActiveBusiness(businessId)`, driven by `JobController` off `ActiveJob`, **destroys the previous
+job's clones and builds this job's** at their authored positions, each unanchored, collidable and in
+the garbage collision group. Clones are marked with a `LocalGarbageClone` attribute so the scan
+never mistakes one for an authored piece, and a piece that replicates in *after* a job has started
+still gets its clone. Exposes `getPiece(surfaceId)` / `getPieces()` / `getHome(surfaceId)` for the
+carry, `hideOne(surfaceId)` (which, unlike every other cleanable kind, can simply **destroy** the
+clone, since it's ours), and `takePiece(surfaceId)` — hand the clone over *without* destroying it,
+used by the shredder, which needs the piece to stay in the world for its animation while being
+untouchable by the carry, the hover and the idle reset.
+
+### Garbage shredding (implemented)
+How a piece of garbage is actually **cleaned**: the player carries it into the business's
+**shredder** and it's chewed up. This is the disposal half of the garbage mechanic; the carry half
+is above.
+
+- **Authoring.** Every business with cleanable garbage authors one shredder model **directly in the
+  building** (not under `Cleanables` — it isn't itself a cleanable):
+  `Workspace.<BusinessesFolderName>.<businessId>.Shredder`, holding three invisible parts —
+  **`Hitbox`** (touch this with a piece to feed it in), **`p1`** (the mouth) and **`p2`** (inside
+  the machine). `ShredderResolver` (SharedModules) resolves the set for a `businessId`; a business
+  with no garbage simply doesn't author one.
+
+- **Who notices the touch.** Garbage is the one cleanable that isn't a shared instance, so the
+  collision only exists on the machine simulating the piece — normally the carrier, whose clone is
+  unanchored (a party member's copy is *anchored* while someone else holds it, so it can't fire
+  `Touched` and doesn't need to). Their client fires **`ShredGarbage`** with the `surfaceId`.
+
+- **Validation.** `GarbageShredService` checks the player is on that business's job, the `surfaceId`
+  names a real authored piece of it (`GarbageCarryService.isPiece`), the piece isn't already cleaned
+  on this job, and the building actually has a shredder. It also keeps a **weak-keyed, per-session**
+  set of pieces currently going through the machine, which is what swallows the duplicate reports a
+  party can produce (one per member's clone) and any repeat during the animation. Then it takes the
+  piece out of whoever's hands it was in (`GarbageCarryService.dropPiece`).
+
+- **What everyone sees.** No clone can be moved from the server, so the confirmation
+  (**`GarbageCleaned`**, carrying just the `surfaceId`) goes to **every member of the session** and
+  each client animates its **own** clone. That's what makes a party watch the same piece shredded.
+
+- **The animation** (`GarbageShredController`, client). The piece is taken out of
+  `GarbageVisibility` (`takePiece`) so nothing can carry, hover or reset something already in the
+  machine, then **frozen**: its carry constraints stripped by name, every part `Anchored` and
+  `CanCollide`/`CanTouch`/`CanQuery` off, velocities zeroed. Its pivot is then driven off
+  `Heartbeat` (not a `Tween` — a `Model` has no tweenable CFrame, and the shake has to be
+  re-randomised every frame) through three beats from `CleaningConfig`:
+  **`GarbageShredEntrySeconds`** (0.3s) move to `p1` → **`GarbageShredHoldSeconds`** (1s) hold →
+  **`GarbageShredDropSeconds`** (2s) drag down to `p2` with a per-frame jitter, then destroyed. The
+  jitter is **side to side** (±0.22 studs along the piece's own X), with only a hint of vertical
+  (±0.04 — much more fights the descent and just reads as glitching) and nothing in/out, plus a token
+  ±1.2° wobble. **`ShredderSFX`** starts when it reaches the mouth and is cut off the instant the
+  piece is gone — the machine is only ever heard chewing something. It's played **positionally** out
+  of the hitbox (`SoundManager.playAt`), so it fades with distance and a member across the building
+  hears it from where it is.
+
+- **When it counts.** The server waits out **the same total** (3.3s) before paying the reward
+  (4 XP / 4 Cash, matching a web) and calling `JobServer.markGarbageCleaned`, so the completion bar
+  ticks as the piece *disappears* rather than as it starts moving — and the piece that completes a
+  job doesn't end the job out from under its own animation. The client counts it toward its own bar
+  at the same moment (`JobController.onGarbageCleaned`, keyed by `surfaceId`).
+
+- **Job ends mid-animation.** An in-flight piece is nobody's but the controller's, so it tracks them
+  and destroys anything still animating when `ActiveJob` changes.
+
 ### Reveal remaining cleanables (implemented)
 A client-only assist that flashes a neon-yellow glow over everything the player still has left
 to clean on their active job. **Purely cosmetic** — it reads existing client state and touches
@@ -977,7 +1145,7 @@ no server state or remotes.
 ReplicatedStorage/SharedModules/
   DataTemplate.luau     saved-data shape + defaults (Cash, Gems, Level, Settings, BusinessList, Inventory, PlotButtonsBought, BusinessDescription, Ratings)
   ToolConfig.luau       tool definitions catalog
-  BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/RequiredItems/DecalWeight/SpillWeight/WebWeight)
+  BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/RequiredItems/DecalWeight/SpillWeight/WebWeight/GarbageWeight)
   CleaningConfig.luau   cleaning tunables (shared by client + server)
   PartyConfig.luau      party tunables: MaxSize 6, the PartyId/PartyLeader attribute keys, and the PartyAction vocabulary (create+businessId/join/ready/leave/kick/disband -- no invites); a party forms AROUND a business and its job starts once every member is ready
   SkillsConfig.luau     skills catalog + math: the 5 skills' effectPerLevel, MAX_LEVEL 5, geometric price (BASE_PRICE 100k, x2/level), multiplier(name, level)
@@ -990,8 +1158,10 @@ ReplicatedStorage/SharedModules/
   DecalResolver.luau    stain Hitbox/model -> identity (broom stains)
   SpillResolver.luau    spill part/model -> identity (mop spills); climbs any hit BasePart up to the CleanableSpills Model, reads its capital-S SurfaceId
   WebResolver.luau      web part/model -> identity (vacuum webs); climbs any hit instance up to the direct CleanableWebs child (BasePart OR Model), reads its lowercase surfaceId
-  CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills/WEBS shares by DecalWeight/SpillWeight/WebWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
-  SoundManager.luau     cosmetic sound library; CLIENT-EXECUTED only (a server-parented Sound would be audible to everyone) -- server-triggered sounds go via a remote
+  GarbageResolver.luau  garbage part/model -> identity (carryable litter); mirrors WebResolver but reads the capital-S SurfaceId, plus getPosition/getParts helpers both sides share
+  ShredderResolver.luau businessId -> its Shredder model's { hitbox, entry (p1), exit (p2) }; nil if the building has no (complete) shredder, which is normal for a business with no garbage
+  CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills/webs/GARBAGE shares by DecalWeight/SpillWeight/WebWeight/GarbageWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
+  SoundManager.luau     cosmetic sound library; CLIENT-EXECUTED only (a server-parented Sound would be audible to everyone) -- server-triggered sounds go via a remote. playOneShot (2D) / playAt (positional, parented to a BasePart) / createSustained (looping handle)
   SoundGroups.luau      master volume routing: SFXGroup / MusicGroup under SoundService, so a group's Volume scales every sound in it live (what the settings sliders drive)
   VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate)
   UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow, applied game-wide by UiButtonController — callers rarely invoke it directly; hoverGrowInGrid pushes grid neighbours + left-edge padding; hoverGrowCluster wires a whole cluster frame; spreadStackOnHover pushes a stack of frames apart around the hovered one)
@@ -1007,6 +1177,11 @@ ReplicatedStorage/Remotes/
   SpillCleaned          RemoteEvent (server → client: a party member mopped this spill -- hide it + count it; sent to the OTHER members only)
   CleanWeb              RemoteEvent (client → server: vacuum-click intent on a web; server runs the UseTime timer)
   WebCleaned            RemoteEvent (server → client: hide your local copy of a cleaned web; sent to EVERY member of the job session)
+  CarryGarbage          RemoteEvent (client → server: a surfaceId asks to pick that piece up, nil asks to let go)
+  GarbageCarry          RemoteEvent (server → client: (carrier, surfaceId?) -- who on this session is holding what; sent to EVERY member, and it's this confirmation that starts the carrier driving the piece)
+  GarbageMove           RemoteEvent (BOTH ways: the carrier streams its piece's CFrame ~20/s; server relays to the OTHER session members, who drive their own clone from it. Also carries the one post-drop "settle report", accepted only from that piece's last carrier)
+  ShredGarbage          RemoteEvent (client → server: a surfaceId whose LOCAL clone just hit the business's shredder hitbox -- the server decides whether it counts)
+  GarbageCleaned        RemoteEvent (server → client: a surfaceId went into the shredder; sent to EVERY member of the job session, each of whom runs the disposal animation on their OWN clone)
   WallStroke            RemoteEvent (BOTH ways: client sends a batch of {part,to,from,radius} erases; server validates + relays to the other members, who replay them onto their own overlays)
   PartyAction           RemoteEvent (client → server: create (+businessId) / join / ready / leave / kick / disband)
   PartyUpdate           RemoteEvent (server → client: { party, available } -- your party's roster (its businessId + a ready array parallel to members) + every party you could join)
@@ -1025,7 +1200,7 @@ NOTE: Remotes are Studio-authored (NOT in default.project.json) -- adding one in
 creates a duplicate. Create new remotes in Studio only.
 
 ServerScriptService/
-  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Party/Job/Cleaning/DecalCleaning/SpillCleaning/WebCleaning/Tool/Shop/Settings/Company/Admin services (PartyService before JobService, which hooks it)
+  Main.server.luau      inits DataService (useMock) + PlotButton/Plot/Business/Party/Job/Cleaning/DecalCleaning/SpillCleaning/WebCleaning/GarbageCarry/Tool/Shop/Settings/Company/Admin services (PartyService before JobService, which hooks it; PlayerCollisionService before GarbageCarryService, which pairs a collision group against its group)
   Modules/PlotButtonService.luau     per-plot purchase progression: step-on Buttons buy Spawnables with Cash, reveal next 1-2 buttons, persist per player (PlotButtonsBought), hide every plot at startup, drop-in spawn animation (per-leaf-model Hitbox footprints), rebuild plot on reassign, price billboards + gem generation
   Modules/BusinessService.luau       seeds the catalog into each profile + resolves unlocks (level now, permanent, re-runs on level change)
   Modules/PartyService.luau          party authority: open parties of 1-6 with a leader, formed around one businessId (create/join/ready/leave/kick/disband, NO invites); joining gated on BusinessService.canPlay; PartyId/PartyLeader attributes + PartyUpdate roster & joinable list; onAllReady hook JobService turns into the job start, onMemberRemoved hook it uses to finish a leaver's shared run early; leaveFor/disbandFor for the job layer, refreshJoinable() to re-publish the browser
@@ -1035,6 +1210,8 @@ ServerScriptService/
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; hide via DecalCleaned to every session member
   Modules/SpillCleaningService.luau  validates client CleanSpill reports against the active job, pays the flat per-spill reward, records in JobServer (deduped), relays SpillCleaned to the other session members
   Modules/WebCleaningService.luau    server-authoritative vacuum timer (mirrors DecalCleaningService); validates CleanWeb, runs UseTime, pays flat per-web reward, records in JobServer, hide via WebCleaned to every session member; parks boundary clicks (pendingClick)
+  Modules/GarbageCarryService.luau   who holds which piece of garbage, PER SESSION (keyed by surfaceId on a weak-keyed table off the JobServer): validates CarryGarbage against the active job / party-member conflict / range, publishes GarbageCarry, relays the carrier's GarbageMove to the rest of their session (plus the post-drop settle report), drops on job change / respawn / leave. Pins the AUTHORED pieces still (anchored, non-colliding) as clone templates and registers the CleanableGarbage collision group non-collidable vs PlayerCollisionService.GROUP. Moves no instances -- the carried thing is a client-local clone
+  Modules/GarbageShredService.luau   the CLEAN half of garbage: validates a client's ShredGarbage report (on that job, a real authored piece, not already cleaned, the building has a shredder), dedupes the duplicate reports a party's clones produce via a weak-keyed per-session in-flight set, drops it from its carrier's hands, confirms with GarbageCleaned to every session member, then -- after the animation's own length -- pays 4 XP / 4 Cash and calls JobServer.markGarbageCleaned
   Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService
   Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups
   Modules/ToolService.luau           grants owned+Unlocked items as Backpack Tools (clones from ReplicatedStorage.Items by ToolId), per spawn + on inventory change
@@ -1042,13 +1219,13 @@ ServerScriptService/
   Modules/SkillsService.luau         skills authority: PurchaseSkill (re-validated, Gem-charged), getMultiplier read-point for other services, free-roam walk speed (StarterPlayer.CharacterWalkSpeed x Speedy), ProcessReceipt for the Robux unlock-all product
   Modules/SettingsService.luau       persists client preferences (volumes, HidePlayers) via UpdateSetting; per-key sanitizers clamp/type-check before saving
   Modules/CompanyService.luau        persists the business description via UpdateBusinessDescription (string coerced, trimmed, length-capped); mirrors SettingsService
-  Modules/PlayerCollisionService.luau  puts every character in a "Players" collision group that doesn't collide with itself -- players never collide, job or not (still collides with Default, so floors/walls work)
+  Modules/PlayerCollisionService.luau  puts every character in a "Players" collision group that doesn't collide with itself -- players never collide, job or not (still collides with Default, so floors/walls work); exposes that group name as .GROUP so other systems (GarbageCarryService) can pair their own group against it
   Modules/AdminCommands.luau         chat commands: PUBLIC /skiptutorial (anyone -- ends the caller's tutorial exactly as finishing it does, via TutorialService.skip); owner-only /completejob <id> <amt>, /addcash <amt>, /addgems <amt>, /setlevel <n>
   Modules/InventoryManager.luau      addItem helper used by ShopService (present; not init'd on its own)
 
 StarterPlayer/StarterPlayerScripts/
-  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom/Mop/Vacuum + WebVisibility + UI + MissingHighlight + UiPreloader
-  Modules/JobController.luau       watches ActiveJob, owns the JobClient, drives DecalVisibility + SpillVisibility + WebVisibility, routes DecalCleaned→hide / MopController's onSpillCleaned→hide / WebCleaned→hide / SpillCleaned (a party member's mop)→hide / WallStroke (a party member's erases)→SurfaceManager.applyRemoteStroke, onProgressChanged signal
+  Main.client.luau                 inits DataService client + SurfaceManager + JobController + PressureWasher/Broom/Mop/Vacuum + GarbageCarry + WebVisibility/GarbageVisibility + UI + MissingHighlight + UiPreloader
+  Modules/JobController.luau       watches ActiveJob, owns the JobClient, drives DecalVisibility + SpillVisibility + WebVisibility + GarbageVisibility (whose setActiveBusiness rebuilds this job's garbage clones -- the garbage reset), routes DecalCleaned→hide / MopController's onSpillCleaned→hide / WebCleaned→hide / SpillCleaned (a party member's mop)→hide / WallStroke (a party member's erases)→SurfaceManager.applyRemoteStroke, onProgressChanged signal
   Modules/JobClient.luau           one active job (class): loads overlays, restores stains, smooth local completion %; counts each cleanable once (_claim) so a relayed clean can't double-count the shared bar
   Modules/PartyController.luau     client mirror of the party state: sharesParty/inParty/hasCompany off the replicated PartyId attribute, the PartyUpdate roster (its businessId + isReady(party, member)) + joinable list for the UI, and send() for create/join/ready/leave/kick/disband
   Modules/CashUiController.luau    cash HUD: writes Cash into CashDisplay.MoneyAmt as a "$"-prefixed abbreviated number (e.g. "$1.1k"), re-renders on Cash change
@@ -1072,6 +1249,9 @@ StarterPlayer/StarterPlayerScripts/
   Modules/MopController.luau       mop input + raycast + client-driven spill fade (hold-to-clean, Power/sec) + persistent per-spill billboard bar; fires CleanSpill on full fade
   Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb
   Modules/WebVisibility.luau       web visibility: hidden unless on the job (reparented to HiddenWebs holder); per-client hide-on-vacuum + reparent restore on redo; getWebCount / getActiveVisibleWebs
+  Modules/GarbageVisibility.luau   garbage is CLONED, not shown/hidden: authored pieces go off-world permanently (AuthoredGarbage holder, home CFrame recorded) and each job gets this client's own local clones of that business's pieces, built in place in the CleanableGarbage folder so GarbageResolver still resolves them. Rebuilding them IS the job-start reset. getGarbageCount / getPiece / getPieces / getHome / hideOne / takePiece (hand the clone over WITHOUT destroying it -- the shredder's animation needs it in the world but untouchable)
+  Modules/GarbageCarryController.luau  garbage carry: white AlwaysOnTop hover outline, click to pick up / let go (CarryGarbage by surfaceId), physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
+  Modules/GarbageShredController.luau  the CLEAN half of garbage: watches the active business's shredder Hitbox for one of OUR clones (ShredGarbage), and on the server's GarbageCleaned takes the clone out of GarbageVisibility, freezes it and drives its pivot p1 -> hold -> p2 with a lateral-only shake, playing ShredderSFX from the mouth until it vanishes; counts it via JobController.onGarbageCleaned and bins anything still animating when the job ends
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown
   Modules/JobSummaryController.luau end-of-job summary (JobSummary remote): payout / % cleaned / duration, bounced in via UiAnimations.DropIn; offers replay (AcceptJob) or GoHome
@@ -1080,7 +1260,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/WarehouseBoardProximity.luau  opens/closes the job board + upgrades shop as you walk in/out of each warehouse board's Hitbox (one data-driven Heartbeat loop)
   Modules/ToolFloatController.luau floats the equipped tool at the right shoulder aimed along the camera look direction, instead of hand-gripped
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
-  Modules/HidePlayersController.luau  the single owner of hiding other characters for you only (parts + floating name + tool VFX, nothing replicates), for TWO independent reasons: the persisted Settings.HidePlayers toggle and job membership (setJobHidden, driven by JobGhostController) -- hidden while either holds
+  Modules/HidePlayersController.luau  the single owner of hiding other characters for you only (parts + floating name + tool VFX, nothing replicates), for TWO independent reasons: the persisted Settings.HidePlayers toggle and job membership (setJobHidden, driven by JobGhostController) -- hidden while either holds. The NAME needs Humanoid.DisplayDistanceType = None, not just NameDisplayDistance = 0: a humanoid's own distance is only consulted when its DisplayDistanceType is Subject, and the default is Viewer (where the LOCAL player's humanoid decides what names they see) -- so the distance alone left name tags floating over invisible bodies. Both are snapshotted + restored on reveal
   Modules/PlayTogetherController.luau  the standalone PlayTogetherFrame: the entry to the party screens (PartyUiController.openEntry -- a toggle over the whole flow), shown exactly when the HUD is via JobUiController.onHudVisibilityChanged (so it returns on GoHome, not the moment the job ends), and inert for the tutorial's duration
   Modules/PartyUiController.luau   the three party screens (PartySelectionUI / PartyUI / JoinPartyUI): create borrows the job board to pick the business (JobUiController.openForSelection) and the pick creates the party; the room draws the job + a ready-state row per member with leader-only kicks; the browser clones one PartySlot per joinable party and rebuilds on every server push. Steps between them are instant (ExclusivePanels.openInstant); only entering/leaving the flow animates
   Modules/Crosshair.luau           white center dot + hidden mouse icon in first person; normal cursor returns in third person (needed to click surfaces)
@@ -1097,9 +1277,14 @@ Studio-authored (not Rojo): `ReplicatedStorage.Items.Pressure Washer` /
 `ReplicatedStorage.Items.Broom` / `ReplicatedStorage.Items.Mop` / `ReplicatedStorage.Items.Vacuum`
 (each with a `ToolId` attribute; `StarterPack` is empty), and the shared `Workspace.Businesses`
 buildings — each a **Model** with a `TeleportPart` and a `Cleanables` folder (`CleanableWalls` +
-`CleanableDecals` + `CleanableSpills` + `CleanableWebs`, each spill Model carrying a capital-S
-`SurfaceId` attribute and each web BasePart/Model a lowercase `surfaceId` attribute — with any web
-`Hitbox` part **Anchored**, see *Web cleaning*) authored right in the building. The
+`CleanableDecals` + `CleanableSpills` + `CleanableWebs` + `CleanableGarbage`, each spill Model
+carrying a capital-S `SurfaceId` attribute, each web BasePart/Model a lowercase `surfaceId`
+attribute — with any web `Hitbox` part **Anchored**, see *Web cleaning* — and each garbage
+BasePart/Model a capital-S `SurfaceId`; a piece's authored position is its **home**, the spot both
+resets return it to, and its authored `Anchored`/`CanCollide` are irrelevant since the server pins
+the template and the clones are built with their own, see *Garbage carrying*) authored right in the
+building. **Collision groups** are place data too: `Players` and `CleanableGarbage` are registered
+in the place (and re-asserted at runtime), the latter non-collidable against the former. The
 business Models are pinned to `ModelStreamingMode.Persistent` at runtime by `JobService` so their
 cleanable geometry never streams out from under an active job (see *StreamingEnabled*).
 The **plots** (`Workspace.Plots.Plot1..N`) are Studio-authored too — each with a `spawnPart`,
@@ -1149,6 +1334,10 @@ so they don't first render blurry.
 
 ## Not yet implemented / planned
 
+- **Shredders only exist in `gasStation`.** Garbage disposal is built end to end (see *Garbage
+  shredding*), but only `gasStation` authors the `Shredder` model today. Any future business with
+  cleanable garbage has to author one — three parts, `Hitbox`/`p1`/`p2` — or its garbage slice of
+  the completion bar can never fill and the job can't be completed.
 - **Progression** — the loop is now closed end to end: **business unlocking by Level**
   (`BusinessService`, permanent once earned via `RequiredLevel`), **tool requirements** per
   business (`RequiredItems`, gating the board's Wash button and re-enforced in `JobService.accept`),
@@ -1191,6 +1380,10 @@ even where the feature itself isn't implemented yet.
 ## Replication model (target)
 
 - **Pixel erasing stays client-only, visual, never saved or replicated.**
+- **Garbage goes further: the objects themselves are client-only.** A moving cleanable can't be one
+  shared instance without one session's carry disturbing another's, so each client works with local
+  **clones** and only the *carry state* (who holds which `surfaceId`) and a per-session position
+  **relay** cross the wire. See *Garbage carrying*.
 - Cleaning is **per-session**: leaving (or switching jobs) loses all cleaning progress.
   Nothing about cleaned walls/stains is saved — only the business `Unlocked` flag is.
 
@@ -1225,10 +1418,10 @@ data**, paired with the `DataTemplate` module which defines the saved-data shape
   through `SettingsService`'s per-key sanitizers; see *Settings*.
 - `BusinessList: { [string]: Business }` keyed by `UniqueID`. Each `Business`:
   `BaseReward`, `XpReward`, `Unlocked`, `Name`, `UniqueID`, `Completions`, and optional
-  catalog-only `DecalWeight?` / `SpillWeight?` / `WebWeight?` / `RequiredLevel?` / `RequiredItems?`
-  (`DecalWeight`, `SpillWeight`, and `WebWeight` are the completion-bar slices stains/spills/webs
-  own — default `CleaningConfig.DefaultDecalWeight`/`DefaultSpillWeight`/`DefaultWebWeight`; walls
-  get the rest, see `CompletionWeights`). **`Unlocked`** gates whether
+  catalog-only `DecalWeight?` / `SpillWeight?` / `WebWeight?` / `GarbageWeight?` / `RequiredLevel?` /
+  `RequiredItems?` (the four weights are the completion-bar slices stains/spills/webs/garbage own —
+  default `CleaningConfig.DefaultDecalWeight`/`DefaultSpillWeight`/`DefaultWebWeight`/
+  `DefaultGarbageWeight`; walls get the rest, see `CompletionWeights`). **`Unlocked`** gates whether
   the player may accept that business's job (resolved per player by `BusinessService`);
   **`RequiredLevel`** (catalog, `BusinessConfig`) is the level needed to unlock/accept it;
   **`RequiredItems`** (catalog) is a list of tool `UniqueID`s the player must have `Unlocked` —

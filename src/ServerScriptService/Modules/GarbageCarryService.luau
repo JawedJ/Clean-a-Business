@@ -23,8 +23,9 @@
 -- A carry is dropped for the player automatically when they leave the job, respawn/die, or leave the
 -- game, so a session can never be left thinking a piece is spoken for.
 --
--- The CLEANING half of the mechanic (disposing of a carried piece, which is what would count it
--- toward completion via JobServer.markGarbageCleaned) is not built yet.
+-- The CLEANING half of the mechanic -- feeding a piece into the business's shredder -- lives in
+-- GarbageShredService, which borrows two things from here: dropPiece (a swallowed piece leaves its
+-- carrier's hands) and isPiece (a shred request has to name a real piece of that building's garbage).
 
 local Players = game:GetService("Players")
 local PhysicsService = game:GetService("PhysicsService")
@@ -170,6 +171,25 @@ function GarbageCarryService.drop(player: Player)
 		end
 	end
 	broadcast(listeners, player, nil)
+end
+
+-- Let go of a specific piece on `player`'s session, whoever is holding it (which may be a party
+-- member, not `player`). Used by GarbageShredService: a piece fed into the shredder stops being
+-- anybody's to carry the moment it's swallowed. No-op if nobody has it.
+function GarbageCarryService.dropPiece(player: Player, surfaceId: string)
+	local state = sessionFor(player)
+	local holder = state and state.carriedBy[surfaceId]
+	if holder then
+		GarbageCarryService.drop(holder)
+	end
+end
+
+-- True if `surfaceId` names a piece of garbage actually authored in `businessId`. The authored set is
+-- exactly what this service registered at startup, so this is also the check that a shred request
+-- names something real rather than an id a client made up.
+function GarbageCarryService.isPiece(businessId: string, surfaceId: string): boolean
+	local business = homeCFrame[businessId]
+	return business ~= nil and business[surfaceId] ~= nil
 end
 
 -- Where this session last saw a piece: the relayed position if it has been carried, else where it

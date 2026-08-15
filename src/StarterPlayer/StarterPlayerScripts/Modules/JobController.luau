@@ -96,6 +96,16 @@ function JobController.onSpillCleaned(model: Model)
 	end
 end
 
+-- Called by GarbageShredController when the server confirms a piece of garbage shredded on this job
+-- -- by us or by a party member. Disposing of the piece is GarbageShredController's own job (it owns
+-- the animation and the clone); this only counts it toward the completion bar. Identified by
+-- surfaceId, not by instance: every client's garbage is its own local clone.
+function JobController.onGarbageCleaned(surfaceId: string)
+	if current then
+		current:onGarbageCleaned(surfaceId)
+	end
+end
+
 -- The local player's active JobClient, or nil. (For UI / other systems.)
 function JobController.getJob(): JobClient.JobClient?
 	return current

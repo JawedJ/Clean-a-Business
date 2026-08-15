@@ -7,10 +7,12 @@
 -- server. For a server-triggered sound, fire a RemoteEvent to the target client
 -- and have a client-side listener call into here.
 --
--- Sounds are looked up by name under ReplicatedStorage.Audios.SFX. Two flavours:
+-- Sounds are looked up by name under ReplicatedStorage.Audios.SFX. Three flavours:
 --   * playOneShot: fire-and-forget. Clones the template, plays it 2D, and destroys
 --     the clone once it finishes. Pass { duration = n } to play only the first n
 --     seconds, stopping (and cleaning up) early.
+--   * playAt: the same, but parented to a BasePart so it plays POSITIONALLY -- for a
+--     sound that belongs to a thing in the world rather than to the player.
 --   * createSustained: returns a controllable handle (start/stop/destroy) for a
 --     looping sound, e.g. a tool's firing loop. Optionally loops only a slice of
 --     the source by holding playback inside [loopStart, loopEnd].
@@ -119,6 +121,38 @@ function SoundManager.playOneShot(soundName: string, config: OneShotConfig?): So
 			end
 		end)
 	end
+
+	return sound
+end
+
+-- Plays the named sound once out of `part`, for the local player only. The 3D counterpart of
+-- playOneShot: parenting a Sound to a BasePart is what makes Roblox attenuate it with distance, so
+-- this is for a sound belonging to a THING in the world (a machine running) rather than to the
+-- player. The part is usually a shared instance, but the clone is created on this client, so only
+-- this client hears it -- exactly like the 2D path.
+--
+-- Returns the playing clone so callers can :Stop()/:Destroy() it early (a machine's sound has to end
+-- when the machine does, not when the file does); otherwise it cleans itself up when it ends.
+function SoundManager.playAt(soundName: string, part: BasePart): Sound?
+	if not RunService:IsClient() then
+		warn("SoundManager.playAt called on the server; sounds must play on the client")
+		return nil
+	end
+
+	local template = findTemplate(soundName)
+	if not template then
+		return nil
+	end
+
+	local sound = template:Clone()
+	sound.Looped = false
+	sound.SoundGroup = SoundGroups.getSfxGroup() -- scale by the player's SFX master volume
+	sound.Parent = part -- 3D playback, positioned at the part
+	sound.Ended:Once(function()
+		sound:Destroy()
+	end)
+	Debris:AddItem(sound, MAX_LIFETIME) -- safety net if Ended never fires
+	sound:Play()
 
 	return sound
 end

@@ -13,6 +13,7 @@ local DecalCleaningService = require(game.ServerScriptService.Modules.DecalClean
 local SpillCleaningService = require(game.ServerScriptService.Modules.SpillCleaningService)
 local WebCleaningService = require(game.ServerScriptService.Modules.WebCleaningService)
 local GarbageCarryService = require(game.ServerScriptService.Modules.GarbageCarryService)
+local GarbageShredService = require(game.ServerScriptService.Modules.GarbageShredService)
 local ToolService = require(game.ServerScriptService.Modules.ToolService)
 local ShopService = require(game.ServerScriptService.Modules.ShopService)
 local SkillsService = require(game.ServerScriptService.Modules.SkillsService)
@@ -59,6 +60,10 @@ WebCleaningService.init()
 -- Who is carrying which piece of cleanable garbage (pickup validation + network ownership). Init
 -- after JobService, whose sessions it authorizes and broadcasts through.
 GarbageCarryService.init()
+-- The other half of the garbage mechanic: feeding a carried piece into the business's shredder is
+-- what actually cleans it. Init after GarbageCarryService, whose authored-piece registry it
+-- validates shred requests against.
+GarbageShredService.init()
 ToolService.init()
 ShopService.init()
 -- Owns the single MarketplaceService.ProcessReceipt; every dev-product grant registers a handler

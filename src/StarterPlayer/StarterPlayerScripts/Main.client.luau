@@ -16,6 +16,7 @@ local BroomController = require(Modules:WaitForChild("BroomController"))
 local MopController = require(Modules:WaitForChild("MopController"))
 local VacuumController = require(Modules:WaitForChild("VacuumController"))
 local GarbageCarryController = require(Modules:WaitForChild("GarbageCarryController"))
+local GarbageShredController = require(Modules:WaitForChild("GarbageShredController"))
 local Crosshair = require(Modules:WaitForChild("Crosshair"))
 local RewardPopupController = require(Modules:WaitForChild("RewardPopupController"))
 local LevelUiController = require(Modules:WaitForChild("LevelUiController"))
@@ -112,6 +113,10 @@ safeInit("MopController", MopController.init)
 safeInit("VacuumController", VacuumController.init)
 -- Hover-highlight, pick up and carry cleanable garbage (the server owns who holds what).
 safeInit("GarbageCarryController", GarbageCarryController.init)
+-- Feeding a carried piece into the business's shredder: the touch report, and the disposal animation
+-- every member of the session runs on their own clone. Init after GarbageCarryController so the
+-- carry is already listening by the time a piece can be fed in.
+safeInit("GarbageShredController", GarbageShredController.init)
 safeInit("Crosshair", Crosshair.init)
 safeInit("RewardPopupController", RewardPopupController.init)
 safeInit("LevelUiController", LevelUiController.init)
