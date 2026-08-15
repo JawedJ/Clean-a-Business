@@ -10,7 +10,8 @@
 -- flow through here, all re-validated every time against the job the player currently
 -- holds (so none works on a wall they aren't on the clock for):
 --   * CleanProgress -- "I'm actively erasing dirt": pays the per-second wash reward,
---     throttled by a cooldown so it can't be farmed by spamming the remote.
+--     throttled by a cooldown so it can't be farmed by spamming the remote. Paid SILENTLY,
+--     unlike every other cleanable -- see the handler.
 --   * WallCleaned   -- "this wall is fully erased": reported into the player's JobServer
 --     so it can tell when every wall + stain is done and complete the job.
 --   * WallStroke    -- "here's where I just erased": relayed to the other members of a
@@ -47,7 +48,8 @@ local MAX_STROKE_RADIUS = 16
 
 -- Reward paid for each second of actively erasing dirt from a wall (the EditableImage overlays).
 -- WASH_COOLDOWN is the server-enforced minimum gap between payouts, so a client can't earn faster
--- by sending CleanProgress more often.
+-- by sending CleanProgress more often. The amounts are unchanged by the popup being suppressed --
+-- washing pays exactly what it always did, it just doesn't announce it.
 local WASH_XP = 1
 local WASH_CASH = 2
 local WASH_COOLDOWN = 1 -- seconds
@@ -91,7 +93,11 @@ function CleaningService.init()
 		end
 		lastWashReward[player] = now
 
-		ProgressionService.reward(player, WASH_XP, WASH_CASH)
+		-- Paid SILENTLY: no "+N XP! / +N Cash!" popup and no chime. Every other cleanable pays on a
+		-- discrete act (one stain, one web, one piece of garbage) where a popup marks the moment;
+		-- the wash pays every second the trigger is held, so the same feedback is a stream of text
+		-- and chimes over the crosshair. Walls are getting their own VFX instead.
+		ProgressionService.rewardSilently(player, WASH_XP, WASH_CASH)
 	end)
 
 	-- The client reports a wall fully erased. We can't witness the pixels (they're

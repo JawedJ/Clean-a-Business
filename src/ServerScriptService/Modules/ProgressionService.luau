@@ -76,4 +76,14 @@ function ProgressionService.reward(player: Player, xp: number, cash: number)
 	RewardPopup:FireClient(player, grantedXp, grantedCash)
 end
 
+-- The same award, with NO popup and no chime. The money and XP land identically (and the HUD
+-- counters still move, since they read the saved values) -- the only difference is that the player
+-- isn't told about it in text. For a reward that pays continuously rather than on a discrete act:
+-- the wash reward ticks once a second for as long as the trigger is held, which as a stream of
+-- popups is just noise over the crosshair. See CleaningService.
+function ProgressionService.rewardSilently(player: Player, xp: number, cash: number)
+	ProgressionService.awardXp(player, xp)
+	ProgressionService.awardCash(player, cash)
+end
+
 return ProgressionService

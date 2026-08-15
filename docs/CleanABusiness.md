@@ -76,6 +76,11 @@ report, so a player can only ever clean the one business they've accepted. Concr
   against the active job and throttles per a cooldown; spills grant a **flat per-spill reward** on
   the single `CleanSpill` completion report (deduped). Neither can be farmed off a job the player
   doesn't hold.
+  - The wash reward is the one that pays **silently** (`ProgressionService.rewardSilently`) — no
+    `RewardPopup`, so no floating "+N XP! / +N Cash!" and no cash chime. Every other cleanable pays
+    on a *discrete act* where a popup marks the moment; the wash pays every second the trigger is
+    held, which as a stream of text over the crosshair is just noise. Walls are getting their own
+    VFX in its place. The payout itself is unchanged.
 - **Garbage is the exception to all of this, deliberately.** Because garbage *moves*, a shared
   instance would let two sessions drag each other's pieces around — so what a player carries is a
   **client-local clone**, and its position is never server state (see *Garbage carrying*). The
@@ -776,9 +781,10 @@ ids), the garbage carry tunables `GarbagePickupRange` (13) / `GarbageHoverRange`
 the outline can be pulled in independently) / `GarbageCarryDistance` (7, how far out front a held
 piece floats) / `GarbageResetSeconds` (60), the shredder's layout
 `ShredderModelName`/`ShredderHitboxName`/`ShredderEntryPartName`/`ShredderExitPartName` and its three
-animation beats `GarbageShredEntrySeconds` (0.3) / `GarbageShredHoldSeconds` (1) /
+animation beats `GarbageShredEntrySeconds` (0.3) / `GarbageShredHoldSeconds` (0.45) /
 `GarbageShredDropSeconds` (2) — shared because the server waits out the same total before counting
-the piece — plus `ShredderSoundName`, `PlotCount`/`PlotAttribute`/
+the piece — plus `ShredderSoundName` and `GarbageShredSoundLeadSeconds` (0.3, how far into the hold
+the SFX starts ahead of the drop), `PlotCount`/`PlotAttribute`/
 `PlotSpawnPartName`, the plot-progression names `PlotButtonsFolderName`/
 `PlotSpawnablesFolderName`/`PlotButtonInteractPartName`, the button attribute names
 `PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`, the
@@ -1066,16 +1072,38 @@ is above.
   `CanCollide`/`CanTouch`/`CanQuery` off, velocities zeroed. Its pivot is then driven off
   `Heartbeat` (not a `Tween` — a `Model` has no tweenable CFrame, and the shake has to be
   re-randomised every frame) through three beats from `CleaningConfig`:
-  **`GarbageShredEntrySeconds`** (0.3s) move to `p1` → **`GarbageShredHoldSeconds`** (1s) hold →
+  **`GarbageShredEntrySeconds`** (0.3s) move to `p1` → **`GarbageShredHoldSeconds`** (0.45s) hold →
   **`GarbageShredDropSeconds`** (2s) drag down to `p2` with a per-frame jitter, then destroyed. The
   jitter is **side to side** (±0.22 studs along the piece's own X), with only a hint of vertical
-  (±0.04 — much more fights the descent and just reads as glitching) and nothing in/out, plus a token
-  ±1.2° wobble. **`ShredderSFX`** starts when it reaches the mouth and is cut off the instant the
-  piece is gone — the machine is only ever heard chewing something. It's played **positionally** out
-  of the hitbox (`SoundManager.playAt`), so it fades with distance and a member across the building
-  hears it from where it is.
+  (much more fights the descent and just reads as glitching) and nothing in/out, plus a token ±1.2°
+  wobble.
 
-- **When it counts.** The server waits out **the same total** (3.3s) before paying the reward
+- **Sound and debris cover the descent only** — the beat where the piece is actually being chewed,
+  not the approach or the pause at the mouth.
+  - **`ShredderSFX`** is cut off the instant the piece is gone — the machine is only ever heard
+    chewing something — and starts **`GarbageShredSoundLeadSeconds`** (0.3s) *before* the drop, i.e.
+    partway through the hold: the file opens on the machine spinning up, so starting it dead on the
+    drop puts the bite after the piece is already moving. (Clamped to the hold's own length, so
+    shortening the hold below the lead just starts it at the top of the hold.) It's played
+    **positionally** out of the hitbox (`SoundManager.playAt`), so it fades with distance and a
+    member across the building hears it from where it is.
+  - **`VfxManager.shredDebris`** — a shower of **yellow** flecks thrown out in every direction and
+    yanked down hard, riding the piece as it goes. A *mix* of yellows needs **one emitter per
+    colour** (a `ParticleEmitter`'s `ColorSequence` varies a particle over its own lifetime, not from
+    particle to particle), so there are six, running from almost-white through gold and amber to a
+    dark bronze — the dark end is what stops it reading as one flat yellow blob. The emission rate is
+    therefore **per colour**: lengthening the palette thickens the shower unless the rate is divided
+    to match. They're solid **squares**, not
+    the fuzzy star a `ParticleEmitter` defaults to — chips, not sparkles — drawn from a small
+    pure-white opaque texture. That whiteness is load-bearing: a particle's `Color` *multiplies* its
+    texture, so pure white reproduces each palette colour exactly, while a dark or semi-transparent
+    source couldn't be tinted bright at all. The emitter is a throwaway
+    invisible part of ours, not an attachment on the garbage — destroying the piece would take every
+    fleck still in the air with it, and the shower has to outlive it. Unlike the rest of `VfxManager`
+    it returns a **handle** (`move`/`stop`) rather than being fire-and-forget, since it runs for as
+    long as the machine does.
+
+- **When it counts.** The server waits out **the same total** (2.75s) before paying the reward
   (4 XP / 4 Cash, matching a web) and calling `JobServer.markGarbageCleaned`, so the completion bar
   ticks as the piece *disappears* rather than as it starts moving — and the piece that completes a
   job doesn't end the job out from under its own animation. The client counts it toward its own bar
@@ -1163,13 +1191,13 @@ ReplicatedStorage/SharedModules/
   CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills/webs/GARBAGE shares by DecalWeight/SpillWeight/WebWeight/GarbageWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
   SoundManager.luau     cosmetic sound library; CLIENT-EXECUTED only (a server-parented Sound would be audible to everyone) -- server-triggered sounds go via a remote. playOneShot (2D) / playAt (positional, parented to a BasePart) / createSustained (looping handle)
   SoundGroups.luau      master volume routing: SFXGroup / MusicGroup under SoundService, so a group's Volume scales every sound in it live (what the settings sliders drive)
-  VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate)
+  VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate). cleanPop (neon swell on a cleaned part, fire-and-forget) / shredDebris (yellow fleck shower thrown out and dragged down; returns a move/stop handle since it runs as long as the machine does)
   UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow, applied game-wide by UiButtonController — callers rarely invoke it directly; hoverGrowInGrid pushes grid neighbours + left-edge padding; hoverGrowCluster wires a whole cluster frame; spreadStackOnHover pushes a stack of frames apart around the hovered one)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
   FinishEarly           RemoteEvent (client → server: end the active job now for a prorated reward; carries wall %)
   WallCompletion        RemoteEvent (client → server: live wall completion, ~1/s; trusted for finish-early reward)
-  CleanProgress         RemoteEvent (client → server: actively washing a wall; wash reward)
+  CleanProgress         RemoteEvent (client → server: actively washing a wall; wash reward, paid silently -- no RewardPopup)
   WallCleaned           RemoteEvent (client → server: a wall is fully erased; job progress)
   CleanDecal            RemoteEvent (client → server: stain-click intent)
   DecalCleaned          RemoteEvent (server → client: hide your local copy of a cleaned stain; sent to EVERY member of the job session)
@@ -1213,7 +1241,7 @@ ServerScriptService/
   Modules/GarbageCarryService.luau   who holds which piece of garbage, PER SESSION (keyed by surfaceId on a weak-keyed table off the JobServer): validates CarryGarbage against the active job / party-member conflict / range, publishes GarbageCarry, relays the carrier's GarbageMove to the rest of their session (plus the post-drop settle report), drops on job change / respawn / leave. Pins the AUTHORED pieces still (anchored, non-colliding) as clone templates and registers the CleanableGarbage collision group non-collidable vs PlayerCollisionService.GROUP. Moves no instances -- the carried thing is a client-local clone
   Modules/GarbageShredService.luau   the CLEAN half of garbage: validates a client's ShredGarbage report (on that job, a real authored piece, not already cleaned, the building has a shredder), dedupes the duplicate reports a party's clones produce via a weak-keyed per-session in-flight set, drops it from its carrier's hands, confirms with GarbageCleaned to every session member, then -- after the animation's own length -- pays 4 XP / 4 Cash and calls JobServer.markGarbageCleaned
   Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService
-  Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups
+  Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups; rewardSilently() pays the same with no popup/chime (used by the per-second wall wash, which would otherwise spam them)
   Modules/ToolService.luau           grants owned+Unlocked items as Backpack Tools (clones from ReplicatedStorage.Items by ToolId), per spawn + on inventory change
   Modules/ShopService.luau           upgrades shop authority: PurchaseItem / UpgradeItem (re-validated, GEM-charged; upgrade math from shared ItemUpgrades)
   Modules/SkillsService.luau         skills authority: PurchaseSkill (re-validated, Gem-charged), getMultiplier read-point for other services, free-roam walk speed (StarterPlayer.CharacterWalkSpeed x Speedy), ProcessReceipt for the Robux unlock-all product
@@ -1251,7 +1279,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/WebVisibility.luau       web visibility: hidden unless on the job (reparented to HiddenWebs holder); per-client hide-on-vacuum + reparent restore on redo; getWebCount / getActiveVisibleWebs
   Modules/GarbageVisibility.luau   garbage is CLONED, not shown/hidden: authored pieces go off-world permanently (AuthoredGarbage holder, home CFrame recorded) and each job gets this client's own local clones of that business's pieces, built in place in the CleanableGarbage folder so GarbageResolver still resolves them. Rebuilding them IS the job-start reset. getGarbageCount / getPiece / getPieces / getHome / hideOne / takePiece (hand the clone over WITHOUT destroying it -- the shredder's animation needs it in the world but untouchable)
   Modules/GarbageCarryController.luau  garbage carry: white AlwaysOnTop hover outline, click to pick up / let go (CarryGarbage by surfaceId), physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
-  Modules/GarbageShredController.luau  the CLEAN half of garbage: watches the active business's shredder Hitbox for one of OUR clones (ShredGarbage), and on the server's GarbageCleaned takes the clone out of GarbageVisibility, freezes it and drives its pivot p1 -> hold -> p2 with a lateral-only shake, playing ShredderSFX from the mouth until it vanishes; counts it via JobController.onGarbageCleaned and bins anything still animating when the job ends
+  Modules/GarbageShredController.luau  the CLEAN half of garbage: watches the active business's shredder Hitbox for one of OUR clones (ShredGarbage), and on the server's GarbageCleaned takes the clone out of GarbageVisibility, freezes it and drives its pivot p1 -> hold -> p2 with a side-to-side shake, ShredderSFX playing positionally out of the hitbox and a yellow VfxManager.shredDebris shower riding it down, until it vanishes; counts it via JobController.onGarbageCleaned and bins anything still animating when the job ends
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown
   Modules/JobSummaryController.luau end-of-job summary (JobSummary remote): payout / % cleaned / duration, bounced in via UiAnimations.DropIn; offers replay (AcceptJob) or GoHome

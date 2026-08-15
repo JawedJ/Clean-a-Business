@@ -104,13 +104,17 @@ local CleaningConfig = {
 	-- client-local because the SERVER waits out the same total before marking the piece cleaned, so
 	-- the completion bar ticks as the piece disappears rather than as it starts moving.
 	GarbageShredEntrySeconds = 0.3,
-	GarbageShredHoldSeconds = 1,
+	GarbageShredHoldSeconds = 0.45,
 	GarbageShredDropSeconds = 2,
-	-- The SFX (ReplicatedStorage.Audios.SFX.<name>) started once the piece reaches the mouth and cut
-	-- off the instant it's shredded -- the sound is the machine chewing, so it lasts exactly as long
-	-- as there's something in it. Played POSITIONALLY, out of the shredder's hitbox (see
-	-- SoundManager.playAt), so it fades with distance like the machine it's coming from.
+	-- The SFX (ReplicatedStorage.Audios.SFX.<name>). It covers the DESCENT -- cut off the instant the
+	-- piece is shredded -- because the sound is the machine chewing, and that's the beat where it's
+	-- being chewed. Played POSITIONALLY, out of the shredder's hitbox (see SoundManager.playAt), so
+	-- it fades with distance like the machine it's coming from.
 	ShredderSoundName = "ShredderSFX",
+	-- How far into the HOLD the sound starts, ahead of the descent it belongs to. The file opens on
+	-- the machine spinning up, so starting it dead on the drop puts the bite after the piece is
+	-- already moving; this much lead lands the two together. Clamped to the hold's own length.
+	GarbageShredSoundLeadSeconds = 0.3,
 
 	-- Cleanable spills (mop targets) live alongside the walls + stains:
 	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableSpills.<model>

@@ -13,9 +13,10 @@
 --     hover or idle-reset something that's already in the machine) and this module owns the instance
 --     from there: it snaps to the mouth (p1), holds for a beat, then gets dragged down to p2 shaking
 --     violently, and is destroyed.
---   * THE SOUND -- ShredderSFX starts the moment the piece reaches the mouth and is cut off the
---     instant the piece is gone: the machine is only ever heard chewing something. It's played out
---     of the hitbox (positional), so it belongs to the machine rather than to the player.
+--   * THE SOUND + DEBRIS -- both cover the DESCENT only (p1 -> p2), the beat where the piece is
+--     actually being chewed. ShredderSFX plays out of the hitbox (positional), so it belongs to the
+--     machine rather than to the player, and is cut off the instant the piece is gone; a shower of
+--     yellow flecks (VfxManager.shredDebris) rides the piece down and falls away from it.
 --
 -- Nothing here decides that a piece is clean. The server counts it (GarbageShredService), on its own
 -- timer of the same length, so the completion bar ticks as the piece disappears.
@@ -28,6 +29,7 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local GarbageResolver = require(ReplicatedStorage.SharedModules.GarbageResolver)
 local ShredderResolver = require(ReplicatedStorage.SharedModules.ShredderResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
+local VfxManager = require(ReplicatedStorage.SharedModules.VfxManager)
 local GarbageVisibility = require(script.Parent.GarbageVisibility)
 local JobController = require(script.Parent.JobController)
 
@@ -102,9 +104,17 @@ local function freeze(piece: PVInstance)
 end
 
 -- Drive `piece`'s pivot from `from` to `to` over `seconds`, optionally jittering it about the path.
--- Yields until done (or until the piece is gone). Runs off Heartbeat rather than a Tween because a
--- Model has no tweenable CFrame property, and the shake has to be re-randomised every frame.
-local function glide(piece: PVInstance, from: CFrame, to: CFrame, seconds: number, shake: boolean)
+-- `follow` (if given) is called with each pivot, so an effect can ride along. Yields until done (or
+-- until the piece is gone). Runs off Heartbeat rather than a Tween because a Model has no tweenable
+-- CFrame property, and the shake has to be re-randomised every frame.
+local function glide(
+	piece: PVInstance,
+	from: CFrame,
+	to: CFrame,
+	seconds: number,
+	shake: boolean,
+	follow: ((CFrame) -> ())?
+)
 	local elapsed = 0
 	while elapsed < seconds do
 		elapsed += RunService.Heartbeat:Wait()
@@ -128,6 +138,9 @@ local function glide(piece: PVInstance, from: CFrame, to: CFrame, seconds: numbe
 				)
 		end
 		piece:PivotTo(pivot)
+		if follow then
+			follow(pivot)
+		end
 	end
 end
 
@@ -159,14 +172,26 @@ local function shred(surfaceId: string)
 			return
 		end
 
-		-- At the mouth: the machine starts chewing. Out of the hitbox rather than 2D, so it's the
-		-- MACHINE that's audible -- it fades with distance, and a party member across the building
-		-- hears it from where it actually is.
-		local sound = SoundManager.playAt(Config.ShredderSoundName, shredder.hitbox)
-		task.wait(Config.GarbageShredHoldSeconds)
+		-- Sat at the mouth for a beat before the machine takes it, but with the SFX starting a little
+		-- BEFORE the drop (GarbageShredSoundLeadSeconds): the file opens on the machine spinning up,
+		-- so this lands its bite on the moment the piece actually moves. Positional, out of the
+		-- hitbox rather than 2D, so it's the MACHINE that's audible -- it fades with distance, and a
+		-- party member across the building hears it from where it actually is.
+		local lead = math.min(Config.GarbageShredSoundLeadSeconds, Config.GarbageShredHoldSeconds)
+		task.wait(Config.GarbageShredHoldSeconds - lead)
+		local sound: Sound? = if piece.Parent
+			then SoundManager.playAt(Config.ShredderSoundName, shredder.hitbox)
+			else nil
+		task.wait(lead)
 
+		-- The descent is the beat where it's actually being chewed, so it's the only one with debris:
+		-- a shower of yellow flecks riding the piece down and falling away from it, which outlives
+		-- the piece by a fleck's lifetime so the last of it is still in the air as the piece vanishes
+		-- (see VfxManager.shredDebris).
 		if piece.Parent then
-			glide(piece, entry, exit, Config.GarbageShredDropSeconds, true)
+			local debris = VfxManager.shredDebris(entry)
+			glide(piece, entry, exit, Config.GarbageShredDropSeconds, true, debris.move)
+			debris.stop()
 		end
 
 		-- Gone, and the sound with it: the machine only makes noise while there's something in it.
