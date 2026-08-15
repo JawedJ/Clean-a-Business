@@ -5,17 +5,17 @@
 -- button is shown only if the player owns an item whose SlotNumber matches it; clicking
 -- the button -- or pressing that number key -- equips that slot's Tool.
 --
--- Equipping never unequips: we only ever call Humanoid:EquipTool (which swaps the current
--- tool out for the new one), so once a tool is equipped the player always holds one, and
--- pressing/clicking the slot that's already equipped is a no-op instead of a toggle-off.
+-- Slots toggle: pressing/clicking a slot that isn't in hand equips it (swapping out whatever
+-- was held), and pressing/clicking the slot that IS in hand unequips it, leaving the player
+-- empty-handed. A job starts with nothing equipped.
 --
 -- Tools are the physical Tool instances the server grants into the Backpack (ToolService),
 -- each tagged with a ToolId attribute (== the Item's UniqueID). We map slot -> UniqueID
 -- from the player's Inventory data, then resolve the matching Tool by that attribute.
 --
 -- The inventory is only shown while the player holds a job (keyed off the ActiveJob
--- attribute, like the rest of the HUD): the job starts -> the frame appears and slot 1 is
--- auto-equipped; the job ends -> the frame hides and any held tool is unequipped.
+-- attribute, like the rest of the HUD): the job starts -> the frame appears with nothing in
+-- hand; the job ends -> the frame hides and any held tool is unequipped.
 --
 -- The default Backpack CoreGui is disabled so its hotbar + number-key toggle can't fight
 -- this one. Like the other HUD controllers, the ScreenGui is re-cloned into PlayerGui on
@@ -49,9 +49,6 @@ local SLOT_KEYS: { [Enum.KeyCode]: number } = {
 local InventoryController = {}
 
 type SlotInfo = { id: string, name: string }
-
--- The slot auto-equipped when a job starts.
-local PRIMARY_SLOT = 1
 
 -- slot number -> owned item's { UniqueID, Name }, rebuilt whenever the inventory changes.
 local slotInfo: { [number]: SlotInfo } = {}
@@ -100,11 +97,10 @@ local function findTool(toolId: string): Tool?
 	return nil
 end
 
--- Equip the tool in `slot`. Never unequips: if that tool is already in hand we leave it,
--- and we only ever EquipTool, so a press/click can't leave the player empty-handed.
-local function equipSlot(slot: number)
-	-- Only equippable while on a job. Off-job (in the plot/lobby, e.g. right after GoHome)
-	-- the ActiveJob attribute is already cleared, so a stray number-key press here would
+-- Toggle the tool in `slot`: equip it, or unequip it if it's already in hand.
+local function toggleSlot(slot: number)
+	-- Only usable while on a job. Off-job (in the plot/lobby, e.g. right after GoHome) the
+	-- ActiveJob attribute is already cleared, so a stray number-key press here would
 	-- otherwise strand a tool in hand with nothing left to unequip it (stow already ran).
 	if not hasActiveJob() then
 		return
@@ -125,8 +121,9 @@ local function equipSlot(slot: number)
 	if not tool then
 		return
 	end
-	-- Already equipped (parented to the character) -> nothing to do; do NOT toggle it off.
+	-- Already equipped (parented to the character) -> put it away, holding nothing.
 	if tool.Parent == character then
+		humanoid:UnequipTools()
 		return
 	end
 	humanoid:EquipTool(tool)
@@ -176,14 +173,15 @@ local function applyInventoryVisible()
 	end
 end
 
--- React to a job starting: show the inventory and auto-equip slot 1. On a job ENDING we
+-- React to a job starting: show the inventory, with nothing in hand -- the player picks a
+-- slot themselves (the unequip covers a tool carried over from a previous job). On a job ENDING we
 -- deliberately leave the hotbar up and the tool in hand -- the JobSummary is showing and the
 -- player is still "in the job" until they choose. The stow (hide + unequip) is deferred to
--- GoHome, via stow(); PlayAgain just starts another job and re-equips through here.
+-- GoHome, via stow(); PlayAgain just starts another job and comes back through here.
 local function onActiveJobChanged()
 	if hasActiveJob() then
 		applyInventoryVisible()
-		equipSlot(PRIMARY_SLOT)
+		unequipTools()
 	end
 end
 
@@ -207,7 +205,7 @@ local function bind(screenGui: Instance)
 		if button and button:IsA("ImageButton") then
 			slotButtons[slot] = button
 			button.Activated:Connect(function()
-				equipSlot(slot)
+				toggleSlot(slot)
 			end)
 		end
 	end
@@ -244,14 +242,14 @@ function InventoryController.init()
 	-- Show/hide + auto-equip/unequip as the player enters and leaves a job.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(onActiveJobChanged)
 
-	-- Number keys equip their slot, unless the keystroke was consumed elsewhere (a TextBox).
+	-- Number keys toggle their slot, unless the keystroke was consumed elsewhere (a TextBox).
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		if gameProcessed then
 			return
 		end
 		local slot = SLOT_KEYS[input.KeyCode]
 		if slot then
-			equipSlot(slot)
+			toggleSlot(slot)
 		end
 	end)
 
