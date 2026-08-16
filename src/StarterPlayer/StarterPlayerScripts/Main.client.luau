@@ -12,12 +12,13 @@ local WebVisibility = require(Modules:WaitForChild("WebVisibility"))
 local GarbageVisibility = require(Modules:WaitForChild("GarbageVisibility"))
 local JobController = require(Modules:WaitForChild("JobController"))
 local PressureWasherController = require(Modules:WaitForChild("PressureWasherController"))
+local WashJoystickController = require(Modules:WaitForChild("WashJoystickController"))
 local BroomController = require(Modules:WaitForChild("BroomController"))
 local MopController = require(Modules:WaitForChild("MopController"))
 local VacuumController = require(Modules:WaitForChild("VacuumController"))
 local GarbageCarryController = require(Modules:WaitForChild("GarbageCarryController"))
 local GarbageShredController = require(Modules:WaitForChild("GarbageShredController"))
-local DropButtonController = require(Modules:WaitForChild("DropButtonController"))
+local InteractButtonController = require(Modules:WaitForChild("InteractButtonController"))
 local Crosshair = require(Modules:WaitForChild("Crosshair"))
 local RewardPopupController = require(Modules:WaitForChild("RewardPopupController"))
 local LevelUiController = require(Modules:WaitForChild("LevelUiController"))
@@ -109,6 +110,9 @@ safeInit("JobController", JobController.init)
 safeInit("PressureWasherController", function()
 	PressureWasherController.init(SurfaceManager.getSurface)
 end)
+-- The touch washer trigger + look joystick. After PressureWasherController, whose equip state it
+-- subscribes to and whose firing it drives.
+safeInit("WashJoystickController", WashJoystickController.init)
 safeInit("BroomController", BroomController.init)
 safeInit("MopController", MopController.init)
 safeInit("VacuumController", VacuumController.init)
@@ -118,9 +122,9 @@ safeInit("GarbageCarryController", GarbageCarryController.init)
 -- every member of the session runs on their own clone. Init after GarbageCarryController so the
 -- carry is already listening by the time a piece can be fed in.
 safeInit("GarbageShredController", GarbageShredController.init)
--- The HUD's drop button, shown only while the player is carrying a piece (the only way to let go on
--- touch). After GarbageCarryController, whose carry state it subscribes to.
-safeInit("DropButtonController", DropButtonController.init)
+-- The HUD's touch interact button: picks up the outlined piece, or drops the carried one (the only
+-- way to let go on touch). After GarbageCarryController, whose carry + hover state it subscribes to.
+safeInit("InteractButtonController", InteractButtonController.init)
 safeInit("Crosshair", Crosshair.init)
 safeInit("RewardPopupController", RewardPopupController.init)
 safeInit("LevelUiController", LevelUiController.init)

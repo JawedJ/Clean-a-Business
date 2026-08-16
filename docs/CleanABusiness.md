@@ -741,10 +741,12 @@ One instance per cleanable part. Owns the dirt overlay and the erase logic.
 - Detects the tool via the `ToolId` attribute and binds its `Equipped` / `Activated`
   (hold to fire) / `Deactivated` / `Unequipped` events. **No ammo** — firing is
   unrestricted while held.
-- **Mobile (touch-only devices):** holding to fire while dragging to look is impossible, so
-  on mobile the washer fires **continuously the whole time it's equipped** (`Activated` /
-  `Deactivated` are ignored; only `Unequipped` stops it). Desktop and console (gamepad) keep
-  the normal hold-to-fire. `IS_MOBILE` = `TouchEnabled and not Keyboard/Mouse/Gamepad`.
+- **Mobile (touch-only devices):** `Activated` / `Deactivated` are ignored (a tap is a look/aim
+  gesture), and the trigger is the HUD's **`JoystickRange.WashButton`, held** —
+  `WashJoystickController` calls `PressureWasherController.setFiring(on)`, which fires only while
+  the tool is equipped **and** a job is live. That button doesn't sink the touch it's under, so the
+  swipe holding it still pans the camera — which is what makes aiming and spraying possible at
+  once. Desktop and console (gamepad) keep the normal hold-to-fire. `IS_MOBILE` = `TouchEnabled and not Keyboard/Mouse/Gamepad`.
 - Each `Heartbeat` while firing: raycasts and, if it hits a cleanable part **on its overlay
   face** (the hit normal must match the surface's own face within `> 0.99`), tells that surface
   to clean. The ray also **ignores each business's `Interior` and `CleanableDecals` folders** (so
@@ -1221,7 +1223,7 @@ no server state or remotes.
   washer** (`ToolConfig.pressureWasher`), every job, and the last slot they chose is remembered.
   The **only** thing that empties their hands is **carrying a piece of cleanable garbage** —
   `GarbageCarryController` unequips on pickup — and the remembered tool goes straight back when the
-  piece leaves their hands (shredded, dropped, drop button, job over), via
+  piece leaves their hands (shredded, dropped, interact button, job over), via
   `GarbageCarryController.onCarryingChanged`. Equipping is **retried** for a few seconds
   (`EQUIP_RETRIES`) because `ToolService` may still be granting the Tools when a job starts or a
   respawn re-parents them, and a `ChildRemoved` watch with a 1s grace catches the leftover case: a
@@ -1333,13 +1335,15 @@ StarterPlayer/StarterPlayerScripts/
   Modules/ExclusivePanels.luau     one-panel-at-a-time coordinator (job board / shop / skills / settings / the three party screens): opening one closes the other simultaneously, raises the opener above it, and queues actions requested mid-animation (max 2, latest per panel wins); openInstant swaps with NO animation (steps inside the party flow), hideAll snaps everything shut when a job starts, isOpen asks what's up
   Modules/JobUiController.luau     job board UI: toggle (Buttons.JobButton/B key), per-business rows, AcceptJob; gates Wash/Locked through BusinessGates (green Requirements when met); draws mastery stars/boost + boosted Rewards; openForSelection lends the board to the party flow (the next Wash reports its businessId instead of starting a job); hides the Buttons frames while on a job and calls ExclusivePanels.hideAll when one starts; publishes that HUD visibility (isHudVisible/onHudVisibilityChanged) for the standalone buttons outside the clusters; wires the HUD clusters' grid-aware hover polish (the one grow UiButtonController skips)
   Modules/BusinessGates.luau       shared "what does this business demand of me, and what does it pay": canPlay, paintRequirements, paintRequiredItems, rewardsText, displayName, imageFor (off the board row's BusinessImg), onChanged. Used by the job board's rows AND the party browser's slots so the two can never disagree
-  Modules/UiButtonController.luau  the one place button polish is wired: scans PlayerGui (+ DescendantAdded) and gives EVERY GuiButton the click SFX, hover SFX, and hover grow (skips TouchGui controls; skips the HUD clusters, which JobUiController wires grid-aware)
+  Modules/UiButtonController.luau  the one place button polish is wired: scans PlayerGui (+ DescendantAdded) and gives EVERY GuiButton the click SFX, hover SFX, and hover grow (skips TouchGui controls; skips the HUD clusters, which JobUiController wires grid-aware; skips JoystickRange's WashButton entirely -- it's a held joystick, and the grow would fight the position it drives)
   Modules/JobCompletionController.luau  completion HUD: live progress bar + %, FinishEarly button/H key
   Modules/SurfaceManager.luau      wall-overlay engine, driven by JobClient (buildWalls/clear)
   Modules/DecalVisibility.luau     stain visibility: hidden unless on the job; per-client clean + redo
   Modules/SpillVisibility.luau     spill visibility: hidden unless on the job; per-client hide-on-mop + Transparency reset on redo; getSpillCount / getActiveVisibleSpills
   Modules/CleanableSurface.luau    dirt-overlay OOP class
   Modules/PressureWasherController.luau   tool input + raycast + cleaning; fires a VfxManager.cleanBurst sprite every 0.2s while dirt is actually coming off
+  Modules/WashJoystickController.luau  TOUCH ONLY, shown only while the pressure washer is equipped: ScreenGui.JoystickRange.WashButton is the washer's trigger, held -> PressureWasherController.setFiring. Left Active = FALSE on purpose (the one control here that is): an active GuiButton swallows its touch, and the default camera's pan region only sees touches the GUI didn't take -- holding the trigger would freeze the camera. Inactive, the swipe still pans, and the press is picked up off UserInputService and hit-tested with GetGuiObjectsAtPosition. Nothing here touches the camera. The knob follows the thumb inside its ring (clamped to the room left in it) and snaps back to its authored position on release
+  Modules/InteractButtonController.luau  TOUCH ONLY: ScreenGui.InteractButton picks up whatever the CROSSHAIR is on (GarbageCarryController.pickup) with empty hands, drops what's carried otherwise, image per state, hidden when neither
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
   Modules/MopController.luau       mop input + raycast + client-driven spill fade (hold-to-clean, Power/sec) + persistent per-spill billboard bar; fires CleanSpill on full fade
   Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb

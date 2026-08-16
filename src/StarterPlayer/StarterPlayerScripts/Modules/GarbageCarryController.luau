@@ -27,8 +27,9 @@
 --     (CanQuery) -- a tap goes straight THROUGH the broom to the garbage behind it.
 --   * LETTING GO -- a mouse click drops what we're holding; a TAP never does (TOUCH_CAN_DROP), since
 --     the movement stick and the camera pan region arrive here as ordinary unprocessed touches.
---     A dedicated HUD button (DropButtonController) drops as well, on every platform -- it's the
---     only way to let go on touch.
+--     A dedicated HUD button (InteractButtonController) drops as well -- on touch, where it's the
+--     only way to let go. With empty hands that same button picks up instead, taking whatever the
+--     CROSSHAIR is on (never the proximity outline -- see setAimed).
 --   * CARRY -- the held piece is DRAGGED, not teleported: an AlignPosition/AlignOrientation pair
 --     pulls it toward a point in front of the crosshair, keeping its authored tilt and turning with
 --     the camera. Dragging it with physics rather than writing its CFrame is what makes the world's
@@ -120,8 +121,8 @@ local IS_MOBILE = UserInputService.TouchEnabled
 	and not UserInputService.MouseEnabled
 	and not UserInputService.GamepadEnabled
 
--- A TAP never drops what the player is holding -- only a mouse click does, and the HUD's drop button
--- (DropButtonController) calls GarbageCarryController.drop().
+-- A TAP never drops what the player is holding -- only a mouse click does, and the HUD's interact
+-- button (InteractButtonController) calls GarbageCarryController.drop().
 --
 -- Touches can't be trusted to mean "let go" here: the default dynamic thumbstick and the camera pan
 -- region read raw input rather than sitting behind a GuiButton, so `gameProcessed` is false for them
@@ -159,10 +160,17 @@ local alignOrientation: AlignOrientation? = nil
 local lastRelayAt = 0
 local lastRelayPosition: Vector3? = nil
 
--- Told whenever our own hands go from empty to full or back (see onCarryingChanged) -- the drop
+-- Told whenever our own hands go from empty to full or back (see onCarryingChanged) -- the interact
 -- button is shown off this. Party members' carries never reach these: they're about OUR hands.
 local carryListeners: { (boolean) -> () } = {}
 local lastCarryState = false
+
+-- Told whenever the CROSSHAIR goes on or off a piece we could pick up. The touch interact button is
+-- shown off this. Deliberately NOT the white outline: the outline falls back to the nearest piece in
+-- reach when we're not looking at anything, and the button must only ever take what's actually under
+-- the crosshair (players are locked to first person with a custom crosshair for the whole job).
+local aimListeners: { (boolean) -> () } = {}
+local lastAimState = false
 
 -- surfaceId -> the party member holding it, so we don't offer their piece for pickup and know to
 -- drive our copy of it from their relay rather than local physics.
@@ -176,6 +184,10 @@ local lastTouched: { [string]: number } = {}
 -- the same effect every other cleanable uses).
 local hovered: Instance? = nil
 local highlight: HoverHighlight.HoverHighlight? = nil
+
+-- The surfaceId of the piece the CROSSHAIR is on within pickup range, or nil. This -- not `hovered`
+-- -- is what the interact button shows off and takes.
+local aimedId: string? = nil
 
 -- The aim ray ignores our own character (we're standing right next to what we're aiming at). The
 -- filter is refreshed on each respawn rather than rebuilt per frame -- the hover check runs every
@@ -380,6 +392,21 @@ local function setHovered(garbage: PVInstance?)
 	end
 end
 
+-- Record what the crosshair is on (a surfaceId, or nil for nothing), and tell the listeners when
+-- that goes from something to nothing or back. Deduped like notifyCarrying: this is called every
+-- frame, and a listener showing a button shouldn't have to filter the repeats.
+local function setAimed(surfaceId: string?)
+	aimedId = surfaceId
+	local offered = surfaceId ~= nil
+	if offered == lastAimState then
+		return
+	end
+	lastAimState = offered
+	for _, callback in aimListeners do
+		task.spawn(callback, offered)
+	end
+end
+
 -- Put away any held tool. Carrying is hands-full, so picking up empties them.
 local function unequipTools()
 	local human = humanoid()
@@ -490,19 +517,49 @@ function GarbageCarryController.isCarrying(): boolean
 	return carriedId ~= nil
 end
 
+-- Watch whether the crosshair is on a piece we could pick up. Fires immediately with the current
+-- state, then on every flip.
+function GarbageCarryController.onAimChanged(callback: (boolean) -> ())
+	table.insert(aimListeners, callback)
+	callback(lastAimState)
+end
+
+-- True while the crosshair is on a piece, i.e. while pickup() would do something.
+function GarbageCarryController.hasAimTarget(): boolean
+	return aimedId ~= nil
+end
+
 -- Ask the server to pick a piece up, or (nil) to let go of what we're holding. The server answers on
 -- GarbageCarry; nothing moves until it does.
 local function request(surfaceId: string?)
 	CarryGarbage:FireServer(surfaceId)
 end
 
--- Let go of whatever we're holding, from anywhere. This is the mobile drop button's entry point,
--- since a tap never drops (see TOUCH_CAN_DROP); harmless to call with empty hands. The server still
--- decides -- we only ask, and act on the GarbageCarry confirmation like every other path here.
+-- Let go of whatever we're holding, from anywhere. This is the mobile interact button's drop entry
+-- point, since a tap never drops (see TOUCH_CAN_DROP); harmless to call with empty hands. The server
+-- still decides -- we only ask, and act on the GarbageCarry confirmation like every other path here.
 function GarbageCarryController.drop()
 	if carriedId then
 		request(nil)
 	end
+end
+
+-- Pick up whatever the CROSSHAIR is on -- the interact button's other half. Not the button's own
+-- pixel (it's nowhere near the garbage on screen) and not the outlined piece either, since the
+-- outline falls back to the nearest piece in reach: the button takes what the player has actually
+-- aimed at, which during a job is always the centre of the screen. Harmless when the crosshair is on
+-- nothing or our hands are already full.
+function GarbageCarryController.pickup()
+	if carriedId then
+		return
+	end
+	local surfaceId = aimedId
+	if not surfaceId then
+		return
+	end
+	-- Empty our hands up front, same as a tap (see onClick).
+	unequipTools()
+	request(surfaceId)
 end
 
 -- Click / tap: drop what we're carrying, else pick up whatever the crosshair is on.
@@ -639,8 +696,10 @@ local function onCarryChanged(player: Player, surfaceId: string?)
 		local look = if ray then ray.Direction else Vector3.new(0, 0, -1)
 		carriedYaw = math.atan2(-look.X, -look.Z)
 		buildDrag(piece)
-		-- Whatever we were about to grab, we're holding something now.
+		-- Whatever we were about to grab, we're holding something now -- flip the button to "drop"
+		-- here rather than letting the next frame do it, so it never shows a stale image.
 		setHovered(nil)
+		setAimed(nil)
 		notifyCarrying()
 		return
 	end
@@ -686,17 +745,38 @@ local function relay(garbage: PVInstance, surfaceId: string)
 	GarbageMove:FireServer(surfaceId, pivot)
 end
 
+-- Is this piece close enough to be OUTLINED? The aim ray below reaches the full pickup range (what
+-- the interact button can take), which is further than the outline invites.
+local function withinHoverRange(piece: PVInstance): boolean
+	local from = rootPosition()
+	local position = GarbageResolver.getPosition(piece)
+	if not from or not position then
+		return false
+	end
+	return (from - position).Magnitude <= Config.GarbageHoverRange
+end
+
 -- Per frame: outline what we're aiming at, or aim the drag holding what we're carrying.
 local function onRenderStepped()
 	local garbage = carried
 	local surfaceId = carriedId
 	if not garbage or not surfaceId then
-		-- What we're LOOKING at, else simply the nearest piece in reach -- so garbage on the floor
-		-- beside us is offered without having to aim down at it. See findNearest.
-		local target = findTarget(Config.GarbageHoverRange) or findNearest(pickupRange())
-		setHovered(target)
+		-- ONE aim ray, cast to the longer PICKUP range, answers both questions: what the interact
+		-- button would take (anything the crosshair is on), and what to outline (the same piece, but
+		-- only once it's inside the shorter hover range). Casting twice down the same pixel would only
+		-- create a way for the two to disagree.
+		local aimed, aimedSurfaceId = findTarget(pickupRange())
+		setAimed(aimedSurfaceId)
+
+		-- The outline, unlike the button, falls back to the nearest piece in reach -- so garbage on the
+		-- floor beside us is offered without having to aim down at it. See findNearest.
+		local target = if aimed and withinHoverRange(aimed) then aimed else nil
+		setHovered(target or findNearest(pickupRange()))
 		return
 	end
+
+	-- Hands full: nothing is on offer, so the button reads as "drop" rather than "pick up".
+	setAimed(nil)
 
 	-- The job (or the piece) can end under us; the server drops the carry, but stop driving it the
 	-- moment it's gone rather than waiting for the round trip.
@@ -862,6 +942,7 @@ function GarbageCarryController.init()
 		table.clear(carriedByOthers)
 		table.clear(lastTouched)
 		setHovered(nil)
+		setAimed(nil)
 	end)
 
 	watchTools(localPlayer)
@@ -869,6 +950,7 @@ function GarbageCarryController.init()
 		-- A fresh character holds nothing; the server drops the carry on CharacterRemoving.
 		clearCarry()
 		setHovered(nil)
+		setAimed(nil)
 		refreshRayFilter()
 		watchTools(model)
 	end)

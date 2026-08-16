@@ -66,10 +66,13 @@ local SOUND_SECTION_END = 2.5
 
 local localPlayer = Players.LocalPlayer
 
--- Touch-only devices (phones/tablets): can't hold-to-fire and drag to look at the same
--- time, so on mobile the washer fires continuously while it's equipped instead of on
--- press/release. Console (gamepad) and desktop keep the normal hold-to-fire. Evaluated
--- once -- input capabilities don't meaningfully change mid-session.
+-- Touch-only devices (phones/tablets). A tap can't mean "fire" here -- it's a look/aim gesture --
+-- so on touch the trigger is the HUD's WashButton, held (WashJoystickController, which calls
+-- setFiring). That button deliberately doesn't sink the touch it's under, so the swipe that holds it
+-- still pans the camera -- which is what lets the player aim and spray at the same time, the thing
+-- this platform couldn't do before. Console (gamepad) and desktop keep
+-- the normal hold-to-fire off Activated/Deactivated. Evaluated once -- input capabilities don't
+-- meaningfully change mid-session.
 local IS_MOBILE = UserInputService.TouchEnabled
 	and not UserInputService.KeyboardEnabled
 	and not UserInputService.MouseEnabled
@@ -267,27 +270,60 @@ local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
 end
 
--- Mobile only: fire whenever the washer is equipped AND a job is active, stop otherwise.
--- (Desktop/console keep hold-to-fire via Activated/Deactivated.) The washer now stays equipped
--- through the end-of-job JobSummary, so equip alone can't gate firing anymore -- otherwise the
--- spray would keep running over the summary. Driven by both the Equipped event and the
--- ActiveJob attribute so it starts on a fresh job and stops the instant one ends.
-local function refreshMobileFiring()
-	if not IS_MOBILE then
+-- Start/stop the spray, deduped so repeat calls are free.
+local function startFiring()
+	if firing then
 		return
 	end
-	local shouldFire = equippedTool ~= nil and hasActiveJob()
-	if shouldFire == firing then
+	firing = true
+	startSound()
+	startSpray()
+end
+
+local function stopFiring()
+	if not firing then
 		return
 	end
-	firing = shouldFire
-	if shouldFire then
-		startSound()
-		startSpray()
+	firing = false
+	resetStroke()
+	stopSound()
+	stopSpray()
+end
+
+-- Told whenever the washer goes in or out of our hands -- the touch WashButton is shown off this.
+local equipListeners: { (boolean) -> () } = {}
+local lastEquipState = false
+
+local function notifyEquipped()
+	local equipped = equippedTool ~= nil
+	if equipped == lastEquipState then
+		return
+	end
+	lastEquipState = equipped
+	for _, callback in equipListeners do
+		task.spawn(callback, equipped)
+	end
+end
+
+-- Watch whether the pressure washer is equipped. Fires immediately with the current state, then on
+-- every flip (same shape as GarbageCarryController.onCarryingChanged).
+function PressureWasherController.onEquippedChanged(callback: (boolean) -> ())
+	table.insert(equipListeners, callback)
+	callback(lastEquipState)
+end
+
+function PressureWasherController.isEquipped(): boolean
+	return equippedTool ~= nil
+end
+
+-- The touch trigger (WashJoystickController holding the WashButton). Firing still needs the tool in
+-- hand and a LIVE job: the washer stays equipped through the end-of-job JobSummary, so equip alone
+-- can't gate it -- otherwise the spray would keep running over the summary.
+function PressureWasherController.setFiring(on: boolean)
+	if on and equippedTool and hasActiveJob() then
+		startFiring()
 	else
-		resetStroke()
-		stopSound()
-		stopSpray()
+		stopFiring()
 	end
 end
 
@@ -295,39 +331,30 @@ local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
 		resolveSpray(tool)
-		-- Mobile: fire while equipped, but only during a job (refreshMobileFiring gates it).
-		refreshMobileFiring()
+		notifyEquipped()
 	end)
 	tool.Activated:Connect(function()
-		-- On mobile firing is tied to equip, not to taps -- a tap is a look/aim gesture.
+		-- On touch a tap is a look/aim gesture, never the trigger -- that's the WashButton.
 		if IS_MOBILE then
 			return
 		end
 		if equippedTool == tool then
-			firing = true
-			startSound()
-			startSpray()
+			startFiring()
 		end
 	end)
 	tool.Deactivated:Connect(function()
-		-- On mobile we never stop on release; only Unequipped stops the washer.
 		if IS_MOBILE then
 			return
 		end
-		firing = false
-		resetStroke()
-		stopSound()
-		stopSpray()
+		stopFiring()
 	end)
 	tool.Unequipped:Connect(function()
 		if equippedTool == tool then
 			equippedTool = nil
-			firing = false
-			resetStroke()
-			stopSound()
-			stopSpray()
+			stopFiring()
 			sprayEmitter = nil
 			sprayAttachment = nil
+			notifyEquipped()
 		end
 	end)
 end
@@ -473,8 +500,13 @@ function PressureWasherController.init(surfaceGetter: (BasePart) -> Surface?)
 		watch(localPlayer.Character)
 	end
 
-	-- Mobile: start/stop the continuous spray as jobs begin and end (see refreshMobileFiring).
-	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(refreshMobileFiring)
+	-- A job ending cuts the spray mid-hold: the washer stays equipped through the JobSummary, and the
+	-- trigger (a held WashButton, or a held mouse button) doesn't let go by itself.
+	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(function()
+		if not hasActiveJob() then
+			stopFiring()
+		end
+	end)
 
 	-- Keep the ray exclude list current with the character and the streamed-in folders.
 	localPlayer.CharacterAdded:Connect(rebuildRayExclude)

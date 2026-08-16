@@ -35,6 +35,11 @@ local CLUSTER_FRAME_NAMES = { Button1 = true, Buttons2 = true, Buttons3 = true }
 -- The shop's InteractButton is skipped for the generic click sound: it already plays its own
 -- purchase/fail SFX (UpgradesUiController), so a click here would just overlap them.
 local INTERACT_BUTTON_NAME = "InteractButton"
+-- The pressure washer's WashButton lives in here, and it isn't a button in the sense this module
+-- means: it's a HELD trigger that doubles as a look joystick (WashJoystickController). The grow would
+-- fight it outright -- hoverGrow re-anchors the button and scales it, and the joystick drives that
+-- same Position every frame -- and the click/hover sounds would blip on every spray.
+local JOYSTICK_FRAME_NAME = "JoystickRange"
 
 local UiButtonController = {}
 
@@ -74,6 +79,11 @@ end
 
 local function wireButton(button: GuiButton)
 	if isUnpolished(button) then
+		return
+	end
+	-- The wash joystick gets nothing at all (see JOYSTICK_FRAME_NAME).
+	local parent = button.Parent
+	if parent and parent.Name == JOYSTICK_FRAME_NAME then
 		return
 	end
 
