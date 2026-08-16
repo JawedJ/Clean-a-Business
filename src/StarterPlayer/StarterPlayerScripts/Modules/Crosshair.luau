@@ -16,7 +16,18 @@ local LocalPlayer = Players.LocalPlayer
 -- briefly flip the state (which would flicker the cursor on and off).
 local ENTER_FIRST_PERSON_DISTANCE = 1.0
 local EXIT_FIRST_PERSON_DISTANCE = 2.0
-local DOT_SIZE = 12
+
+-- The dot is sized as a fraction of the viewport HEIGHT, not in fixed pixels: a flat pixel size is
+-- a different thing entirely on a phone than on a desktop monitor -- the same 12px dot that reads
+-- right on a laptop is a speck on a high-resolution phone screen. Height rather than width because
+-- height is the axis that varies least between a monitor and a handset held sideways.
+--
+-- Scale alone would stretch the dot with the aspect ratio, so a UIAspectRatioConstraint holds it
+-- square (a UICorner then makes it round -- an oval crosshair is very obvious). The size is clamped
+-- in pixels at both ends so it can't vanish on a small screen or turn into a blob on a huge one.
+local DOT_HEIGHT_SCALE = 0.011
+local DOT_MIN_PIXELS = 6
+local DOT_MAX_PIXELS = 18
 
 local Crosshair = {}
 
@@ -60,10 +71,22 @@ local function buildGui(): (ScreenGui, Frame)
 	dot.Name = "Dot"
 	dot.AnchorPoint = Vector2.new(0.5, 0.5)
 	dot.Position = UDim2.fromScale(0.5, 0.5)
-	dot.Size = UDim2.fromOffset(DOT_SIZE, DOT_SIZE)
+	-- Height drives the size; the aspect constraint below turns that into a square.
+	dot.Size = UDim2.fromScale(DOT_HEIGHT_SCALE, DOT_HEIGHT_SCALE)
 	dot.BackgroundColor3 = Color3.new(1, 1, 1)
 	dot.BorderSizePixel = 0
 	dot.Parent = gui
+
+	local aspect = Instance.new("UIAspectRatioConstraint")
+	aspect.AspectRatio = 1
+	aspect.DominantAxis = Enum.DominantAxis.Height
+	aspect.AspectType = Enum.AspectType.ScaleWithParentSize
+	aspect.Parent = dot
+
+	local sizeLimits = Instance.new("UISizeConstraint")
+	sizeLimits.MinSize = Vector2.new(DOT_MIN_PIXELS, DOT_MIN_PIXELS)
+	sizeLimits.MaxSize = Vector2.new(DOT_MAX_PIXELS, DOT_MAX_PIXELS)
+	sizeLimits.Parent = dot
 
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(1, 0)

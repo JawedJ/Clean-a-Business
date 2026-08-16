@@ -1,6 +1,6 @@
 --!strict
 
--- Drives the XP bar HUD (PlayerGui.ScreenGui.XpBar): fills "Fillable" to the
+-- Drives the XP bar HUD (PlayerGui.ScreenGui.TopBar): fills "Fillable" to the
 -- player's progress toward the next level, and writes the LevelText / XpText labels
 -- (plus the "3DEffect" label, a shadow duplicate of the level text). Reads the Level
 -- domain from DataService and re-renders whenever it changes -- the server replaces
@@ -25,6 +25,9 @@ type Level = DataTemplate.Level
 local localPlayer = Players.LocalPlayer
 
 local SCREEN_GUI_NAME = "ScreenGui"
+-- The HUD's top strip. The bar and its labels live under here: XpBar (with Fillable + the two level
+-- labels inside it) and XpText, which sits BESIDE the bar rather than inside it.
+local TOP_BAR_NAME = "TopBar"
 
 -- One-shot played when CurrentLevel rises (not on plain XP gains).
 local LEVEL_UP_SOUND = "LvlUp"
@@ -102,13 +105,15 @@ local function render(animate: boolean)
 	end
 end
 
--- Resolve and store the elements of one XpBar, then paint it (snapped, no tween).
+-- Resolve and store the elements of one TopBar, then paint it (snapped, no tween).
 local function bind(screenGui: Instance)
-	local xpBar = screenGui:WaitForChild("XpBar")
+	local topBar = screenGui:WaitForChild(TOP_BAR_NAME)
+	local xpBar = topBar:WaitForChild("XpBar")
 	fill = xpBar:WaitForChild("Fillable") :: Frame
 	levelLabel = xpBar:WaitForChild("LevelText") :: TextLabel
 	levelShadow = xpBar:FindFirstChild("3DEffect") :: TextLabel?
-	xpLabel = xpBar:WaitForChild("XpText") :: TextLabel
+	-- Beside the bar, not inside it: the XP readout sits under the bar in the TopBar frame.
+	xpLabel = topBar:WaitForChild("XpText") :: TextLabel
 	render(false)
 end
 

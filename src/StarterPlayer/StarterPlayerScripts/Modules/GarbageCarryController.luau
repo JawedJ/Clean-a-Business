@@ -9,9 +9,13 @@
 --   * HOVER -- aiming at a piece of the active job's garbage that's within GarbageHoverRange and
 --     free outlines it in white. A piece a party member is holding doesn't highlight, and clicking
 --     it does nothing: the server refuses it too.
---   * CLICK/TAP -- picks up the piece under the crosshair (out to the longer GarbagePickupRange, so
---     a piece can be grabbed from slightly further than the outline invites), or lets go of what
---     we're already holding.
+--   * CLICK/TAP -- picks up the piece the click/tap LANDED ON (out to the longer GarbagePickupRange,
+--     so a piece can be grabbed from slightly further than the outline invites). The ray goes through
+--     the pressed pixel rather than the crosshair, so aiming at a piece and tapping elsewhere on the
+--     screen -- driving, panning -- doesn't grab it. See aimRay.
+--   * LETTING GO -- a mouse click drops what we're holding; a TAP never does (TOUCH_CAN_DROP), since
+--     the movement stick and the camera pan region arrive here as ordinary unprocessed touches.
+--     Mobile drops through a dedicated button calling GarbageCarryController.drop().
 --   * CARRY -- the held piece is DRAGGED, not teleported: an AlignPosition/AlignOrientation pair
 --     pulls it toward a point in front of the crosshair, keeping its authored tilt and turning with
 --     the camera. Dragging it with physics rather than writing its CFrame is what makes the world's
@@ -103,6 +107,26 @@ local IS_MOBILE = UserInputService.TouchEnabled
 	and not UserInputService.MouseEnabled
 	and not UserInputService.GamepadEnabled
 
+-- A TAP never drops what the player is holding -- only a mouse click does, and mobile gets a
+-- dedicated drop button that calls GarbageCarryController.drop().
+--
+-- Touches can't be trusted to mean "let go" here: the default dynamic thumbstick and the camera pan
+-- region read raw input rather than sitting behind a GuiButton, so `gameProcessed` is false for them
+-- and driving or panning arrived as a click. Picking up is safe from the same problem because it
+-- needs the tap to land ON a piece of garbage, which a stick or a camera swipe never does.
+local TOUCH_CAN_DROP = false
+
+-- FINGER TOLERANCE. A tap is nowhere near as precise as a cursor, and a piece of garbage is a small
+-- target on a phone -- so a tap that lands just OFF a piece still picks it up. The pressed pixel is
+-- tried first; if it hits nothing, a ring of samples around it is tried before giving up.
+--
+-- This is what keeps "the tap must land on the garbage" from making pickup fiddly. The radius is a
+-- fraction of viewport height (floored in pixels) so a fingertip covers about the same share of the
+-- screen on a phone as on a tablet.
+local TAP_TOLERANCE_SCALE = 0.035
+local TAP_TOLERANCE_MIN_PIXELS = 22
+local TAP_TOLERANCE_SAMPLES = 8
+
 local GarbageCarryController = {}
 
 -- The piece the SERVER says we're holding (a surfaceId), and our clone of it. Set only from the
@@ -180,13 +204,20 @@ local function rootPosition(): Vector3?
 	return if root and root:IsA("BasePart") then root.Position else nil
 end
 
--- The crosshair ray: origin + direction the player is aiming.
-local function aimRay(): Ray?
+-- The aim ray: origin + direction, through `screenPoint` if one is given, else through wherever the
+-- player is aiming (the crosshair on touch, the cursor everywhere else).
+--
+-- The override is what a PICKUP passes: on touch there is no cursor, so the hover outline has to run
+-- off the screen centre -- but a tap has a real position, and a piece is only picked up if the tap
+-- landed ON it. Without that, tapping anywhere on the screen while a piece happened to be under the
+-- crosshair grabbed it, which on mobile means every look-drag and mis-tap picks up garbage.
+local function aimRay(screenPoint: Vector2?): Ray?
 	local cam = Workspace.CurrentCamera
 	if not cam then
 		return nil
 	end
-	local point = if IS_MOBILE then cam.ViewportSize / 2 else UserInputService:GetMouseLocation()
+	local point = screenPoint
+		or (if IS_MOBILE then cam.ViewportSize / 2 else UserInputService:GetMouseLocation())
 	return cam:ViewportPointToRay(point.X, point.Y)
 end
 
@@ -207,12 +238,12 @@ end
 -- requires a live job, the piece belonging to it, and no party member holding it. Called with the
 -- (shorter) hover range for the outline and the pickup range for a click. Returns the clone and its
 -- surfaceId -- the id is what the server speaks in.
-local function findTarget(range: number): (PVInstance?, string?)
+local function findTarget(range: number, screenPoint: Vector2?): (PVInstance?, string?)
 	local businessId = activeJob()
 	if not businessId then
 		return nil, nil
 	end
-	local ray = aimRay()
+	local ray = aimRay(screenPoint)
 	local from = rootPosition()
 	if not ray or not from then
 		return nil, nil
@@ -342,13 +373,57 @@ local function request(surfaceId: string?)
 	CarryGarbage:FireServer(surfaceId)
 end
 
--- Click / tap: drop what we're carrying, else pick up whatever the crosshair is on.
-local function onClick()
+-- Let go of whatever we're holding, from anywhere. This is the mobile drop button's entry point,
+-- since a tap never drops (see TOUCH_CAN_DROP); harmless to call with empty hands. The server still
+-- decides -- we only ask, and act on the GarbageCarry confirmation like every other path here.
+function GarbageCarryController.drop()
 	if carriedId then
 		request(nil)
+	end
+end
+
+-- Click / tap: drop what we're carrying, else pick up whatever the crosshair is on.
+-- How far a piece can be grabbed from. Touch reaches further -- see GarbagePickupRangeTouchBonus.
+local function pickupRange(): number
+	return Config.GarbagePickupRange + (if IS_MOBILE then Config.GarbagePickupRangeTouchBonus else 0)
+end
+
+-- A pickup at `screenPoint`, forgiving a near-miss when `tolerant` (a finger, not a cursor): the
+-- exact pixel first, then a ring around it. See the TAP_TOLERANCE constants.
+local function findPickupTarget(screenPoint: Vector2, tolerant: boolean): (PVInstance?, string?)
+	local garbage, surfaceId = findTarget(pickupRange(), screenPoint)
+	if surfaceId or not tolerant then
+		return garbage, surfaceId
+	end
+
+	local camera = Workspace.CurrentCamera
+	local radius = math.max(
+		TAP_TOLERANCE_MIN_PIXELS,
+		(if camera then camera.ViewportSize.Y else 0) * TAP_TOLERANCE_SCALE
+	)
+
+	for i = 1, TAP_TOLERANCE_SAMPLES do
+		local angle = (i / TAP_TOLERANCE_SAMPLES) * math.pi * 2
+		local sample = screenPoint + Vector2.new(math.cos(angle), math.sin(angle)) * radius
+		garbage, surfaceId = findTarget(pickupRange(), sample)
+		if surfaceId then
+			return garbage, surfaceId
+		end
+	end
+	return nil, nil
+end
+
+-- `screenPoint` is where the click/tap actually landed: picking up requires it to be on (or, on
+-- touch, near) the piece itself. `canDrop` is what separates a mouse click (which lets go of what
+-- we're holding) from a touch (which never does -- see TOUCH_CAN_DROP).
+local function onClick(screenPoint: Vector2, canDrop: boolean, tolerant: boolean)
+	if carriedId then
+		if canDrop then
+			request(nil)
+		end
 		return
 	end
-	local _, surfaceId = findTarget(Config.GarbagePickupRange)
+	local _, surfaceId = findPickupTarget(screenPoint, tolerant)
 	if not surfaceId then
 		return
 	end
@@ -566,11 +641,20 @@ function GarbageCarryController.init()
 	-- One reusable outline, re-adorned per hover (see HoverHighlight).
 	highlight = HoverHighlight.new("GarbageHover")
 
-	GarbageCarry.OnClientEvent:Connect(function(player, surfaceId)
+	GarbageCarry.OnClientEvent:Connect(function(player, surfaceId, businessId)
 		if typeof(player) ~= "Instance" or not player:IsA("Player") then
 			return
 		end
 		if surfaceId ~= nil and type(surfaceId) ~= "string" then
+			return
+		end
+		-- A PICKUP is only honoured on the job it was made on. Attribute replication (which is how we
+		-- learn a job started or ended) and this remote are separate channels with no ordering between
+		-- them, so a pickup sent just before a job ended can arrive after we've torn that job down and
+		-- built the next job's clones -- and acting on it would drag the fresh clone of that surfaceId
+		-- into someone's hands the moment the new job began, with nobody having touched it. A DROP is
+		-- never filtered: letting go has to apply no matter when it lands.
+		if surfaceId and businessId ~= activeJob() then
 			return
 		end
 		onCarryChanged(player, surfaceId)
@@ -591,15 +675,21 @@ function GarbageCarryController.init()
 		end
 	end)
 
+	-- InputObject.Position is in the same screen space ViewportPointToRay takes, for both a touch and
+	-- a click, so the ray goes through the exact pixel that was pressed.
+	local function inputPoint(input: InputObject): Vector2
+		return Vector2.new(input.Position.X, input.Position.Y)
+	end
+
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		if gameProcessed then
 			return
 		end
-		if
-			input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			onClick()
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			-- A cursor is exact, so it gets no tolerance: clicking beside a piece means beside it.
+			onClick(inputPoint(input), true, false)
+		elseif input.UserInputType == Enum.UserInputType.Touch then
+			onClick(inputPoint(input), TOUCH_CAN_DROP, true)
 		end
 	end)
 

@@ -783,7 +783,9 @@ the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`
 `DecalsFolderName`/`SpillsFolderName`/`WebsFolderName`/`GarbageFolderName`/`InteriorFolderName`
 (props/windows the cleaning ray ignores), `HitboxName`/`SurfaceIdAttribute` (stains/walls, and also
 the web id) + `SpillSurfaceIdAttribute`/`GarbageSurfaceIdAttribute` (the capital-S spill and garbage
-ids), the garbage carry tunables `GarbagePickupRange` (13) / `GarbageHoverRange` (13, its own knob so
+ids), the garbage carry tunables `GarbagePickupRange` (13) / `GarbagePickupRangeTouchBonus` (12,
+extra reach on touch only — aiming with a finger is imprecise, and since the server can't verify a
+device it allows the bonus for everyone) / `GarbageHoverRange` (13, its own knob so
 the outline can be pulled in independently) / `GarbageCarryDistance` (7, how far out front a held
 piece floats) / `GarbageResetSeconds` (60), the shredder's layout
 `ShredderModelName`/`ShredderHitboxName`/`ShredderEntryPartName`/`ShredderExitPartName` and its three
@@ -1009,8 +1011,13 @@ below.
   `surfaceId` (out to the longer `GarbagePickupRange`), or `nil` to let go.
   `GarbageCarryService` validates the active job, that no **party member** already holds that
   `surfaceId`, and the range — measured against the last position that *session* reported, falling
-  back to the authored home — then publishes **`GarbageCarry`** `(carrier, surfaceId?)` to the
-  session. Nothing moves until that confirmation arrives.
+  back to the authored home — then publishes **`GarbageCarry`** `(carrier, surfaceId?, businessId?)`
+  to the session. Nothing moves until that confirmation arrives. The `businessId` **stamps a pickup
+  with the job it was made on**, and a client ignores a pickup that doesn't match the job it's on:
+  attributes (how a client learns a job started/ended) and remotes are separate replication channels
+  with no ordering between them, so a pickup sent just before a job ends can arrive after the next
+  job's clones exist — and acting on it would drop that piece into the carrier's hands the instant
+  the new job began. Drops are unstamped and always applied.
 - **Party sharing.** A clone can't replicate itself, so the carrier streams its piece's CFrame on
   **`GarbageMove`** (20 Hz, throttled by distance) and the server forwards it to the **other**
   members of that session only. They anchor their own clone of that `surfaceId` while it's in
@@ -1265,7 +1272,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/PartyController.luau     client mirror of the party state: sharesParty/inParty/hasCompany off the replicated PartyId attribute, the PartyUpdate roster (its businessId + isReady(party, member)) + joinable list for the UI, and send() for create/join/ready/leave/kick/disband
   Modules/CashUiController.luau    cash HUD: writes Cash into CashDisplay.MoneyAmt as a "$"-prefixed abbreviated number (e.g. "$1.1k"), re-renders on Cash change
   Modules/GemUiController.luau     gem HUD: writes Gems into GemDisplay.GemAmt abbreviated, re-renders on Gems change
-  Modules/LevelUiController.luau   XP bar HUD: fills XpBar.Fillable toward the next level + LevelText/XpText (and the "3DEffect" shadow label), off the Level domain
+  Modules/LevelUiController.luau   XP bar HUD: fills TopBar.XpBar.Fillable toward the next level + LevelText (and the "3DEffect" shadow label) inside the bar, TopBar.XpText beside it, off the Level domain
   Modules/SkillsUiController.luau  skills panel (Buttons3.ASkillsButton + SkillsDisplay): per-skill next-level price (tinted by affordability) / MAXED, Circle1..5 level pips, BuyButton -> PurchaseSkill; UnlockAllButton prompts the Robux max-everything product and hides once all maxed
   Modules/UpgradesUiController.luau upgrades shop UI: per-slot tool purchase/upgrade -> PurchaseItem / UpgradeItem, cost + Level x/MAX from shared ItemUpgrades; InteractButton plays its own purchase/fail SFX
   Modules/SettingsUiController.luau settings tab: volume sliders (apply locally live, persist via UpdateSetting on release) + HidePlayers toggle
@@ -1285,7 +1292,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb
   Modules/WebVisibility.luau       web visibility: hidden unless on the job (reparented to HiddenWebs holder); per-client hide-on-vacuum + reparent restore on redo; getWebCount / getActiveVisibleWebs
   Modules/GarbageVisibility.luau   garbage is CLONED, not shown/hidden: authored pieces go off-world permanently (AuthoredGarbage holder, home CFrame recorded) and each job gets this client's own local clones of that business's pieces, built in place in the CleanableGarbage folder so GarbageResolver still resolves them. Rebuilding them IS the job-start reset. getGarbageCount / getPiece / getPieces / getHome / hideOne / takePiece (hand the clone over WITHOUT destroying it -- the shredder's animation needs it in the world but untouchable)
-  Modules/GarbageCarryController.luau  garbage carry: white AlwaysOnTop hover outline, click to pick up / let go (CarryGarbage by surfaceId), physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
+  Modules/GarbageCarryController.luau  garbage carry: white AlwaysOnTop hover outline, click to pick up / let go (CarryGarbage by surfaceId) -- the pickup ray goes through the CLICKED/TAPPED pixel, not the crosshair, so tapping away from a piece you're aiming at doesn't grab it; a TAP never DROPS (mouse click does, mobile uses a button calling .drop()) because the dynamic thumbstick and camera pan region read raw input, so gameProcessed doesn't shield them and driving/panning would otherwise let go of the piece, physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
   Modules/GarbageShredController.luau  the CLEAN half of garbage: watches the active business's shredder Hitbox for one of OUR clones (ShredGarbage), and on the server's GarbageCleaned takes the clone out of GarbageVisibility, freezes it and drives its pivot p1 -> hold -> p2 with a side-to-side shake, ShredderSFX playing positionally out of the hitbox and a yellow VfxManager.shredDebris shower riding it down, until it vanishes; counts it via JobController.onGarbageCleaned and bins anything still animating when the job ends
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown
@@ -1298,7 +1305,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/HidePlayersController.luau  the single owner of hiding other characters for you only (parts + floating name + tool VFX, nothing replicates), for TWO independent reasons: the persisted Settings.HidePlayers toggle and job membership (setJobHidden, driven by JobGhostController) -- hidden while either holds. The NAME needs Humanoid.DisplayDistanceType = None, not just NameDisplayDistance = 0: a humanoid's own distance is only consulted when its DisplayDistanceType is Subject, and the default is Viewer (where the LOCAL player's humanoid decides what names they see) -- so the distance alone left name tags floating over invisible bodies. Both are snapshotted + restored on reveal. It ALSO mutes every other player's tool emitters permanently, hidden or not (and never restores those on reveal): a tool's emission is toggled on its owner's own client and doesn't replicate, so an un-muted teammate's pressure washer sprays at you constantly whether they're firing or not
   Modules/PlayTogetherController.luau  the standalone PlayTogetherFrame: the entry to the party screens (PartyUiController.openEntry -- a toggle over the whole flow), shown exactly when the HUD is via JobUiController.onHudVisibilityChanged (so it returns on GoHome, not the moment the job ends), and inert for the tutorial's duration
   Modules/PartyUiController.luau   the three party screens (PartySelectionUI / PartyUI / JoinPartyUI): create borrows the job board to pick the business (JobUiController.openForSelection) and the pick creates the party; the room draws the job + a ready-state row per member with leader-only kicks; the browser clones one PartySlot per joinable party and rebuilds on every server push. Steps between them are instant (ExclusivePanels.openInstant); only entering/leaving the flow animates
-  Modules/Crosshair.luau           white center dot + hidden mouse icon in first person; normal cursor returns in third person (needed to click surfaces)
+  Modules/Crosshair.luau           white center dot + hidden mouse icon in first person; normal cursor returns in third person (needed to click surfaces). The dot is sized as a fraction of viewport HEIGHT with a 1:1 UIAspectRatioConstraint (square, then rounded by the UICorner) and a UISizeConstraint clamp, so it reads the same on a phone as on a monitor instead of being a fixed pixel speck
   Modules/RewardPopupController.luau  cash chime off RewardPopup (the floating "+N XP!" / "+N Cash!" labels it used to spawn are gone; the payout is the coin burst in the world instead)
   Modules/WorkerGemPopupController.luau  floats "💎N" from each paying worker's authored GUIPart billboard + a 3D plop, off WorkerGemPopup
   Modules/PlotButtonSoundController.luau  plot-button feedback off PlotButtonSound: bought -> "ButtonPurchase"; couldn't afford -> silent (no fail SFX)
@@ -1335,7 +1342,8 @@ clusters — **`Button1`** (`JobButton`), **`Buttons2`**, **`Buttons3`** (`ASkil
 `UIGridLayout` row; plus `JobFrame` (board), `SkillsDisplay` (skills panel: `Skill1..5` rows each
 with a `SkillName` attribute, `GemAmt`, `Circle1..5`, `BuyButton`; plus `UnlockAllButton`),
 `UpgradesFrame` (shop), the settings tab, `JobSummary` (end-of-job screen), `JobCompletion`
-(progress bar + `FinishEarly`), `XpBar`, `CashDisplay` (`MoneyAmt`), `GemDisplay` (`GemAmt`),
+(progress bar + `FinishEarly`), `TopBar` (holding `XpBar` — `Fillable` + the `LevelText` / `3DEffect`
+labels — and `XpText` alongside it, not inside it), `CashDisplay` (`MoneyAmt`), `GemDisplay` (`GemAmt`),
 `Inventory` (the custom hotbar: `ImageButton1..5`), `HighlightButton` (triggers the reveal
 glow, shown only during a job), and the **party frames** — `PlayTogetherFrame`
 (`PlayTogetherBtn`, shown with the HUD and inert during the tutorial), `PartySelectionUI`,

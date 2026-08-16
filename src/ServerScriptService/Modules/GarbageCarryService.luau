@@ -129,10 +129,20 @@ local function register(inst: Instance)
 	pinTemplate(inst)
 end
 
--- Tell `listeners` who is carrying what.
-local function broadcast(listeners: { Player }, player: Player, surfaceId: string?)
+-- Tell `listeners` who is carrying what, STAMPED with the job the carry belongs to.
+--
+-- The stamp is what stops a pickup outliving its job. Attributes and RemoteEvents are separate
+-- replication channels with no ordering between them, so a pickup confirmation sent moments before a
+-- job ends can land on a client that has already torn that job down -- and if it has since started
+-- another one, the fresh clone of that same surfaceId would be yanked into the player's hands the
+-- instant the job began. The client checks the stamp against the job it's actually on and ignores
+-- anything from a previous one.
+--
+-- Drops carry no stamp and are never filtered: letting go must always apply, whatever it arrives
+-- alongside.
+local function broadcast(listeners: { Player }, player: Player, surfaceId: string?, businessId: string?)
 	for _, member in listeners do
-		GarbageCarry:FireClient(member, player, surfaceId)
+		GarbageCarry:FireClient(member, player, surfaceId, businessId)
 	end
 end
 
@@ -225,7 +235,10 @@ local function tryPickUp(player: Player, surfaceId: string)
 	if not root or not root:IsA("BasePart") or not position then
 		return
 	end
-	if (root.Position - position).Magnitude > Config.GarbagePickupRange + RANGE_TOLERANCE then
+	-- The touch bonus is allowed for everyone: we can't verify a device, and the check's job is to
+	-- stop pickups from across the building, not to police the last few studs. See CleaningConfig.
+	local maxRange = Config.GarbagePickupRange + Config.GarbagePickupRangeTouchBonus + RANGE_TOLERANCE
+	if (root.Position - position).Magnitude > maxRange then
 		return
 	end
 
@@ -236,7 +249,7 @@ local function tryPickUp(player: Player, surfaceId: string)
 
 	local listeners = sessionAudience(player)
 	audience[player] = listeners
-	broadcast(listeners, player, surfaceId)
+	broadcast(listeners, player, surfaceId, businessId)
 end
 
 -- Find every authored piece: remember where it belongs and pin it. Also catches pieces that
