@@ -7,8 +7,14 @@
 -- surfaceId, so a party member can't grab what someone else is already carrying.
 --
 --   * HOVER -- aiming at a piece of the active job's garbage that's within GarbageHoverRange and
---     free outlines it in white. A piece a party member is holding doesn't highlight, and clicking
---     it does nothing: the server refuses it too.
+--     free outlines it in white; when we're not looking at any piece, the NEAREST one in pickup
+--     range is outlined instead, so garbage at our feet is offered without having to aim down at
+--     it. A piece a party member is holding doesn't highlight, and clicking it does nothing: the
+--     server refuses it too.
+--
+--     The outline is a suggestion, not the target: a CLICK is always the piece the crosshair is on
+--     (see below), never whatever happens to be nearest. So the proximity outline can point at a
+--     piece a click wouldn't take -- deliberately, because aiming has to stay exact.
 --   * CLICK/TAP -- picks up out to the longer GarbagePickupRange, so a piece can be grabbed from
 --     slightly further than the outline invites. A mouse click goes along the SAME aim ray the
 --     outline is drawn from, so whatever is highlighted is exactly what a click takes. A TAP instead
@@ -275,6 +281,43 @@ local function findTarget(range: number, screenPoint: Vector2?): (PVInstance?, s
 	end
 	-- The resolver only ever returns a BasePart or a Model.
 	return identity.garbage :: PVInstance, identity.surfaceId
+end
+
+-- The piece of this job's garbage NEAREST the player within `range`, or nil. The fallback for when
+-- the player isn't looking at any piece in particular: standing next to a bag of litter offers it
+-- without having to put the crosshair on it, which is what makes picking up off the floor -- where
+-- garbage mostly is, and where it's an awkward thing to aim at -- comfortable.
+--
+-- Ties go to whichever the loop reaches first. That's stable enough in practice: two pieces at the
+-- SAME distance to the stud is a coincidence, and stepping either way settles it.
+local function findNearest(range: number): (PVInstance?, string?)
+	if not activeJob() then
+		return nil, nil
+	end
+	local from = rootPosition()
+	if not from then
+		return nil, nil
+	end
+
+	local nearest: PVInstance? = nil
+	local nearestId: string? = nil
+	local nearestDistance = math.huge
+	-- Only the active job's clones are in here at all, and a piece already fed into the shredder has
+	-- been taken out of it -- so being in this table is most of "can be picked up".
+	for surfaceId, piece in GarbageVisibility.getPieces() do
+		if carriedByOthers[surfaceId] then
+			continue
+		end
+		local position = GarbageResolver.getPosition(piece)
+		if not position then
+			continue
+		end
+		local distance = (from - position).Magnitude
+		if distance <= range and distance < nearestDistance then
+			nearest, nearestId, nearestDistance = piece, surfaceId, distance
+		end
+	end
+	return nearest, nearestId
 end
 
 -- Outline `garbage` in white, or clear the outline when nil.
@@ -579,7 +622,9 @@ local function onRenderStepped()
 	local garbage = carried
 	local surfaceId = carriedId
 	if not garbage or not surfaceId then
-		local target = findTarget(Config.GarbageHoverRange)
+		-- What we're LOOKING at, else simply the nearest piece in reach -- so garbage on the floor
+		-- beside us is offered without having to aim down at it. See findNearest.
+		local target = findTarget(Config.GarbageHoverRange) or findNearest(pickupRange())
 		setHovered(target)
 		return
 	end

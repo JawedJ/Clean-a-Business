@@ -5,9 +5,15 @@
 -- button is shown only if the player owns an item whose SlotNumber matches it; clicking
 -- the button -- or pressing that number key -- equips that slot's Tool.
 --
--- Slots toggle: pressing/clicking a slot that isn't in hand equips it (swapping out whatever
--- was held), and pressing/clicking the slot that IS in hand unequips it, leaving the player
--- empty-handed. A job starts with nothing equipped.
+-- HANDS ARE NEVER EMPTY ON A JOB. Pressing/clicking a slot equips it, swapping out whatever was
+-- held; pressing the slot that's already in hand does nothing (it used to put the tool away, which
+-- left the player standing in a job holding nothing). A job STARTS with the pressure washer out.
+--
+-- The single exception is CARRYING a piece of cleanable garbage: that's hands-full, so
+-- GarbageCarryController unequips on pickup -- and this module puts the tool back the moment the
+-- piece leaves the player's hands, whichever way it leaves them (fed to the shredder, dropped, the
+-- drop button, the job ending). The tool that comes back is the last one they chose, so a player
+-- who was mopping goes back to mopping rather than to the washer.
 --
 -- Tools are the physical Tool instances the server grants into the Backpack (ToolService),
 -- each tagged with a ToolId attribute (== the Item's UniqueID). We map slot -> UniqueID
@@ -27,7 +33,9 @@ local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
+local GarbageCarryController = require(script.Parent.GarbageCarryController)
 
 local localPlayer = Players.LocalPlayer
 
@@ -36,6 +44,22 @@ local INVENTORY_FRAME_NAME = "Inventory"
 local BUTTON_PREFIX = "ImageButton"
 local TOOL_ID_ATTRIBUTE = "ToolId"
 local SLOT_COUNT = 5
+
+-- What a job starts in the player's hands, and what they fall back to if the tool they last held
+-- can't be found.
+local DEFAULT_TOOL_ID = ToolConfig.pressureWasher.UniqueID
+
+-- Restoring a tool is RETRIED for a moment rather than tried once: ToolService grants the Tools
+-- into the Backpack, and a job start (or a respawn) can beat that replication -- at which point
+-- findTool comes up empty and the player would be left holding nothing, the one state a job
+-- isn't allowed to be in.
+local EQUIP_RETRIES = 15
+local EQUIP_RETRY_INTERVAL = 0.2
+
+-- How long after a tool leaves the player's hands we wait before deciding they shouldn't be empty-
+-- handed. Long enough for a pickup's round trip to land (that's a legitimate reason to be holding
+-- nothing), short enough that a refused one isn't left standing there.
+local EMPTY_HANDS_GRACE_SECONDS = 1
 
 -- Top-row number keys 1..5 -> slot number.
 local SLOT_KEYS: { [Enum.KeyCode]: number } = {
@@ -52,6 +76,9 @@ type SlotInfo = { id: string, name: string }
 
 -- slot number -> owned item's { UniqueID, Name }, rebuilt whenever the inventory changes.
 local slotInfo: { [number]: SlotInfo } = {}
+-- The ToolId the player last had in hand, so putting a carried piece of garbage down gives them
+-- back the tool they were using rather than the job's default.
+local lastToolId: string? = nil
 -- The Inventory frame + its buttons for the currently bound ScreenGui, refreshed each respawn.
 local inventoryFrame: Frame? = nil
 local slotButtons: { [number]: ImageButton } = {}
@@ -97,8 +124,74 @@ local function findTool(toolId: string): Tool?
 	return nil
 end
 
--- Toggle the tool in `slot`: equip it, or unequip it if it's already in hand.
-local function toggleSlot(slot: number)
+-- Put a ToolId in the player's hands, remembering it as what they're holding. False if there's no
+-- character yet or the Tool hasn't been granted -- the caller decides whether to retry.
+local function equipToolId(toolId: string): boolean
+	local character = localPlayer.Character
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") :: Humanoid? else nil
+	if not character or not humanoid then
+		return false
+	end
+	local tool = findTool(toolId)
+	if not tool then
+		return false
+	end
+	-- Already in hand: nothing to do but remember it (re-equipping would flicker the tool).
+	if tool.Parent ~= character then
+		humanoid:EquipTool(tool)
+	end
+	lastToolId = toolId
+	return true
+end
+
+-- Give the player their tool back: the one they last chose, else the job's default. No-op off a job
+-- (nothing should be in hand there) or while carrying garbage (hands are full by design). Keeps
+-- trying for a moment -- see EQUIP_RETRIES.
+local function restoreTool()
+	task.spawn(function()
+		for _ = 1, EQUIP_RETRIES do
+			-- Re-checked every pass: the job can end, or a piece be picked up, while we're waiting on
+			-- a Tool to replicate.
+			if not hasActiveJob() or GarbageCarryController.isCarrying() then
+				return
+			end
+			local wanted = lastToolId or DEFAULT_TOOL_ID
+			-- The remembered tool first; the default covers one that's somehow gone (an item reset).
+			if equipToolId(wanted) or (wanted ~= DEFAULT_TOOL_ID and equipToolId(DEFAULT_TOOL_ID)) then
+				return
+			end
+			task.wait(EQUIP_RETRY_INTERVAL)
+		end
+	end)
+end
+
+-- Is anything in the player's hands right now? (An equipped Tool is parented to the character.)
+local function holdingTool(): boolean
+	local character = localPlayer.Character
+	return character ~= nil and character:FindFirstChildOfClass("Tool") ~= nil
+end
+
+-- Belt and braces for the empty-handed rule. GarbageCarryController unequips as it ASKS to pick a
+-- piece up, so a request the server refuses (a party member got there first) leaves the player
+-- holding nothing with no carry state to come back from. So whenever a tool leaves their hands we
+-- look again a moment later: still on a job, still no garbage, still nothing in hand -> give it
+-- back. The grace is what lets the ordinary pickup through -- by then the carry has been confirmed.
+local function watchCharacter(character: Model)
+	character.ChildRemoved:Connect(function(child)
+		if not child:IsA("Tool") then
+			return
+		end
+		task.delay(EMPTY_HANDS_GRACE_SECONDS, function()
+			if hasActiveJob() and not GarbageCarryController.isCarrying() and not holdingTool() then
+				restoreTool()
+			end
+		end)
+	end)
+end
+
+-- Equip the tool in `slot`. Pressing the slot already in hand does NOT put it away: a job is never
+-- held empty-handed (see the header).
+local function selectSlot(slot: number)
 	-- Only usable while on a job. Off-job (in the plot/lobby, e.g. right after GoHome) the
 	-- ActiveJob attribute is already cleared, so a stray number-key press here would
 	-- otherwise strand a tool in hand with nothing left to unequip it (stow already ran).
@@ -109,24 +202,9 @@ local function toggleSlot(slot: number)
 	if not info then
 		return
 	end
-	local character = localPlayer.Character
-	if not character then
-		return
-	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid") :: Humanoid?
-	if not humanoid then
-		return
-	end
-	local tool = findTool(info.id)
-	if not tool then
-		return
-	end
-	-- Already equipped (parented to the character) -> put it away, holding nothing.
-	if tool.Parent == character then
-		humanoid:UnequipTools()
-		return
-	end
-	humanoid:EquipTool(tool)
+	-- Picking a slot while carrying garbage is allowed: equipping a tool is one of the ways to let
+	-- go of a piece (GarbageCarryController drops it on Equipped), so the two can't overlap.
+	equipToolId(info.id)
 end
 
 -- Put away whatever tool is in hand. Used when a job ends.
@@ -173,15 +251,18 @@ local function applyInventoryVisible()
 	end
 end
 
--- React to a job starting: show the inventory, with nothing in hand -- the player picks a
--- slot themselves (the unequip covers a tool carried over from a previous job). On a job ENDING we
--- deliberately leave the hotbar up and the tool in hand -- the JobSummary is showing and the
--- player is still "in the job" until they choose. The stow (hide + unequip) is deferred to
--- GoHome, via stow(); PlayAgain just starts another job and comes back through here.
+-- React to a job starting: show the inventory and hand the player their PRESSURE WASHER, so they
+-- start the job holding something rather than empty-handed. Every job starts this way, previous
+-- job's choice included -- the washer is the tool the job is introduced with.
+--
+-- On a job ENDING we deliberately leave the hotbar up and the tool in hand -- the JobSummary is
+-- showing and the player is still "in the job" until they choose. The stow (hide + unequip) is
+-- deferred to GoHome, via stow(); PlayAgain just starts another job and comes back through here.
 local function onActiveJobChanged()
 	if hasActiveJob() then
 		applyInventoryVisible()
-		unequipTools()
+		lastToolId = DEFAULT_TOOL_ID
+		restoreTool()
 	end
 end
 
@@ -205,7 +286,7 @@ local function bind(screenGui: Instance)
 		if button and button:IsA("ImageButton") then
 			slotButtons[slot] = button
 			button.Activated:Connect(function()
-				toggleSlot(slot)
+				selectSlot(slot)
 			end)
 		end
 	end
@@ -239,8 +320,27 @@ function InventoryController.init()
 		refreshButtons()
 	end)
 
-	-- Show/hide + auto-equip/unequip as the player enters and leaves a job.
+	-- Show/hide + auto-equip as the player enters and leaves a job.
 	localPlayer:GetAttributeChangedSignal(Config.ActiveJobAttribute):Connect(onActiveJobChanged)
+
+	-- Carrying a piece of garbage is the one thing that empties the player's hands, so letting go is
+	-- what puts the tool back. Fires immediately with the current state too, which is harmless: off a
+	-- job restoreTool does nothing.
+	GarbageCarryController.onCarryingChanged(function(carrying)
+		if not carrying then
+			restoreTool()
+		end
+	end)
+
+	-- A respawn mid-job sends every Tool back to the Backpack; the job is still running, so put one
+	-- back in their hands rather than leaving them empty-handed until they press a slot.
+	localPlayer.CharacterAdded:Connect(function(character)
+		watchCharacter(character)
+		restoreTool()
+	end)
+	if localPlayer.Character then
+		watchCharacter(localPlayer.Character)
+	end
 
 	-- Number keys toggle their slot, unless the keystroke was consumed elsewhere (a TextBox).
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -249,7 +349,7 @@ function InventoryController.init()
 		end
 		local slot = SLOT_KEYS[input.KeyCode]
 		if slot then
-			toggleSlot(slot)
+			selectSlot(slot)
 		end
 	end)
 
