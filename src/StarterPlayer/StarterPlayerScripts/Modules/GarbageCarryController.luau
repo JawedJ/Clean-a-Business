@@ -9,10 +9,11 @@
 --   * HOVER -- aiming at a piece of the active job's garbage that's within GarbageHoverRange and
 --     free outlines it in white. A piece a party member is holding doesn't highlight, and clicking
 --     it does nothing: the server refuses it too.
---   * CLICK/TAP -- picks up the piece the click/tap LANDED ON (out to the longer GarbagePickupRange,
---     so a piece can be grabbed from slightly further than the outline invites). The ray goes through
---     the pressed pixel rather than the crosshair, so aiming at a piece and tapping elsewhere on the
---     screen -- driving, panning -- doesn't grab it. See aimRay.
+--   * CLICK/TAP -- picks up out to the longer GarbagePickupRange, so a piece can be grabbed from
+--     slightly further than the outline invites. A mouse click goes along the SAME aim ray the
+--     outline is drawn from, so whatever is highlighted is exactly what a click takes. A TAP instead
+--     goes through the pressed pixel, so aiming at a piece and tapping elsewhere on the screen --
+--     driving, panning -- doesn't grab it. See aimRay and the InputBegan handler.
 --   * LETTING GO -- a mouse click drops what we're holding; a TAP never does (TOUCH_CAN_DROP), since
 --     the movement stick and the camera pan region arrive here as ordinary unprocessed touches.
 --     A dedicated HUD button (DropButtonController) drops as well, on every platform -- it's the
@@ -420,11 +421,12 @@ local function pickupRange(): number
 	return Config.GarbagePickupRange + (if IS_MOBILE then Config.GarbagePickupRangeTouchBonus else 0)
 end
 
--- A pickup at `screenPoint`, forgiving a near-miss when `tolerant` (a finger, not a cursor): the
+-- A pickup at `screenPoint` -- or, when nil, wherever the player is AIMING, which is the same ray
+-- the outline is drawn from. Forgives a near-miss when `tolerant` (a finger, not a cursor): the
 -- exact pixel first, then a ring around it. See the TAP_TOLERANCE constants.
-local function findPickupTarget(screenPoint: Vector2, tolerant: boolean): (PVInstance?, string?)
+local function findPickupTarget(screenPoint: Vector2?, tolerant: boolean): (PVInstance?, string?)
 	local garbage, surfaceId = findTarget(pickupRange(), screenPoint)
-	if surfaceId or not tolerant then
+	if surfaceId or not tolerant or not screenPoint then
 		return garbage, surfaceId
 	end
 
@@ -445,10 +447,12 @@ local function findPickupTarget(screenPoint: Vector2, tolerant: boolean): (PVIns
 	return nil, nil
 end
 
--- `screenPoint` is where the click/tap actually landed: picking up requires it to be on (or, on
--- touch, near) the piece itself. `canDrop` is what separates a mouse click (which lets go of what
--- we're holding) from a touch (which never does -- see TOUCH_CAN_DROP).
-local function onClick(screenPoint: Vector2, canDrop: boolean, tolerant: boolean)
+-- `screenPoint` is where a TAP landed: on touch, picking up requires it to be on (or near) the piece
+-- itself, so tapping elsewhere while a piece sits under the crosshair doesn't grab it. A MOUSE click
+-- passes nil instead and picks up along the aim ray -- see the InputBegan handler for why.
+-- `canDrop` is what separates a mouse click (which lets go of what we're holding) from a touch
+-- (which never does -- see TOUCH_CAN_DROP).
+local function onClick(screenPoint: Vector2?, canDrop: boolean, tolerant: boolean)
 	if carriedId then
 		if canDrop then
 			request(nil)
@@ -709,8 +713,8 @@ function GarbageCarryController.init()
 		end
 	end)
 
-	-- InputObject.Position is in the same screen space ViewportPointToRay takes, for both a touch and
-	-- a click, so the ray goes through the exact pixel that was pressed.
+	-- InputObject.Position is in the same screen space ViewportPointToRay takes, so a TAP's ray goes
+	-- through the exact pixel that was pressed.
 	local function inputPoint(input: InputObject): Vector2
 		return Vector2.new(input.Position.X, input.Position.Y)
 	end
@@ -720,8 +724,18 @@ function GarbageCarryController.init()
 			return
 		end
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
-			-- A cursor is exact, so it gets no tolerance: clicking beside a piece means beside it.
-			onClick(inputPoint(input), true, false)
+			-- A mouse click picks up along the AIM RAY -- the very ray the outline is drawn from --
+			-- rather than through the click's own pixel. On a mouse the two are meant to be the same
+			-- point, but in first person the cursor is hidden and locked to the centre, and the
+			-- click's reported position and the aim don't agree to the pixel there. That gap is
+			-- invisible in the middle of a piece and decides it at the edges: the corner outlines,
+			-- the click lands just off it, and nothing gets picked up. Sharing the ray makes
+			-- "highlighted" and "clickable" the same question by construction, so anything the
+			-- outline offers can be taken -- corners included.
+			--
+			-- The pixel still matters on TOUCH, where there's no cursor and a tap anywhere would
+			-- otherwise grab whatever sits under the crosshair.
+			onClick(nil, true, false)
 		elseif input.UserInputType == Enum.UserInputType.Touch then
 			onClick(inputPoint(input), TOUCH_CAN_DROP, true)
 		end
