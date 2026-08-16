@@ -14,9 +14,12 @@
 -- (tweens + temporary instances), so callers just call and forget.
 
 local Debris = game:GetService("Debris")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
+
+local SoundManager = require(script.Parent.SoundManager)
 
 local VfxManager = {}
 
@@ -215,6 +218,283 @@ function VfxManager.shredDebris(cframe: CFrame): DebrisEffect
 			Debris:AddItem(emitterPart, DEBRIS_LIFETIME.Max)
 		end,
 	}
+end
+
+-- "Clean burst": a single image sprite that pops off the spot being cleaned, arcs OUT TOWARD the
+-- player, then snaps into them with a ping -- the reward feedback for washing a wall (it replaces
+-- the floating text that used to sit on cleanable walls).
+--
+-- It's a billboard, not a particle: the sprite has to fly to a moving target (the player's root)
+-- and play a sound the moment it lands there, which a ParticleEmitter can't do -- its particles are
+-- fire-and-forget and can't be steered or reported on.
+--
+-- One call = ONE sprite. Callers fire it on their own cadence (the washer does so every
+-- CLEAN_BURST_INTERVAL while dirt is actually coming off), so density is the caller's choice.
+--
+-- The sprite parts are POOLED. At a burst every 0.2s with a ~0.5s flight, a handful are alive at
+-- once and each one would otherwise mean building a Part + BillboardGui + Trail + 2 Attachments,
+-- five instances a fifth of a second, forever -- exactly the churn that makes cleaning hitch.
+local BURST_TEXTURE = "rbxassetid://88320390473526"
+local BURST_SOUND = "WallBurstSFX" -- arrival ping; template under ReplicatedStorage.Audios.SFX
+local BURST_TRAIL_COLOR = Color3.fromRGB(255, 229, 29)
+local BURST_SPRITE_SIZE = 0.9 -- studs, billboard width/height
+
+-- LAUNCH. The sprite is thrown along the flat direction from the wall to the player, so it reads as
+-- coming off the surface at them rather than flying off sideways. Gravity is far heavier than real
+-- so the arc is short and punchy instead of floaty.
+local BURST_GRAVITY = -150
+local BURST_LAUNCH_SPEED = NumberRange.new(6, 10) -- outward, toward the player
+local BURST_LAUNCH_HEIGHT = NumberRange.new(14, 20) -- upward kick
+local BURST_SIDE_SPREAD = 5 -- studs/sec of sideways jitter, so repeats don't trace one line
+-- Studs off the surface the sprite is born at. Kept past half the sprite's width so the whole quad
+-- (and the trail it starts recording) clears the wall plane rather than straddling it.
+local BURST_SPAWN_OFFSET = 1.2
+
+-- FLIGHT. A short free arc, then a fixed-length flight into the player. Back/In eases *backwards*
+-- first, so the sprite winds up before it snaps in -- that wind-up is what sells the pull.
+local BURST_ARC_TIME = 0.18
+local BURST_ATTRACT_TIME = 0.3
+local BURST_ARRIVE_RADIUS = 2 -- studs from the target counted as arrived
+
+local BURST_TRAIL_LIFETIME = 0.1
+local BURST_TRAIL_WIDTH = 0.5
+-- Newest end of the ribbon (time 0) is full width; the oldest end narrows off.
+local BURST_TRAIL_WIDTH_SCALE = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1),
+	NumberSequenceKeypoint.new(0.6, 0.9),
+	NumberSequenceKeypoint.new(1, 0.4),
+})
+local BURST_TRAIL_TRANSPARENCY = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0.2),
+	NumberSequenceKeypoint.new(1, 1),
+})
+
+local BURST_POOL_LIMIT = 8 -- parked sprites kept for reuse; the excess is destroyed
+-- Arrivals inside this window share one sound, so sprites landing together can't stack into one
+-- loud hit. Pitch is randomised per play so repeats don't sound cloned.
+local BURST_SOUND_GAP = 0.07
+local BURST_PITCH = NumberRange.new(0.95, 1.08)
+
+-- The recycled instances behind one sprite.
+type BurstParts = {
+	part: BasePart,
+	gui: BillboardGui,
+	trail: Trail,
+}
+
+type BurstSprite = {
+	parts: BurstParts,
+	position: Vector3,
+	velocity: Vector3,
+	elapsed: number,
+	attracting: boolean,
+	attractElapsed: number,
+	attractStart: Vector3,
+	warmTrail: boolean,
+}
+
+local burstPool: { BurstParts } = {}
+local burstSprites: { BurstSprite } = {}
+local burstConn: RBXScriptConnection? = nil
+local lastBurstSound = 0
+
+local function buildBurstParts(): BurstParts
+	local part = Instance.new("Part")
+	part.Name = "CleanBurstVfx"
+	part.Size = Vector3.one * 0.15
+	part.Transparency = 1
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Locked = true
+
+	local gui = Instance.new("BillboardGui")
+	gui.LightInfluence = 0
+	-- MUST stay true. The sprite is born a fraction of a stud off a wall that carries the dirt
+	-- overlay -- itself a SurfaceGui (see CleanableSurface). A depth-tested BillboardGui is a flat
+	-- quad CENTRED on its part, so half of it sits behind the wall plane and gets cut off by the
+	-- wall, and where the two GUIs overlap the engine sorts them as whole objects rather than
+	-- per-pixel, so the overlay wins outright and the sprite disappears. AlwaysOnTop takes it out of
+	-- that fight entirely. The cost is that it draws through geometry for its ~0.5s flight, which is
+	-- what a reward pickup flying at you should do anyway.
+	gui.AlwaysOnTop = false
+	gui.Size = UDim2.fromScale(BURST_SPRITE_SIZE, BURST_SPRITE_SIZE)
+	gui.Parent = part
+
+	local image = Instance.new("ImageLabel")
+	image.BackgroundTransparency = 1
+	image.Image = BURST_TEXTURE
+	image.Size = UDim2.fromScale(1, 1)
+	image.Parent = gui
+
+	-- A Trail needs two attachments; the gap between them is the ribbon width.
+	local attachment0 = Instance.new("Attachment")
+	attachment0.Position = Vector3.new(0, BURST_TRAIL_WIDTH * 0.5, 0)
+	attachment0.Parent = part
+
+	local attachment1 = Instance.new("Attachment")
+	attachment1.Position = Vector3.new(0, -BURST_TRAIL_WIDTH * 0.5, 0)
+	attachment1.Parent = part
+
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = attachment0
+	trail.Attachment1 = attachment1
+	trail.Color = ColorSequence.new(BURST_TRAIL_COLOR)
+	trail.Lifetime = BURST_TRAIL_LIFETIME
+	trail.WidthScale = BURST_TRAIL_WIDTH_SCALE
+	trail.Transparency = BURST_TRAIL_TRANSPARENCY
+	trail.LightEmission = 1
+	trail.LightInfluence = 0
+	trail.FaceCamera = true -- keeps the ribbon readable from any angle
+	trail.MinLength = 0
+	trail.Enabled = false -- switched on after the first position update
+	trail.Parent = part
+
+	return { part = part, gui = gui, trail = trail }
+end
+
+-- What the sprite flies into: the local player's root. Resolved every frame because the flight
+-- tracks the player as they move, and because the character can go away mid-flight.
+local function burstTarget(): BasePart?
+	local character = Players.LocalPlayer and Players.LocalPlayer.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	return if root and root:IsA("BasePart") then root else nil
+end
+
+-- Parks the sprite for reuse (and plays the arrival ping if it actually made it).
+local function releaseBurst(sprite: BurstSprite, arrived: boolean)
+	local parts = sprite.parts
+
+	if arrived then
+		local now = os.clock()
+		if now - lastBurstSound >= BURST_SOUND_GAP then
+			lastBurstSound = now
+			local sound = SoundManager.playOneShot(BURST_SOUND)
+			if sound then
+				sound.PlaybackSpeed = BURST_PITCH.Min + math.random() * (BURST_PITCH.Max - BURST_PITCH.Min)
+			end
+		end
+	end
+
+	-- Something may have cleared the part out from under us; touching Parent then throws.
+	if not parts.part.Parent then
+		return
+	end
+
+	parts.trail.Enabled = false -- stop recording before the part is parked
+	parts.trail:Clear()
+	parts.part.Parent = nil
+
+	if #burstPool < BURST_POOL_LIMIT then
+		table.insert(burstPool, parts)
+	else
+		parts.part:Destroy()
+	end
+end
+
+-- Advances one sprite. Returns true once it's finished, and whether it reached the player.
+local function stepBurst(sprite: BurstSprite, dt: number): (boolean, boolean)
+	sprite.elapsed += dt
+
+	local target = burstTarget()
+	if not target then
+		return true, false -- character went away mid-flight
+	end
+
+	if not sprite.attracting then
+		sprite.velocity += Vector3.new(0, BURST_GRAVITY * dt, 0)
+		sprite.position += sprite.velocity * dt
+
+		if sprite.elapsed >= BURST_ARC_TIME then
+			sprite.attracting = true
+			sprite.attractStart = sprite.position
+		end
+		return false, false
+	end
+
+	sprite.attractElapsed += dt
+	local alpha = math.min(sprite.attractElapsed / BURST_ATTRACT_TIME, 1)
+	local eased = TweenService:GetValue(alpha, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+	sprite.position = sprite.attractStart:Lerp(target.Position, eased)
+
+	local arrived = alpha >= 1 or (sprite.position - target.Position).Magnitude <= BURST_ARRIVE_RADIUS
+	return arrived, arrived
+end
+
+-- Per-frame stepping for every live sprite. The connection is made on the first burst and dropped
+-- as soon as the last sprite lands, so an idle place pays nothing for the effect.
+local function stepBursts(dt: number)
+	for i = #burstSprites, 1, -1 do
+		local sprite = burstSprites[i]
+		local finished, arrived = stepBurst(sprite, dt)
+
+		sprite.parts.part.Position = sprite.position
+
+		if sprite.warmTrail then
+			-- Position is now current, so there's no stale point to streak from.
+			sprite.parts.trail:Clear()
+			sprite.parts.trail.Enabled = true
+			sprite.warmTrail = false
+		end
+
+		if finished then
+			table.remove(burstSprites, i)
+			releaseBurst(sprite, arrived)
+		end
+	end
+
+	if #burstSprites == 0 and burstConn then
+		burstConn:Disconnect()
+		burstConn = nil
+	end
+end
+
+-- Throws one sprite out of `position` toward the local player, where it lands with a ping.
+-- No-ops before the character exists -- there'd be nothing to fly to.
+function VfxManager.cleanBurst(position: Vector3)
+	-- Client-only: a server-spawned sprite would replicate to every player.
+	if not RunService:IsClient() then
+		warn("VfxManager.cleanBurst called on the server; VFX must run on the client")
+		return
+	end
+
+	local target = burstTarget()
+	if not target then
+		return
+	end
+
+	-- Flat direction wall -> player. Directly under/over the player (no flat component) is a
+	-- degenerate case; throw it straight up rather than dividing by zero.
+	local flat = target.Position - position
+	local outward = Vector3.new(flat.X, 0, flat.Z)
+	outward = if outward.Magnitude > 0.01 then outward.Unit else Vector3.zero
+	local sideways = Vector3.new(-outward.Z, 0, outward.X) -- perpendicular, for the jitter
+
+	local speed = BURST_LAUNCH_SPEED.Min + math.random() * (BURST_LAUNCH_SPEED.Max - BURST_LAUNCH_SPEED.Min)
+	local height = BURST_LAUNCH_HEIGHT.Min + math.random() * (BURST_LAUNCH_HEIGHT.Max - BURST_LAUNCH_HEIGHT.Min)
+	local spread = (math.random() * 2 - 1) * BURST_SIDE_SPREAD
+
+	local parts = table.remove(burstPool) or buildBurstParts()
+	local origin = position + outward * BURST_SPAWN_OFFSET
+	parts.part.Position = origin
+	parts.part.Parent = Workspace -- client-only instance => only this player sees it
+
+	table.insert(burstSprites, {
+		parts = parts,
+		position = origin,
+		velocity = outward * speed + sideways * spread + Vector3.new(0, height, 0),
+		elapsed = 0,
+		attracting = false,
+		attractElapsed = 0,
+		attractStart = origin,
+		warmTrail = true, -- enable the trail *after* the first frame
+	} :: BurstSprite)
+
+	if not burstConn then
+		burstConn = RunService.Heartbeat:Connect(stepBursts)
+	end
 end
 
 return VfxManager

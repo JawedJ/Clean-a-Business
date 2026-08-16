@@ -20,6 +20,7 @@ local ToolConfig = require(game.ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(game.ReplicatedStorage.Packages.DataService).client
 local SkillsConfig = require(game.ReplicatedStorage.SharedModules.SkillsConfig)
 local SoundManager = require(game.ReplicatedStorage.SharedModules.SoundManager)
+local VfxManager = require(game.ReplicatedStorage.SharedModules.VfxManager)
 local CleanableSurface = require(script.Parent.CleanableSurface)
 local PartyController = require(script.Parent.PartyController)
 
@@ -38,6 +39,11 @@ local MAX_BRIDGE_DIST = Config.MaxBridgeWorldDistance
 -- server's reward cooldown so a fresh report is always waiting when it expires;
 -- the server is the authority on the actual once-per-second payout.
 local PROGRESS_REPORT_INTERVAL = 0.5
+
+-- Seconds between reward-burst sprites while the player is actually taking dirt off (see
+-- VfxManager.cleanBurst). One sprite per interval -- the burst is the wall's feedback now that the
+-- floating text is gone, so it wants to read as a steady drip, not a stream.
+local CLEAN_BURST_INTERVAL = 0.2
 
 -- Live cleaning range (studs) for this player, read fresh so tool upgrades take
 -- effect immediately. Falls back to the static ToolConfig default if the player's
@@ -145,6 +151,8 @@ local missedLast = true
 
 -- os.clock() of the last CleanProgress report, for client-side throttling.
 local lastProgressReport = 0
+-- os.clock() of the last reward burst, so the sprites keep to CLEAN_BURST_INTERVAL.
+local lastCleanBurst = 0
 
 -- === Stroke relay (party jobs only) ===
 -- Every erase we perform is queued as { part, to, from?, radius } and shipped in batches, so a
@@ -432,6 +440,13 @@ local function onHeartbeat()
 		if now - lastProgressReport >= PROGRESS_REPORT_INTERVAL then
 			lastProgressReport = now
 			CleanProgress:FireServer(part)
+		end
+
+		-- Reward feedback, tied to dirt genuinely coming off for the same reason the report is:
+		-- spraying already-clean pixels shouldn't pay out sprites.
+		if now - lastCleanBurst >= CLEAN_BURST_INTERVAL then
+			lastCleanBurst = now
+			VfxManager.cleanBurst(result.Position)
 		end
 	end
 

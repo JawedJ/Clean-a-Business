@@ -1191,7 +1191,7 @@ ReplicatedStorage/SharedModules/
   CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills/webs/GARBAGE shares by DecalWeight/SpillWeight/WebWeight/GarbageWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
   SoundManager.luau     cosmetic sound library; CLIENT-EXECUTED only (a server-parented Sound would be audible to everyone) -- server-triggered sounds go via a remote. playOneShot (2D) / playAt (positional, parented to a BasePart) / createSustained (looping handle)
   SoundGroups.luau      master volume routing: SFXGroup / MusicGroup under SoundService, so a group's Volume scales every sound in it live (what the settings sliders drive)
-  VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate). cleanPop (neon swell on a cleaned part, fire-and-forget) / shredDebris (yellow fleck shower thrown out and dragged down; returns a move/stop handle since it runs as long as the machine does)
+  VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate). cleanPop (neon swell on a cleaned part, fire-and-forget) / shredDebris (yellow fleck shower thrown out and dragged down; returns a move/stop handle since it runs as long as the machine does) / cleanBurst (one pooled billboard sprite per call, thrown off the washed spot toward the player then snapped into them with a ping; replaces the old floating text on cleanable walls)
   UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow, applied game-wide by UiButtonController — callers rarely invoke it directly; hoverGrowInGrid pushes grid neighbours + left-edge padding; hoverGrowCluster wires a whole cluster frame; spreadStackOnHover pushes a stack of frames apart around the hovered one)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
@@ -1272,7 +1272,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/DecalVisibility.luau     stain visibility: hidden unless on the job; per-client clean + redo
   Modules/SpillVisibility.luau     spill visibility: hidden unless on the job; per-client hide-on-mop + Transparency reset on redo; getSpillCount / getActiveVisibleSpills
   Modules/CleanableSurface.luau    dirt-overlay OOP class
-  Modules/PressureWasherController.luau   tool input + raycast + cleaning
+  Modules/PressureWasherController.luau   tool input + raycast + cleaning; fires a VfxManager.cleanBurst sprite every 0.2s while dirt is actually coming off
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
   Modules/MopController.luau       mop input + raycast + client-driven spill fade (hold-to-clean, Power/sec) + persistent per-spill billboard bar; fires CleanSpill on full fade
   Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb
