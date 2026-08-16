@@ -77,10 +77,16 @@ report, so a player can only ever clean the one business they've accepted. Concr
   the single `CleanSpill` completion report (deduped). Neither can be farmed off a job the player
   doesn't hold.
   - The wash reward is the one that pays **silently** (`ProgressionService.rewardSilently`) — no
-    `RewardPopup`, so no floating "+N XP! / +N Cash!" and no cash chime. Every other cleanable pays
-    on a *discrete act* where a popup marks the moment; the wash pays every second the trigger is
-    held, which as a stream of text over the crosshair is just noise. Walls are getting their own
-    VFX in its place. The payout itself is unchanged.
+    `RewardPopup`, so no cash chime. Every other cleanable pays on a *discrete act* where a chime
+    marks the moment; the wash pays every second the trigger is held, which would be constant noise.
+    The payout itself is unchanged.
+  - **The payout is shown in the world, not on the HUD.** Coins burst out of the cleanable and fly
+    into the player (`VfxManager`): the washer drips one out every 0.2s while a wall is coming clean,
+    and every other cleanable throws three at the moment it's finished. The old floating
+    "+N XP! / +N Cash!" labels are gone — `RewardPopupController` is now only the cash chime.
+    Each burst is fired by the tool controller that did the cleaning, NOT off the server's
+    `DecalCleaned` / `WebCleaned` / `SpillCleaned` / `GarbageCleaned` confirmations: those go to
+    every member of a party session, and one member's payout isn't another's to celebrate.
 - **Garbage is the exception to all of this, deliberately.** Because garbage *moves*, a shared
   instance would let two sessions drag each other's pieces around — so what a player carries is a
   **client-local clone**, and its position is never server state (see *Garbage carrying*). The
@@ -1191,7 +1197,7 @@ ReplicatedStorage/SharedModules/
   CompletionWeights.luau  shared job-completion weighting: combines walls/stains/spills/webs/GARBAGE shares by DecalWeight/SpillWeight/WebWeight/GarbageWeight (absent kinds zeroed + renormalised), used by BOTH JobClient + JobServer
   SoundManager.luau     cosmetic sound library; CLIENT-EXECUTED only (a server-parented Sound would be audible to everyone) -- server-triggered sounds go via a remote. playOneShot (2D) / playAt (positional, parented to a BasePart) / createSustained (looping handle)
   SoundGroups.luau      master volume routing: SFXGroup / MusicGroup under SoundService, so a group's Volume scales every sound in it live (what the settings sliders drive)
-  VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate). cleanPop (neon swell on a cleaned part, fire-and-forget) / shredDebris (yellow fleck shower thrown out and dragged down; returns a move/stop handle since it runs as long as the machine does) / cleanBurst (one pooled billboard sprite per call, thrown off the washed spot toward the player then snapped into them with a ping; replaces the old floating text on cleanable walls)
+  VfxManager.luau       cosmetic VFX library; CLIENT-EXECUTED only, same reason as SoundManager (client-made instances don't replicate). Everything it spawns is parented to a client-made Workspace.VFX folder rather than loose in Workspace. cleanPop (neon swell on a cleaned part, fire-and-forget) / shredDebris (yellow fleck shower thrown out and dragged down; returns a move/stop handle since it runs as long as the machine does) / cleanBurst / rewardBurst (pooled coin billboards that fly into the player with a ping and replace the old floating reward text: cleanBurst throws ONE toward the player, fired on a cadence by the washer; rewardBurst throws N (default 3) evenly AROUND the spot, once, when a stain/spill/web/garbage piece is finished, and those ones fall, bounce off the world and settle before they're pulled in). The bounce is hand-rolled: the sprites are anchored, so gravity is integrated in the stepper and a per-frame raycast along the coin's next step stands in for the floor (characters + the VFX folder excluded)
   UiAnimations.luau     shared GUI motion: Panel open/close, DropIn, hover grow (hoverGrow, applied game-wide by UiButtonController — callers rarely invoke it directly; hoverGrowInGrid pushes grid neighbours + left-edge padding; hoverGrowCluster wires a whole cluster frame; spreadStackOnHover pushes a stack of frames apart around the hovered one)
 ReplicatedStorage/Remotes/
   AcceptJob             RemoteEvent (client → server: accept a job for a businessId)
@@ -1247,6 +1253,7 @@ ServerScriptService/
   Modules/SkillsService.luau         skills authority: PurchaseSkill (re-validated, Gem-charged), getMultiplier read-point for other services, free-roam walk speed (StarterPlayer.CharacterWalkSpeed x Speedy), ProcessReceipt for the Robux unlock-all product
   Modules/SettingsService.luau       persists client preferences (volumes, HidePlayers) via UpdateSetting; per-key sanitizers clamp/type-check before saving
   Modules/CompanyService.luau        persists the business description via UpdateBusinessDescription (string coerced, trimmed, length-capped); mirrors SettingsService
+  Modules/ShredderCollisionService.luau  registers the "Shredder" / "CoinVfx" collision groups and puts every BasePart under a "shredder"-tagged model in the first, so the coin reward VFX can never interact with a shredder (the sprites are client-only, so only the server can register the group they use)
   Modules/PlayerCollisionService.luau  puts every character in a "Players" collision group that doesn't collide with itself -- players never collide, job or not (still collides with Default, so floors/walls work); exposes that group name as .GROUP so other systems (GarbageCarryService) can pair their own group against it
   Modules/AdminCommands.luau         chat commands: PUBLIC /skiptutorial (anyone -- ends the caller's tutorial exactly as finishing it does, via TutorialService.skip); owner-only /completejob <id> <amt>, /addcash <amt>, /addgems <amt>, /setlevel <n>
   Modules/InventoryManager.luau      addItem helper used by ShopService (present; not init'd on its own)
@@ -1292,7 +1299,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/PlayTogetherController.luau  the standalone PlayTogetherFrame: the entry to the party screens (PartyUiController.openEntry -- a toggle over the whole flow), shown exactly when the HUD is via JobUiController.onHudVisibilityChanged (so it returns on GoHome, not the moment the job ends), and inert for the tutorial's duration
   Modules/PartyUiController.luau   the three party screens (PartySelectionUI / PartyUI / JoinPartyUI): create borrows the job board to pick the business (JobUiController.openForSelection) and the pick creates the party; the room draws the job + a ready-state row per member with leader-only kicks; the browser clones one PartySlot per joinable party and rebuilds on every server push. Steps between them are instant (ExclusivePanels.openInstant); only entering/leaving the flow animates
   Modules/Crosshair.luau           white center dot + hidden mouse icon in first person; normal cursor returns in third person (needed to click surfaces)
-  Modules/RewardPopupController.luau  floating "+N XP!" / "+N Cash!" near the crosshair off RewardPopup, drifting up + fading, with a cash chime
+  Modules/RewardPopupController.luau  cash chime off RewardPopup (the floating "+N XP!" / "+N Cash!" labels it used to spawn are gone; the payout is the coin burst in the world instead)
   Modules/WorkerGemPopupController.luau  floats "💎N" from each paying worker's authored GUIPart billboard + a 3D plop, off WorkerGemPopup
   Modules/PlotButtonSoundController.luau  plot-button feedback off PlotButtonSound: bought -> "ButtonPurchase"; couldn't afford -> silent (no fail SFX)
   Modules/PurchaseSoundController.luau  plays the purchase SFX after ANY completed Robux purchase (dev products, passes, assets) off MarketplaceService's prompt-finished signals

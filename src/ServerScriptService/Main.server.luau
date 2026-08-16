@@ -8,6 +8,7 @@ local BusinessService = require(game.ServerScriptService.Modules.BusinessService
 local PartyService = require(game.ServerScriptService.Modules.PartyService)
 local JobService = require(game.ServerScriptService.Modules.JobService)
 local PlayerCollisionService = require(game.ServerScriptService.Modules.PlayerCollisionService)
+local ShredderCollisionService = require(game.ServerScriptService.Modules.ShredderCollisionService)
 local CleaningService = require(game.ServerScriptService.Modules.CleaningService)
 local DecalCleaningService = require(game.ServerScriptService.Modules.DecalCleaningService)
 local SpillCleaningService = require(game.ServerScriptService.Modules.SpillCleaningService)
@@ -53,6 +54,9 @@ PartyService.init()
 JobService.init()
 -- Players never collide with each other (visual hiding is client JobGhostController, job-only).
 PlayerCollisionService.init()
+-- Registers the collision groups that keep the coin reward VFX out of tagged shredders. Must run
+-- before any client spawns a coin, which is why it's up here with the other collision setup.
+ShredderCollisionService.init()
 CleaningService.init()
 DecalCleaningService.init()
 SpillCleaningService.init()

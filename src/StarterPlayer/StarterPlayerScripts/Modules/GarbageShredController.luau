@@ -204,6 +204,15 @@ local function shred(surfaceId: string)
 			return
 		end
 		destroyInFlight(piece)
+
+		-- Payout beat: coins burst out of the machine's mouth and fly into the player, as the piece
+		-- disappears. Only for a piece WE fed in -- `reported` holds exactly the surfaceIds this
+		-- client pushed into the hitbox, and every member animates this same disposal on their own
+		-- clone, so without the gate a party member's shred would pay us coins too.
+		if reported[surfaceId] then
+			VfxManager.rewardBurst(entry.Position)
+		end
+
 		-- Count it toward the completion bar as it vanishes, which is the moment the server counts it
 		-- too (GarbageShredService waits out the same three beats before marking it).
 		JobController.onGarbageCleaned(surfaceId)

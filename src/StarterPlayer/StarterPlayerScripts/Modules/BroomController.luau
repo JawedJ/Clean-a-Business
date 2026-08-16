@@ -18,6 +18,7 @@ local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
+local VfxManager = require(ReplicatedStorage.SharedModules.VfxManager)
 
 local HoverHighlight = require(script.Parent.HoverHighlight)
 
@@ -157,6 +158,9 @@ local function startClean(model: Model, hitbox: BasePart)
 
 	-- Snapshot the timer for this one clean so the bar's full duration is stable.
 	local useTime = getUseTime()
+	-- Snapshot where the reward coins burst from too: by the time the bar ends the server has
+	-- deleted the stain, so the hitbox is gone and can't be asked where it was. Stains don't move.
+	local burstPosition = hitbox.Position
 
 	if brushSound then
 		brushSound.start()
@@ -180,6 +184,11 @@ local function startClean(model: Model, hitbox: BasePart)
 		end
 		gui:Destroy()
 		busy = false
+
+		-- Payout beat: coins burst out of the stain and fly into the player. Fired here rather than
+		-- off the server's DecalCleaned because that goes to every party member, and the coins are
+		-- OUR reward -- a member across the building shouldn't get a burst for our stain.
+		VfxManager.rewardBurst(burstPosition)
 
 		-- Safety net: if the server rejected this click (it can race the previous
 		-- clean's completion and be dropped), no DecalCleaned ever arrives and the

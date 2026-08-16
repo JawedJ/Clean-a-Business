@@ -23,6 +23,34 @@ local SoundManager = require(script.Parent.SoundManager)
 
 local VfxManager = {}
 
+-- Every instance any effect here spawns goes in one Workspace.VFX folder rather than loose in
+-- Workspace: it keeps the explorer readable while an effect is running, and gives anything that
+-- walks Workspace's children (job/business lookups) a single obvious thing to skip. The folder is
+-- client-made like its contents, so it never replicates. It's created on the first effect, reused if
+-- something else already made one, and re-made if it's ever cleared out from under us.
+local VFX_FOLDER_NAME = "VFX"
+
+local vfxFolder: Folder? = nil
+
+local function vfxParent(): Folder
+	local existing = vfxFolder
+	if existing and existing.Parent then
+		return existing
+	end
+
+	local found = Workspace:FindFirstChild(VFX_FOLDER_NAME)
+	if found and found:IsA("Folder") then
+		vfxFolder = found
+		return found
+	end
+
+	local created = Instance.new("Folder")
+	created.Name = VFX_FOLDER_NAME
+	created.Parent = Workspace
+	vfxFolder = created
+	return created
+end
+
 -- "Clean pop": a neon-yellow duplicate of a just-cleaned part that briefly swells
 -- past the original then settles back, reading as a bright outline flash.
 local POP_COLOR = Color3.fromRGB(223, 223, 16)
@@ -62,7 +90,7 @@ function VfxManager.cleanPop(part: BasePart)
 	local baseSize = part.Size
 	clone.Size = baseSize
 	clone.CFrame = part.CFrame -- grows symmetrically about the part's center
-	clone.Parent = Workspace -- client-only instance => only this player sees it
+	clone.Parent = vfxParent() -- client-only instance => only this player sees it
 
 	local grow = TweenService:Create(
 		clone,
@@ -197,7 +225,7 @@ function VfxManager.shredDebris(cframe: CFrame): DebrisEffect
 		emitter.Parent = emitterPart
 	end
 
-	emitterPart.Parent = Workspace -- client-only instance => only this player sees it
+	emitterPart.Parent = vfxParent() -- client-only instance => only this player sees it
 
 	return {
 		move = function(to: CFrame)
@@ -220,18 +248,23 @@ function VfxManager.shredDebris(cframe: CFrame): DebrisEffect
 	}
 end
 
--- "Clean burst": a single image sprite that pops off the spot being cleaned, arcs OUT TOWARD the
--- player, then snaps into them with a ping -- the reward feedback for washing a wall (it replaces
--- the floating text that used to sit on cleanable walls).
+-- "Clean burst": coin sprites that pop off the spot being cleaned and fly into the player with a
+-- ping. This is the reward feedback for EVERY cleanable -- it replaces the floating "+N XP / +N
+-- Cash" text that used to appear on screen. Two shapes of it, differing only in how the coins leave:
+--   * cleanBurst   -- one coin thrown TOWARD the player. The washer fires it on a cadence while a
+--                     wall is coming clean, so the payout drips out over the wash.
+--   * rewardBurst  -- several coins thrown evenly AROUND the spot, once, at the moment a stain /
+--                     spill / web / piece of garbage is finished. Those clean in one go, so there's
+--                     a single completion beat to sell rather than a stream -- and being one-off,
+--                     these coins can afford to fall, bounce off the floor and settle before they
+--                     fly in (see the BOUNCE constants).
+-- Both then fly into the player, so the coins always read as ending up in the player's pocket.
 --
--- It's a billboard, not a particle: the sprite has to fly to a moving target (the player's root)
--- and play a sound the moment it lands there, which a ParticleEmitter can't do -- its particles are
+-- They're billboards, not particles: a sprite has to fly to a moving target (the player's root) and
+-- play a sound the moment it lands there, which a ParticleEmitter can't do -- its particles are
 -- fire-and-forget and can't be steered or reported on.
 --
--- One call = ONE sprite. Callers fire it on their own cadence (the washer does so every
--- CLEAN_BURST_INTERVAL while dirt is actually coming off), so density is the caller's choice.
---
--- The sprite parts are POOLED. At a burst every 0.2s with a ~0.5s flight, a handful are alive at
+-- The sprite parts are POOLED. At a burst every 0.2s with a ~0.5s flight, several are alive at
 -- once and each one would otherwise mean building a Part + BillboardGui + Trail + 2 Attachments,
 -- five instances a fifth of a second, forever -- exactly the churn that makes cleaning hitch.
 local BURST_TEXTURE = "rbxassetid://88320390473526"
@@ -239,22 +272,48 @@ local BURST_SOUND = "WallBurstSFX" -- arrival ping; template under ReplicatedSto
 local BURST_TRAIL_COLOR = Color3.fromRGB(255, 229, 29)
 local BURST_SPRITE_SIZE = 0.9 -- studs, billboard width/height
 
--- LAUNCH. The sprite is thrown along the flat direction from the wall to the player, so it reads as
--- coming off the surface at them rather than flying off sideways. Gravity is far heavier than real
--- so the arc is short and punchy instead of floaty.
+-- LAUNCH. Gravity is far heavier than real so the arc is short and punchy instead of floaty. Which
+-- way the coins are thrown is the difference between the two effects (see the block comment above).
 local BURST_GRAVITY = -150
-local BURST_LAUNCH_SPEED = NumberRange.new(6, 10) -- outward, toward the player
+local BURST_LAUNCH_SPEED = NumberRange.new(6, 10) -- horizontal throw
 local BURST_LAUNCH_HEIGHT = NumberRange.new(14, 20) -- upward kick
 local BURST_SIDE_SPREAD = 5 -- studs/sec of sideways jitter, so repeats don't trace one line
+-- rewardBurst only: how far a coin's direction may wander off its share of the circle. Kept well
+-- under the gap between shares so the ring stays even -- the jitter is there to stop repeat bursts
+-- looking stamped from a mould, not to scatter them.
+local BURST_RADIAL_JITTER = 0.35 -- radians
+local BURST_DEFAULT_COUNT = 3 -- coins per rewardBurst
 -- Studs off the surface the sprite is born at. Kept past half the sprite's width so the whole quad
 -- (and the trail it starts recording) clears the wall plane rather than straddling it.
 local BURST_SPAWN_OFFSET = 1.2
 
--- FLIGHT. A short free arc, then a fixed-length flight into the player. Back/In eases *backwards*
--- first, so the sprite winds up before it snaps in -- that wind-up is what sells the pull.
-local BURST_ARC_TIME = 0.18
+-- FLIGHT. Both effects end the same way: a fixed-length flight into the player, eased Back/In, which
+-- winds *backwards* first so the coin recoils before it snaps in -- that wind-up is what sells the
+-- pull. What differs is how long the coin is loose beforehand.
 local BURST_ATTRACT_TIME = 0.3
 local BURST_ARRIVE_RADIUS = 2 -- studs from the target counted as arrived
+-- cleanBurst: no bouncing at all, just a brief arc before the pull. A coin fired every 0.2s that
+-- landed and waited would pile the floor up with coins during a wash.
+local BURST_ARC_TIME = 0.18
+
+-- BOUNCE -- rewardBurst only. These coins are thrown once, out of something that just finished, so
+-- they get to behave like objects: fall, hit the floor, scatter, settle, then get sucked in.
+--
+-- The "physics" is entirely ours. The parts are anchored, so the engine never touches them: each
+-- frame we integrate gravity by hand and cast a ray along the step we're about to take, and a hit
+-- becomes a bounce. That's the only way an anchored part can collide with anything, and it's what
+-- lets the coins ignore the player, their own trail parts and each other for free.
+local BURST_MAX_BOUNCES = 2 -- hops before a coin stops dead
+local BURST_BOUNCE_RETENTION = 0.45 -- fraction of vertical speed kept per bounce
+local BURST_FRICTION = 0.65 -- horizontal damping per bounce
+local BURST_SETTLE_SPEED = 9 -- below this downward speed, don't bother bouncing
+-- Backstop for a coin that never settles at all -- thrown out over a ledge with nothing under it to
+-- land on. A coin that DOES settle flies in the moment it stops, wherever the player is.
+local BURST_FALL_TIME = 2.5
+-- The ray is extended slightly past the step so a coin can't tunnel through a thin floor between
+-- frames, and a landed coin is parked half its height above the hit so it rests ON the floor rather
+-- than half inside it.
+local BURST_RAY_OVERSHOOT = 0.3
 
 local BURST_TRAIL_LIFETIME = 0.1
 local BURST_TRAIL_WIDTH = 0.5
@@ -269,7 +328,12 @@ local BURST_TRAIL_TRANSPARENCY = NumberSequence.new({
 	NumberSequenceKeypoint.new(1, 1),
 })
 
-local BURST_POOL_LIMIT = 8 -- parked sprites kept for reuse; the excess is destroyed
+local BURST_POOL_LIMIT = 50 -- parked sprites kept for reuse; the excess is destroyed
+-- Collision group the coins sit in, registered by the server's ShredderCollisionService and made
+-- non-collidable with tagged shredders there. The coins are anchored and CanCollide = false already,
+-- so this is belt-and-braces: it guarantees they can never interact with a shredder even if one of
+-- those properties is ever relaxed. The name must match ShredderCollisionService.COIN_GROUP.
+local BURST_COLLISION_GROUP = "CoinVfx"
 -- Arrivals inside this window share one sound, so sprites landing together can't stack into one
 -- loud hit. Pitch is randomised per play so repeats don't sound cloned.
 local BURST_SOUND_GAP = 0.07
@@ -287,6 +351,10 @@ type BurstSprite = {
 	position: Vector3,
 	velocity: Vector3,
 	elapsed: number,
+	--- Whether this coin bounces off the world on its way down (rewardBurst) or just arcs for
+	--- BURST_ARC_TIME and flies in (cleanBurst).
+	bounces: boolean,
+	bounceCount: number,
 	attracting: boolean,
 	attractElapsed: number,
 	attractStart: Vector3,
@@ -297,6 +365,15 @@ local burstPool: { BurstParts } = {}
 local burstSprites: { BurstSprite } = {}
 local burstConn: RBXScriptConnection? = nil
 local lastBurstSound = 0
+
+-- What a falling coin is allowed to bounce off: everything except the characters (a coin skidding
+-- off someone's head on its way down reads as a bug) and the VFX folder itself. Our own parts are
+-- CanQuery = false so they'd be skipped anyway, but the folder can hold other effects' instances --
+-- cleanPop's neon clone is a full-size copy of a wall, and bouncing off THAT would be very visible.
+-- The filter is refreshed per burst rather than per frame: characters only change on respawn.
+local burstRayParams = RaycastParams.new()
+burstRayParams.FilterType = Enum.RaycastFilterType.Exclude
+burstRayParams.IgnoreWater = true
 
 local function buildBurstParts(): BurstParts
 	local part = Instance.new("Part")
@@ -309,16 +386,18 @@ local function buildBurstParts(): BurstParts
 	part.CanTouch = false
 	part.CastShadow = false
 	part.Locked = true
+	-- Setting a group the server hasn't registered yet throws, and a coin that can't be built is a
+	-- worse outcome than a coin outside the group -- it's non-colliding either way.
+	pcall(function()
+		part.CollisionGroup = BURST_COLLISION_GROUP
+	end)
 
 	local gui = Instance.new("BillboardGui")
 	gui.LightInfluence = 0
-	-- MUST stay true. The sprite is born a fraction of a stud off a wall that carries the dirt
-	-- overlay -- itself a SurfaceGui (see CleanableSurface). A depth-tested BillboardGui is a flat
-	-- quad CENTRED on its part, so half of it sits behind the wall plane and gets cut off by the
-	-- wall, and where the two GUIs overlap the engine sorts them as whole objects rather than
-	-- per-pixel, so the overlay wins outright and the sprite disappears. AlwaysOnTop takes it out of
-	-- that fight entirely. The cost is that it draws through geometry for its ~0.5s flight, which is
-	-- what a reward pickup flying at you should do anyway.
+	-- MUST stay true, for EVERY burst. A cleanable wall's dirt overlay is a SurfaceGui, and two
+	-- overlapping GUI adornments are ordered as whole objects rather than per pixel -- so a
+	-- depth-tested coin in front of a dirty wall is clipped in half or swallowed outright, wherever
+	-- it was thrown from. Drawing through geometry is the accepted cost of never losing a coin.
 	gui.AlwaysOnTop = true
 	gui.Size = UDim2.fromScale(BURST_SPRITE_SIZE, BURST_SPRITE_SIZE)
 	gui.Parent = part
@@ -394,6 +473,52 @@ local function releaseBurst(sprite: BurstSprite, arrived: boolean)
 	end
 end
 
+-- Hands the coin over to the flight-into-the-player phase, from wherever it is now.
+local function beginAttract(sprite: BurstSprite)
+	sprite.attracting = true
+	sprite.attractElapsed = 0
+	sprite.attractStart = sprite.position
+end
+
+-- Gravity for one frame, plus the bounce for the coins that do that. A settled coin (velocity
+-- exactly zero, set below when it runs out of hops) sits where it landed until something pulls it.
+local function stepFall(sprite: BurstSprite, dt: number)
+	if sprite.velocity == Vector3.zero then
+		return
+	end
+
+	sprite.velocity += Vector3.new(0, BURST_GRAVITY * dt, 0)
+	local nextPosition = sprite.position + sprite.velocity * dt
+
+	if not sprite.bounces then
+		sprite.position = nextPosition
+		return
+	end
+
+	-- Cast along the step we're about to take, a little past it so a thin floor can't be tunnelled.
+	local delta = (nextPosition - sprite.position) + Vector3.new(0, -BURST_RAY_OVERSHOOT, 0)
+	local hit = Workspace:Raycast(sprite.position, delta, burstRayParams)
+
+	-- Only a hit on the way DOWN is a landing; on the way up it's a ceiling clip we ignore, which
+	-- keeps a coin thrown against an overhang from sticking to it.
+	if hit and sprite.velocity.Y < 0 then
+		nextPosition = hit.Position + Vector3.new(0, BURST_SPRITE_SIZE * 0.5, 0)
+
+		if sprite.bounceCount >= BURST_MAX_BOUNCES or sprite.velocity.Y > -BURST_SETTLE_SPEED then
+			sprite.velocity = Vector3.zero -- out of hops, or landing too gently to be worth one
+		else
+			sprite.bounceCount += 1
+			sprite.velocity = Vector3.new(
+				sprite.velocity.X * BURST_FRICTION,
+				-sprite.velocity.Y * BURST_BOUNCE_RETENTION,
+				sprite.velocity.Z * BURST_FRICTION
+			)
+		end
+	end
+
+	sprite.position = nextPosition
+end
+
 -- Advances one sprite. Returns true once it's finished, and whether it reached the player.
 local function stepBurst(sprite: BurstSprite, dt: number): (boolean, boolean)
 	sprite.elapsed += dt
@@ -404,12 +529,25 @@ local function stepBurst(sprite: BurstSprite, dt: number): (boolean, boolean)
 	end
 
 	if not sprite.attracting then
-		sprite.velocity += Vector3.new(0, BURST_GRAVITY * dt, 0)
-		sprite.position += sprite.velocity * dt
+		stepFall(sprite, dt)
 
-		if sprite.elapsed >= BURST_ARC_TIME then
-			sprite.attracting = true
-			sprite.attractStart = sprite.position
+		if not sprite.bounces then
+			-- Straight off a wall: a brief arc, then in.
+			if sprite.elapsed >= BURST_ARC_TIME then
+				beginAttract(sprite)
+			end
+			return false, false
+		end
+
+		if (sprite.position - target.Position).Magnitude <= BURST_ARRIVE_RADIUS then
+			return true, true -- the player walked right into it
+		end
+
+		-- Settled (velocity zeroed by stepFall when it ran out of hops): fly in, no matter how far
+		-- away the player is. The pull waits for the coin to STOP rather than starting on landing, so
+		-- the coins always get their full scatter first.
+		if sprite.velocity == Vector3.zero or sprite.elapsed >= BURST_FALL_TIME then
+			beginAttract(sprite)
 		end
 		return false, false
 	end
@@ -451,8 +589,52 @@ local function stepBursts(dt: number)
 	end
 end
 
--- Throws one sprite out of `position` toward the local player, where it lands with a ping.
--- No-ops before the character exists -- there'd be nothing to fly to.
+-- Puts one coin in the air at `origin` travelling at `velocity`. Everything after the throw -- the
+-- arc, the flight into the player, the ping -- is the same for both public effects.
+--
+local function launchBurstSprite(origin: Vector3, velocity: Vector3, bounces: boolean)
+	local parts = table.remove(burstPool) or buildBurstParts()
+	parts.part.Position = origin
+	parts.part.Parent = vfxParent() -- client-only instance => only this player sees it
+
+	table.insert(burstSprites, {
+		parts = parts,
+		position = origin,
+		velocity = velocity,
+		elapsed = 0,
+		bounces = bounces,
+		bounceCount = 0,
+		attracting = false,
+		attractElapsed = 0,
+		attractStart = origin,
+		warmTrail = true, -- enable the trail *after* the first frame
+	} :: BurstSprite)
+
+	if not burstConn then
+		burstConn = RunService.Heartbeat:Connect(stepBursts)
+	end
+end
+
+local function randomIn(range: NumberRange): number
+	return range.Min + math.random() * (range.Max - range.Min)
+end
+
+-- Re-points the bounce ray's exclude list at the current characters. Called per burst, not per
+-- frame: assigning FilterDescendantsInstances copies the list, and the list only changes on respawn.
+local function refreshBurstRayFilter()
+	local ignore: { Instance } = { vfxParent() }
+	for _, player in Players:GetPlayers() do
+		local character = player.Character
+		if character then
+			table.insert(ignore, character)
+		end
+	end
+	burstRayParams.FilterDescendantsInstances = ignore
+end
+
+-- Throws ONE coin out of `position` toward the local player, where it lands with a ping. Used by the
+-- pressure washer on a cadence while a wall is being washed. No-ops before the character exists --
+-- there'd be nothing to fly to.
 function VfxManager.cleanBurst(position: Vector3)
 	-- Client-only: a server-spawned sprite would replicate to every player.
 	if not RunService:IsClient() then
@@ -465,35 +647,51 @@ function VfxManager.cleanBurst(position: Vector3)
 		return
 	end
 
-	-- Flat direction wall -> player. Directly under/over the player (no flat component) is a
-	-- degenerate case; throw it straight up rather than dividing by zero.
+	-- Flat direction wall -> player, so the coin reads as coming off the surface AT them rather than
+	-- flying off sideways. Directly under/over the player (no flat component) is a degenerate case;
+	-- throw it straight up rather than dividing by zero.
 	local flat = target.Position - position
 	local outward = Vector3.new(flat.X, 0, flat.Z)
 	outward = if outward.Magnitude > 0.01 then outward.Unit else Vector3.zero
 	local sideways = Vector3.new(-outward.Z, 0, outward.X) -- perpendicular, for the jitter
 
-	local speed = BURST_LAUNCH_SPEED.Min + math.random() * (BURST_LAUNCH_SPEED.Max - BURST_LAUNCH_SPEED.Min)
-	local height = BURST_LAUNCH_HEIGHT.Min + math.random() * (BURST_LAUNCH_HEIGHT.Max - BURST_LAUNCH_HEIGHT.Min)
-	local spread = (math.random() * 2 - 1) * BURST_SIDE_SPREAD
+	local velocity = outward * randomIn(BURST_LAUNCH_SPEED)
+		+ sideways * ((math.random() * 2 - 1) * BURST_SIDE_SPREAD)
+		+ Vector3.new(0, randomIn(BURST_LAUNCH_HEIGHT), 0)
 
-	local parts = table.remove(burstPool) or buildBurstParts()
-	local origin = position + outward * BURST_SPAWN_OFFSET
-	parts.part.Position = origin
-	parts.part.Parent = Workspace -- client-only instance => only this player sees it
+	-- No bouncing: at one coin every 0.2s, coins that landed and waited would carpet the floor.
+	launchBurstSprite(position + outward * BURST_SPAWN_OFFSET, velocity, false)
+end
 
-	table.insert(burstSprites, {
-		parts = parts,
-		position = origin,
-		velocity = outward * speed + sideways * spread + Vector3.new(0, height, 0),
-		elapsed = 0,
-		attracting = false,
-		attractElapsed = 0,
-		attractStart = origin,
-		warmTrail = true, -- enable the trail *after* the first frame
-	} :: BurstSprite)
+-- Throws `count` coins (default 3) out of `position`, spread EVENLY around it rather than aimed at
+-- the player, then in to the player like cleanBurst. This is the one-off payout beat for a cleanable
+-- that finishes in one go -- a stain, spill, web or piece of garbage -- so the coins want to read as
+-- bursting out of the thing that was just cleaned, in every direction, not as a stream off a wall.
+function VfxManager.rewardBurst(position: Vector3, count: number?)
+	-- Client-only: a server-spawned sprite would replicate to every player.
+	if not RunService:IsClient() then
+		warn("VfxManager.rewardBurst called on the server; VFX must run on the client")
+		return
+	end
 
-	if not burstConn then
-		burstConn = RunService.Heartbeat:Connect(stepBursts)
+	if not burstTarget() then
+		return
+	end
+
+	local total = count or BURST_DEFAULT_COUNT
+	-- One random offset for the WHOLE ring, so the coins keep their even spacing while consecutive
+	-- bursts don't all leave at the same angles.
+	local baseAngle = math.random() * math.pi * 2
+
+	-- These coins bounce, so the ray needs a current filter. Once per burst, not once per coin.
+	refreshBurstRayFilter()
+
+	for i = 1, total do
+		local angle = baseAngle + (i / total) * math.pi * 2 + (math.random() * 2 - 1) * BURST_RADIAL_JITTER
+		local outward = Vector3.new(math.cos(angle), 0, math.sin(angle))
+		local velocity = outward * randomIn(BURST_LAUNCH_SPEED) + Vector3.new(0, randomIn(BURST_LAUNCH_HEIGHT), 0)
+
+		launchBurstSprite(position + outward * BURST_SPAWN_OFFSET, velocity, true)
 	end
 end
 

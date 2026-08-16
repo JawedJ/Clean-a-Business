@@ -31,6 +31,7 @@ local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SpillResolver = require(ReplicatedStorage.SharedModules.SpillResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
+local VfxManager = require(ReplicatedStorage.SharedModules.VfxManager)
 
 local HoverHighlight = require(script.Parent.HoverHighlight)
 local JobController = require(script.Parent.JobController)
@@ -194,6 +195,15 @@ end
 local function completeSpill(model: Model)
 	doneSpills[model] = true
 	progress[model] = 1
+
+	-- Payout beat: coins burst out of the spill and fly into the player. Read the position BEFORE
+	-- onSpillCleaned hides the spill, and fire it only for the spill WE finished -- a party member's
+	-- spill comes through SpillCleaned instead, and their reward isn't ours to celebrate.
+	local anchor = anchorPart(model)
+	if anchor then
+		VfxManager.rewardBurst(anchor.Position)
+	end
+
 	JobController.onSpillCleaned(model)
 	CleanSpill:FireServer(model)
 	local bar = bars[model]
