@@ -319,7 +319,7 @@ local function buildBurstParts(): BurstParts
 	-- per-pixel, so the overlay wins outright and the sprite disappears. AlwaysOnTop takes it out of
 	-- that fight entirely. The cost is that it draws through geometry for its ~0.5s flight, which is
 	-- what a reward pickup flying at you should do anyway.
-	gui.AlwaysOnTop = false
+	gui.AlwaysOnTop = true
 	gui.Size = UDim2.fromScale(BURST_SPRITE_SIZE, BURST_SPRITE_SIZE)
 	gui.Parent = part
 
