@@ -119,12 +119,12 @@ local DEBRIS_COLORS = {
 local DEBRIS_TEXTURE = "rbxassetid://108698270607975"
 -- Particles/sec PER COLOUR -- six colours, so ~150/sec in total. Halved from what three colours used
 -- so that widening the palette varies the shower rather than thickening it.
-local DEBRIS_RATE = 25
+local DEBRIS_RATE = 20
 local DEBRIS_LIFETIME = NumberRange.new(0.45, 1.0)
 -- How WIDE the shower is comes from these two, not from SpreadAngle -- that's already at its maximum
 -- (180/180, a full sphere), so the flecks always leave in every direction; speed and drag decide how
 -- far out they get before the fall takes over.
-local DEBRIS_SPEED = NumberRange.new(9, 24)
+local DEBRIS_SPEED = NumberRange.new(9, 17)
 local DEBRIS_DRAG = 1.4 -- lower = the outward throw survives longer, so the shower reaches further
 -- Still above real gravity: the flecks should be pulled down promptly, reading as little chips
 -- rather than as a floaty spray -- just not so hard that they drop before they've spread.
