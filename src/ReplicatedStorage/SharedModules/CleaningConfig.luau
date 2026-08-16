@@ -124,6 +124,24 @@ local CleaningConfig = {
 	-- the machine spinning up, so starting it dead on the drop puts the bite after the piece is
 	-- already moving; this much lead lands the two together. Clamped to the hold's own length.
 	GarbageShredSoundLeadSeconds = 0.3,
+	-- Played the moment the machine ACCEPTS a piece -- whether it goes straight down or joins the
+	-- queue above the mouth. Unlike ShredderSoundName this one is 2D and belongs to the PLAYER, not
+	-- the machine: it's the feedback for "that went in", so only the player who walked the piece in
+	-- hears it. A party member feeding their own piece into the same shredder doesn't play it for
+	-- everyone else (see GarbageShredController -- the `reported` set is exactly this client's own).
+	GarbageFeedSoundName = "woosh",
+	-- The QUEUE. The machine chews one piece from start to finish, so anything fed in while it's
+	-- busy leaves its carrier's hands anyway and hovers in a vertical line above the mouth (p1),
+	-- lowest first, waiting its turn (see GarbageShredController).
+	--
+	-- The gap is the CLEAR SPACE between pieces -- measured between their bounding boxes, not their
+	-- pivots -- so a bin bag and a crumpled can are spaced the same and neither can overlap the
+	-- other. The same gap separates the lowest waiting piece from whatever is at the mouth.
+	GarbageQueueGapStuds = 0.3,
+	-- How long a piece takes to float up into its slot, and to shuffle down when the piece beneath
+	-- it is taken. Short on purpose: the queue should read as a line stepping down, not as garbage
+	-- drifting about above the machine.
+	GarbageQueueTravelSeconds = 0.35,
 
 	-- Cleanable spills (mop targets) live alongside the walls + stains:
 	--   Workspace.<BusinessesFolderName>.<businessId>.Cleanables.CleanableSpills.<model>

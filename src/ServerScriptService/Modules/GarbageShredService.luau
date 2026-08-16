@@ -24,10 +24,12 @@
 -- matters most for a PARTY, where several members can walk pieces into the same machine at once --
 -- without it their animations overlap inside the one shredder and the sound stacks on itself.
 --
--- A queued piece is NOT taken from its carrier when it's reported -- only when the machine actually
--- accepts it. Until then it stays in their hands, where it already is, rather than being dropped by
--- the machine's mouth to wait on the floor (where it could be walked off with, or shoved around by
--- the next player feeding theirs in).
+-- A piece is taken from its carrier the moment it's ACCEPTED, busy machine or not: feeding it in is
+-- the end of carrying it either way, and a player who has just walked an armful in shouldn't have to
+-- stand and hold the last one. What it doesn't do is drop it on the floor to wait (where it could be
+-- walked off with, or shoved around by the next player feeding theirs in) -- the clients float it in
+-- a line above the machine's mouth instead, which is what the queue INDEX sent with the acceptance
+-- is for. The line is purely how the wait is drawn; the order here is the authority.
 --
 -- WHEN IT COUNTS. The reward and the mark against the job land only once the animation has finished
 -- (the three beats in CleaningConfig), so the completion bar ticks as the piece disappears rather
@@ -46,7 +48,10 @@ local ProgressionService = require(script.Parent.ProgressionService)
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 -- Client -> server: "my copy of this piece went into the shredder".
 local ShredGarbage = Remotes:WaitForChild("ShredGarbage") :: RemoteEvent
--- Server -> every client on the session: (surfaceId) -- run the disposal animation on your clone.
+-- Server -> every client on the session, about one piece the machine has taken:
+--   (surfaceId)                -- it's going down NOW: run the disposal animation on your clone.
+--   (surfaceId, queueIndex)    -- it's waiting: park your clone in the line above the mouth, at
+--                                 this place in it (1 = next to go in).
 local GarbageCleaned = Remotes:WaitForChild("GarbageCleaned") :: RemoteEvent
 
 -- Reward paid once per piece shredded (matches a web's / stain's per-clean reward).
@@ -88,8 +93,9 @@ local function machineFor(job: JobServer.JobServer): Machine
 	return machine
 end
 
--- Take the next piece in, if the machine is free and anything is waiting. This is the moment a piece
--- stops being its carrier's -- until now it has been waiting in their hands.
+-- Take the next piece in, if the machine is free and anything is waiting. The piece already left its
+-- carrier's hands when it was accepted (see onShred); this is the moment it stops hovering in the
+-- line above the mouth and actually goes down.
 local function feedNext(job: JobServer.JobServer, machine: Machine)
 	if machine.active then
 		return
@@ -104,9 +110,6 @@ local function feedNext(job: JobServer.JobServer, machine: Machine)
 		return
 	end
 	machine.active = nextUp.surfaceId
-
-	-- It belongs to the machine now, not to whoever was holding it.
-	GarbageCarryService.dropPiece(nextUp.player, nextUp.surfaceId)
 
 	-- Every member animates their own clone; the piece is only ever gone locally. Taken off the JOB
 	-- rather than off the feeder, who may have left the session while their piece waited.
@@ -148,7 +151,18 @@ local function onShred(player: Player, surfaceId: string)
 	machine.accepted[surfaceId] = true
 	table.insert(machine.queue, { surfaceId = surfaceId, player = player })
 
-	-- Straight in if the machine is idle; otherwise it waits its turn in the carrier's hands.
+	-- Accepted, so it's the machine's now rather than the carrier's -- whether it goes down this
+	-- second or waits above the mouth for its turn.
+	GarbageCarryService.dropPiece(player, surfaceId)
+
+	-- Busy: tell the session where in the line it waits. (Idle: feedNext takes it straight in below,
+	-- and it's never drawn in the queue at all.)
+	if machine.active then
+		for _, member in job:getMembers() do
+			GarbageCleaned:FireClient(member, surfaceId, #machine.queue)
+		end
+	end
+
 	feedNext(job, machine)
 end
 

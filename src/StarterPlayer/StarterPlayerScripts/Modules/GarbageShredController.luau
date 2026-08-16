@@ -13,6 +13,18 @@
 --     hover or idle-reset something that's already in the machine) and this module owns the instance
 --     from there: it snaps to the mouth (p1), holds for a beat, then gets dragged down to p2 shaking
 --     violently, and is destroyed.
+--   * THE QUEUE -- the machine only chews one piece at a time, so a piece accepted while it's busy
+--     arrives with its place in the line instead (GarbageCleaned's second argument). Those pieces
+--     hover in a vertical column above the mouth, lowest first, and step down a slot each time the
+--     machine takes one. The column is laid out from the pieces' BOUNDING BOXES rather than their
+--     pivots, so every neighbour is left GarbageQueueGapStuds of clear air whatever shape it is --
+--     nothing in the line ever touches its neighbour or the piece being chewed below it. Waiting
+--     pieces are frozen exactly like an animating one, so they can't be carried, hovered, bumped,
+--     or re-fed into the hitbox they're floating over.
+--   * THE FEED SOUND -- a 2D whoosh (GarbageFeedSoundName) the moment the machine ACCEPTS a piece,
+--     queued or not. It's feedback for the player's own action, so unlike the machine's sound it's
+--     played only for whoever walked that piece in -- never for the rest of the party, who are told
+--     about the acceptance all the same.
 --   * THE SOUND + DEBRIS -- both cover the DESCENT only (p1 -> p2), the beat where the piece is
 --     actually being chewed. ShredderSFX plays out of the hitbox (positional), so it belongs to the
 --     machine rather than to the player, and is cut off the instant the piece is gone; a shower of
@@ -71,12 +83,32 @@ local hitboxConnection: RBXScriptConnection? = nil
 -- settles into the hitbox don't turn into several requests. Cleared with the job.
 local reported: { [string]: boolean } = {}
 
--- Pieces currently mid-animation. They're no longer GarbageVisibility's, so if the job ends under
--- them (the last piece of a job completes it) nothing else would ever clean them up.
+-- Pieces currently mid-animation OR waiting in the queue above the mouth. They're no longer
+-- GarbageVisibility's, so if the job ends under them (the last piece of a job completes it) nothing
+-- else would ever clean them up.
 local inFlight: { [PVInstance]: boolean } = {}
+
+-- The waiting line above the mouth: the surfaceIds in it, bottom (next to go in) first, and each
+-- one's clone. Kept in step with the server's queue -- it appends, and the machine takes from the
+-- front -- so our order is its order.
+local queueOrder: { string } = {}
+local queuedPieces: { [string]: PVInstance } = {}
+-- The rotation each waiting piece hovers at: the one it was AUTHORED with, not the one it happened
+-- to be carried in. Every client computes the column's spacing from these, so taking the authored
+-- rotation is what makes a party's lines identical rather than each member's slightly different.
+local queuedRotation: { [string]: CFrame } = {}
+-- Bumped per piece whenever it's given a new slot, so a shuffle that starts while the last one is
+-- still playing cancels it instead of two moves fighting over the same piece.
+local slotToken: { [PVInstance]: number } = {}
+
+-- What the machine is chewing right now, and how tall it stands: the bottom of the column is held
+-- clear of it, so the piece waiting its turn never hangs inside the one going down.
+local activeId: string? = nil
+local activeHeight = 0
 
 local function destroyInFlight(piece: PVInstance)
 	inFlight[piece] = nil
+	slotToken[piece] = nil
 	piece:Destroy()
 end
 
@@ -144,6 +176,124 @@ local function glide(
 	end
 end
 
+-- How tall a piece stands in WORLD terms while hovering at `rotation` -- the vertical extent of its
+-- bounding box, which is what the gaps in the column are measured between.
+--
+-- Not simply the box's own Y: a piece authored on its side or at a tilt stands taller (or shorter)
+-- than its box says, and using the wrong figure is exactly how two pieces end up overlapping. This
+-- is the standard "how tall is a rotated box" sum -- each of its three axes contributes as much
+-- height as that axis is turned toward vertical.
+local function worldHeight(piece: PVInstance, rotation: CFrame): number
+	local size: Vector3
+	if piece:IsA("Model") then
+		local _, extents = piece:GetBoundingBox()
+		size = extents
+	else
+		size = (piece :: BasePart).Size
+	end
+	return math.abs(rotation.RightVector.Y) * size.X
+		+ math.abs(rotation.UpVector.Y) * size.Y
+		+ math.abs(rotation.LookVector.Y) * size.Z
+end
+
+-- Float a waiting piece to `target` over GarbageQueueTravelSeconds, cancelling any move it was
+-- already making. Doesn't yield: several pieces shuffle down at once.
+local function slideToSlot(piece: PVInstance, target: CFrame)
+	local token = (slotToken[piece] or 0) + 1
+	slotToken[piece] = token
+
+	task.spawn(function()
+		local from = piece:GetPivot()
+		local seconds = Config.GarbageQueueTravelSeconds
+		local elapsed = 0
+		while elapsed < seconds do
+			elapsed += RunService.Heartbeat:Wait()
+			-- Gone, or given a newer slot (or fed into the machine) while we were moving it.
+			if not piece.Parent or slotToken[piece] ~= token then
+				return
+			end
+			piece:PivotTo(from:Lerp(target, math.min(elapsed / seconds, 1)))
+		end
+	end)
+end
+
+-- Stack the waiting pieces up the column above the mouth and send each to its slot. Called whenever
+-- the line changes: a piece joins the back, or the machine takes the one at the front and everything
+-- behind it steps down.
+--
+-- Heights are accumulated as we climb, so the gap between any two neighbours is exactly
+-- GarbageQueueGapStuds of clear air regardless of their sizes. The bottom of the column clears
+-- whatever the machine is holding -- or the mouth itself, whichever is taller, which is also what
+-- covers a piece we have no clone of (a member who joined mid-job).
+local function layoutQueue(shredder: ShredderResolver.Shredder)
+	local entry = shredder.entry
+	local top = entry.Position.Y + math.max(activeHeight / 2, entry.Size.Y / 2)
+
+	for _, surfaceId in queueOrder do
+		local piece = queuedPieces[surfaceId]
+		local rotation = queuedRotation[surfaceId]
+		if not piece or not piece.Parent or not rotation then
+			continue
+		end
+		local height = worldHeight(piece, rotation)
+		top += Config.GarbageQueueGapStuds + height / 2
+		slideToSlot(piece, CFrame.new(entry.Position.X, top, entry.Position.Z) * rotation)
+		top += height / 2
+	end
+end
+
+-- Take a piece out of the line (it's about to go down the machine). No-op for one that was never in
+-- it -- a piece fed into an idle machine goes straight from the player's hands to the mouth.
+local function leaveQueue(surfaceId: string)
+	local index = table.find(queueOrder, surfaceId)
+	if index then
+		table.remove(queueOrder, index)
+	end
+	queuedPieces[surfaceId] = nil
+	queuedRotation[surfaceId] = nil
+end
+
+-- The "that went in" whoosh, for the player who actually fed the piece in. Played 2D, because it's
+-- feedback for THEIR action rather than a noise the machine makes -- the machine's own sound is the
+-- positional one that runs during the descent.
+--
+-- `reported` holds exactly the surfaceIds THIS client pushed into the hitbox, and every member of a
+-- party gets told about every acceptance on the session, so this gate is what keeps a member's feed
+-- from whooshing in everyone else's ears.
+local function feedSound(surfaceId: string)
+	if reported[surfaceId] then
+		SoundManager.playOneShot(Config.GarbageFeedSoundName)
+	end
+end
+
+-- The machine accepted this piece but is still busy: park our clone in the line above the mouth, at
+-- the place in it the server gave us. Like a shred, this takes the piece out of GarbageVisibility --
+-- it's waiting to be destroyed, not lying around to be picked back up.
+local function park(surfaceId: string, index: number)
+	local businessId = activeBusinessId
+	if not businessId or queuedPieces[surfaceId] then
+		return
+	end
+	local shredder = ShredderResolver.find(businessId)
+	if not shredder then
+		return
+	end
+	-- Read the authored rotation BEFORE taking the piece, which forgets it.
+	local home = GarbageVisibility.getHome(surfaceId)
+	local piece = GarbageVisibility.takePiece(surfaceId)
+	if not piece then
+		return
+	end
+	inFlight[piece] = true
+	freeze(piece)
+	feedSound(surfaceId)
+
+	queuedPieces[surfaceId] = piece
+	queuedRotation[surfaceId] = if home then home.Rotation else piece:GetPivot().Rotation
+	table.insert(queueOrder, math.clamp(index, 1, #queueOrder + 1), surfaceId)
+	layoutQueue(shredder)
+end
+
 -- The server says this piece went into the shredder: run the disposal on our clone of it. Safe to
 -- call for a piece we don't have (a member who joined the session mid-job) -- it just does nothing.
 local function shred(surfaceId: string)
@@ -155,13 +305,37 @@ local function shred(surfaceId: string)
 	if not shredder then
 		return
 	end
-	-- Ours from here: nothing else may carry, hover or reset it.
-	local piece = GarbageVisibility.takePiece(surfaceId)
-	if not piece then
-		return
+	-- Already hovering in the line (the common case once a second piece has been fed in), or coming
+	-- straight from a player's hands into an idle machine -- in which case it becomes ours here, and
+	-- nothing else may carry, hover or reset it from now on.
+	local waiting = queuedPieces[surfaceId]
+	local rotation = queuedRotation[surfaceId]
+	local piece: PVInstance
+	if waiting then
+		leaveQueue(surfaceId)
+		-- Cancel the slot move it may still have been making, so nothing tugs at it once the
+		-- disposal has it.
+		slotToken[waiting] = (slotToken[waiting] or 0) + 1
+		piece = waiting
+	else
+		local taken = GarbageVisibility.takePiece(surfaceId)
+		if not taken then
+			return
+		end
+		inFlight[taken] = true
+		freeze(taken)
+		-- Straight from the player's hands into an idle machine: this is the piece being accepted,
+		-- so it's the beat the feed sound belongs to. (A piece that WAITED already played it when it
+		-- joined the queue -- going in isn't a second acceptance.)
+		feedSound(surfaceId)
+		piece = taken
 	end
-	inFlight[piece] = true
-	freeze(piece)
+
+	-- Hold the rest of the line clear of this piece for as long as it's in the machine; it steps down
+	-- once the piece is gone.
+	activeId = surfaceId
+	activeHeight = worldHeight(piece, rotation or piece:GetPivot().Rotation)
+	layoutQueue(shredder)
 
 	task.spawn(function()
 		local entry = shredder.entry.CFrame
@@ -199,6 +373,16 @@ local function shred(surfaceId: string)
 			sound:Stop()
 			sound:Destroy()
 		end
+
+		-- The mouth is clear, so the line can drop a slot. Guarded on still being the piece in the
+		-- machine: the server feeds the next one the instant this one is counted, so its message can
+		-- land before we get here -- and that piece's clearance is the one that should stand.
+		if activeId == surfaceId then
+			activeId = nil
+			activeHeight = 0
+			layoutQueue(shredder)
+		end
+
 		if not piece.Parent then
 			-- Torn down under us (the job ended mid-animation); it's already been forgotten.
 			return
@@ -248,6 +432,14 @@ local function setActiveBusiness(businessId: string?)
 	end
 	activeBusinessId = businessId
 	table.clear(reported)
+	-- The line goes with the job: its pieces are in inFlight, so the sweep below is what actually
+	-- destroys them.
+	table.clear(queueOrder)
+	table.clear(queuedPieces)
+	table.clear(queuedRotation)
+	table.clear(slotToken)
+	activeId = nil
+	activeHeight = 0
 	for piece in inFlight do
 		if piece.Parent then
 			piece:Destroy()
@@ -282,11 +474,17 @@ local function setActiveBusiness(businessId: string?)
 end
 
 function GarbageShredController.init()
-	GarbageCleaned.OnClientEvent:Connect(function(surfaceId)
+	-- A queueIndex means the machine took the piece but is still busy: it waits in the line above the
+	-- mouth. No index means it's going down now.
+	GarbageCleaned.OnClientEvent:Connect(function(surfaceId, queueIndex)
 		if type(surfaceId) ~= "string" then
 			return
 		end
-		shred(surfaceId)
+		if type(queueIndex) == "number" then
+			park(surfaceId, queueIndex)
+		else
+			shred(surfaceId)
+		end
 	end)
 
 	local function sync()

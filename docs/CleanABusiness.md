@@ -792,7 +792,10 @@ piece floats) / `GarbageResetSeconds` (60), the shredder's layout
 animation beats `GarbageShredEntrySeconds` (0.3) / `GarbageShredHoldSeconds` (0.45) /
 `GarbageShredDropSeconds` (2) — shared because the server waits out the same total before counting
 the piece — plus `ShredderSoundName` and `GarbageShredSoundLeadSeconds` (0.3, how far into the hold
-the SFX starts ahead of the drop), `PlotCount`/`PlotAttribute`/
+the SFX starts ahead of the drop) and `GarbageFeedSoundName` (`woosh`, the 2D whoosh played for the
+feeding player only) and the queue's `GarbageQueueGapStuds` (0.3, clear air between
+waiting pieces) / `GarbageQueueTravelSeconds` (0.35, how long a piece takes to float into its slot
+or step down one), `PlotCount`/`PlotAttribute`/
 `PlotSpawnPartName`, the plot-progression names `PlotButtonsFolderName`/
 `PlotSpawnablesFolderName`/`PlotButtonInteractPartName`, the button attribute names
 `PlotButtonCostAttribute`/`PlotButtonUnlockIdAttribute`/`PlotButtonUnlockTwoAttribute`, the
@@ -1073,11 +1076,27 @@ is above.
   on this job, and the building actually has a shredder. It also keeps a **weak-keyed, per-session**
   set of pieces currently going through the machine, which is what swallows the duplicate reports a
   party can produce (one per member's clone) and any repeat during the animation. Then it takes the
-  piece out of whoever's hands it was in (`GarbageCarryService.dropPiece`).
+  piece out of whoever's hands it was in (`GarbageCarryService.dropPiece`) — on acceptance, whether
+  it goes down at once or has to wait.
+
+- **One at a time, and the queue.** The machine chews a single piece from start to finish, so each
+  session's shredder holds a **queue** (weak-keyed by `JobServer`, like the carry sessions): a piece
+  accepted while it's busy waits its turn rather than going down alongside, which matters most for a
+  **party** feeding several pieces in at once. Waiting pieces don't stay in their carriers' hands and
+  aren't dropped on the floor — each client floats its clone in a **vertical column above the mouth
+  (`p1`)**, lowest first, and they step down a slot each time the machine takes one. The column is
+  stacked from the pieces' **bounding boxes** (`GarbageQueueGapStuds`, 0.3 studs of clear air between
+  neighbours and above whatever is being chewed), so pieces of any size are evenly spaced and never
+  touch; each move takes `GarbageQueueTravelSeconds` (0.35s). Waiting pieces are frozen exactly like
+  an animating one — anchored, non-colliding, unhoverable, un-`Touched` — so nothing can carry, bump
+  or re-feed them. They hover at their **authored** rotation, which is what makes every member's
+  column identical rather than each computing spacing off its own carried orientation.
 
 - **What everyone sees.** No clone can be moved from the server, so the confirmation
-  (**`GarbageCleaned`**, carrying just the `surfaceId`) goes to **every member of the session** and
-  each client animates its **own** clone. That's what makes a party watch the same piece shredded.
+  (**`GarbageCleaned`**) goes to **every member of the session** and each client animates its **own**
+  clone. That's what makes a party watch the same piece shredded. It carries the `surfaceId` plus an
+  optional **queue index**: with one, park the clone at that place in the column; without one, run
+  the disposal now.
 
 - **The animation** (`GarbageShredController`, client). The piece is taken out of
   `GarbageVisibility` (`takePiece`) so nothing can carry, hover or reset something already in the
@@ -1090,6 +1109,11 @@ is above.
   jitter is **side to side** (±0.22 studs along the piece's own X), with only a hint of vertical
   (much more fights the descent and just reads as glitching) and nothing in/out, plus a token ±1.2°
   wobble.
+
+- **The feed whoosh.** **`GarbageFeedSoundName`** (`woosh`) plays the moment the machine *accepts* a
+  piece — straight in or into the queue, once per piece either way. It's **2D** (`playOneShot`) and
+  gated on the client's own `reported` set, so it's feedback for the player who walked the piece in
+  and *only* them: a party member feeding the same shredder doesn't whoosh in everyone's ears.
 
 - **Sound and debris cover the descent only** — the beat where the piece is actually being chewed,
   not the approach or the pause at the mouth.
@@ -1222,7 +1246,7 @@ ReplicatedStorage/Remotes/
   GarbageCarry          RemoteEvent (server → client: (carrier, surfaceId?) -- who on this session is holding what; sent to EVERY member, and it's this confirmation that starts the carrier driving the piece)
   GarbageMove           RemoteEvent (BOTH ways: the carrier streams its piece's CFrame ~20/s; server relays to the OTHER session members, who drive their own clone from it. Also carries the one post-drop "settle report", accepted only from that piece's last carrier)
   ShredGarbage          RemoteEvent (client → server: a surfaceId whose LOCAL clone just hit the business's shredder hitbox -- the server decides whether it counts)
-  GarbageCleaned        RemoteEvent (server → client: a surfaceId went into the shredder; sent to EVERY member of the job session, each of whom runs the disposal animation on their OWN clone)
+  GarbageCleaned        RemoteEvent (server → client: (surfaceId, queueIndex?) -- the machine took a piece; sent to EVERY member of the job session. No index = it's going down now, so run the disposal animation on your OWN clone; an index = the machine is busy, so park your clone at that place in the column hovering above the mouth)
   WallStroke            RemoteEvent (BOTH ways: client sends a batch of {part,to,from,radius} erases; server validates + relays to the other members, who replay them onto their own overlays)
   PartyAction           RemoteEvent (client → server: create (+businessId) / join / ready / leave / kick / disband)
   PartyUpdate           RemoteEvent (server → client: { party, available } -- your party's roster (its businessId + a ready array parallel to members) + every party you could join)
