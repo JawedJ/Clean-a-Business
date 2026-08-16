@@ -338,6 +338,10 @@ local BURST_COLLISION_GROUP = "CoinVfx"
 -- loud hit. Pitch is randomised per play so repeats don't sound cloned.
 local BURST_SOUND_GAP = 0.07
 local BURST_PITCH = NumberRange.new(0.95, 1.08)
+-- Played louder than the template is authored: the arrival ping was getting lost under the washer
+-- and the music. Applied per play rather than by editing the template, so the same clip stays at its
+-- authored level anywhere else it's used.
+local BURST_VOLUME_SCALE = 1.4
 
 -- The recycled instances behind one sprite.
 type BurstParts = {
@@ -453,6 +457,7 @@ local function releaseBurst(sprite: BurstSprite, arrived: boolean)
 			local sound = SoundManager.playOneShot(BURST_SOUND)
 			if sound then
 				sound.PlaybackSpeed = BURST_PITCH.Min + math.random() * (BURST_PITCH.Max - BURST_PITCH.Min)
+				sound.Volume *= BURST_VOLUME_SCALE
 			end
 		end
 	end

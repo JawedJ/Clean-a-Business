@@ -15,7 +15,8 @@
 --     screen -- driving, panning -- doesn't grab it. See aimRay.
 --   * LETTING GO -- a mouse click drops what we're holding; a TAP never does (TOUCH_CAN_DROP), since
 --     the movement stick and the camera pan region arrive here as ordinary unprocessed touches.
---     Mobile drops through a dedicated button calling GarbageCarryController.drop().
+--     A dedicated HUD button (DropButtonController) drops as well, on every platform -- it's the
+--     only way to let go on touch.
 --   * CARRY -- the held piece is DRAGGED, not teleported: an AlignPosition/AlignOrientation pair
 --     pulls it toward a point in front of the crosshair, keeping its authored tilt and turning with
 --     the camera. Dragging it with physics rather than writing its CFrame is what makes the world's
@@ -107,8 +108,8 @@ local IS_MOBILE = UserInputService.TouchEnabled
 	and not UserInputService.MouseEnabled
 	and not UserInputService.GamepadEnabled
 
--- A TAP never drops what the player is holding -- only a mouse click does, and mobile gets a
--- dedicated drop button that calls GarbageCarryController.drop().
+-- A TAP never drops what the player is holding -- only a mouse click does, and the HUD's drop button
+-- (DropButtonController) calls GarbageCarryController.drop().
 --
 -- Touches can't be trusted to mean "let go" here: the default dynamic thumbstick and the camera pan
 -- region read raw input rather than sitting behind a GuiButton, so `gameProcessed` is false for them
@@ -145,6 +146,11 @@ local alignOrientation: AlignOrientation? = nil
 -- Relay bookkeeping: when we last sent, and from where.
 local lastRelayAt = 0
 local lastRelayPosition: Vector3? = nil
+
+-- Told whenever our own hands go from empty to full or back (see onCarryingChanged) -- the drop
+-- button is shown off this. Party members' carries never reach these: they're about OUR hands.
+local carryListeners: { (boolean) -> () } = {}
+local lastCarryState = false
 
 -- surfaceId -> the party member holding it, so we don't offer their piece for pickup and know to
 -- drive our copy of it from their relay rather than local physics.
@@ -367,6 +373,32 @@ local function buildDrag(garbage: PVInstance)
 	alignOrientation = orientation
 end
 
+-- Announce a change in whether we're holding anything, deduped: the paths that clear the carry
+-- overlap (a drop, a respawn, a job ending all land here), and a listener showing a button shouldn't
+-- have to filter repeats of the state it's already in.
+local function notifyCarrying()
+	local carrying = carriedId ~= nil
+	if carrying == lastCarryState then
+		return
+	end
+	lastCarryState = carrying
+	for _, callback in carryListeners do
+		task.spawn(callback, carrying)
+	end
+end
+
+-- Watch whether the local player is holding a piece. Fires immediately with the current state, then
+-- on every flip -- same shape as JobUiController.onHudVisibilityChanged.
+function GarbageCarryController.onCarryingChanged(callback: (boolean) -> ())
+	table.insert(carryListeners, callback)
+	callback(lastCarryState)
+end
+
+-- True while we're holding a piece of garbage.
+function GarbageCarryController.isCarrying(): boolean
+	return carriedId ~= nil
+end
+
 -- Ask the server to pick a piece up, or (nil) to let go of what we're holding. The server answers on
 -- GarbageCarry; nothing moves until it does.
 local function request(surfaceId: string?)
@@ -440,6 +472,7 @@ local function clearCarry()
 	carried = nil
 	lastRelayPosition = nil
 	releaseDrag()
+	notifyCarrying()
 end
 
 -- Tell the server where a piece we just dropped came to rest, once it's had time to fall. Skipped if
@@ -492,6 +525,7 @@ local function onCarryChanged(player: Player, surfaceId: string?)
 		buildDrag(piece)
 		-- Whatever we were about to grab, we're holding something now.
 		setHovered(nil)
+		notifyCarrying()
 		return
 	end
 

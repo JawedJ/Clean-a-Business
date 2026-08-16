@@ -17,6 +17,7 @@ local MopController = require(Modules:WaitForChild("MopController"))
 local VacuumController = require(Modules:WaitForChild("VacuumController"))
 local GarbageCarryController = require(Modules:WaitForChild("GarbageCarryController"))
 local GarbageShredController = require(Modules:WaitForChild("GarbageShredController"))
+local DropButtonController = require(Modules:WaitForChild("DropButtonController"))
 local Crosshair = require(Modules:WaitForChild("Crosshair"))
 local RewardPopupController = require(Modules:WaitForChild("RewardPopupController"))
 local LevelUiController = require(Modules:WaitForChild("LevelUiController"))
@@ -117,6 +118,9 @@ safeInit("GarbageCarryController", GarbageCarryController.init)
 -- every member of the session runs on their own clone. Init after GarbageCarryController so the
 -- carry is already listening by the time a piece can be fed in.
 safeInit("GarbageShredController", GarbageShredController.init)
+-- The HUD's drop button, shown only while the player is carrying a piece (the only way to let go on
+-- touch). After GarbageCarryController, whose carry state it subscribes to.
+safeInit("DropButtonController", DropButtonController.init)
 safeInit("Crosshair", Crosshair.init)
 safeInit("RewardPopupController", RewardPopupController.init)
 safeInit("LevelUiController", LevelUiController.init)
