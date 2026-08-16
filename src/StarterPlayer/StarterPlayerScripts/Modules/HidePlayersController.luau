@@ -27,6 +27,11 @@
 -- Subject.
 --
 -- The hidden set is re-evaluated on respawn (CharacterAdded) and as players join / leave.
+--
+-- Separately, and regardless of either reason: every other player's TOOL effects (the pressure
+-- washer's spray, and anything authored like it) are muted for us permanently. See muteToolEffect --
+-- the short version is that emission is driven on the tool owner's own client and never replicates,
+-- so what we'd otherwise see is a teammate's washer spraying non-stop whether they're firing or not.
 
 local Players = game:GetService("Players")
 
@@ -59,9 +64,38 @@ local hidden: { [Player]: Hidden } = {}
 -- when the player leaves.
 local tracking: { [Player]: RBXScriptConnection } = {}
 
+-- Per player: the watcher muting tool effects on their current character. Separate from the hiding
+-- watcher because it runs whether or not the player is hidden, and is replaced on respawn.
+local muting: { [Player]: RBXScriptConnection } = {}
+
 -- The emission effects we switch off (spray particles, beams, trails). They all carry Enabled.
 local function isEmitter(inst: Instance): boolean
 	return inst:IsA("ParticleEmitter") or inst:IsA("Beam") or inst:IsA("Trail")
+end
+
+-- An emitter that belongs to an equipped TOOL rather than to the body itself.
+local function isToolEffect(inst: Instance): boolean
+	return isEmitter(inst) and inst:FindFirstAncestorWhichIsA("Tool") ~= nil
+end
+
+-- Other players' tool effects are muted for us ALWAYS -- hidden, revealed, job or no job.
+--
+-- Emission is driven locally on the tool owner's OWN client (PressureWasherController enables the
+-- spray only while they hold the trigger), and a client-side Enabled never replicates. So the copy
+-- we see is stuck at whatever the tool was authored with: a party member's washer sprays at us
+-- constantly, whether or not they're firing, and no amount of hiding their body covers a tool they
+-- equip afterwards. Nobody needs to see anyone else's spray, so it just stays off. Our own tool is
+-- untouched -- the local player is never tracked here.
+local function muteToolEffect(inst: Instance)
+	if isToolEffect(inst) then
+		(inst :: any).Enabled = false
+	end
+end
+
+local function muteToolEffects(character: Model)
+	for _, d in character:GetDescendants() do
+		muteToolEffect(d)
+	end
 end
 
 -- Hide one instance for this character, remembering its prior value so reveal can put it back.
@@ -136,7 +170,9 @@ function HidePlayersController._reveal(player: Player)
 		end
 	end
 	for emitter, wasEnabled in entry.emitters do
-		if (emitter :: any).Parent then
+		-- A tool's effects are never revealed -- see muteToolEffect. Restoring the authored `true`
+		-- here is exactly how a revealed teammate's washer would start spraying at us again.
+		if (emitter :: any).Parent and not isToolEffect(emitter) then
 			(emitter :: any).Enabled = wasEnabled
 		end
 	end
@@ -158,14 +194,30 @@ local function refreshPlayer(player: Player)
 	end
 end
 
+-- Point the tool-effect mute at a player's current character, dropping the watcher on the old one.
+local function muteCharacter(player: Player, character: Model)
+	local existing = muting[player]
+	if existing then
+		existing:Disconnect()
+	end
+	-- Tools stream in on equip, long after the character does, so the watcher matters more than the
+	-- initial sweep here.
+	muting[player] = character.DescendantAdded:Connect(muteToolEffect)
+	muteToolEffects(character)
+end
+
 local function trackPlayer(player: Player)
 	if player == localPlayer or tracking[player] then
 		return
 	end
-	-- Respawn: re-apply (or not) to the fresh character.
-	tracking[player] = player.CharacterAdded:Connect(function()
+	-- Respawn: re-apply (or not) to the fresh character, and re-mute the new body's tools.
+	tracking[player] = player.CharacterAdded:Connect(function(character)
+		muteCharacter(player, character)
 		refreshPlayer(player)
 	end)
+	if player.Character then
+		muteCharacter(player, player.Character)
+	end
 	refreshPlayer(player)
 end
 
@@ -176,6 +228,11 @@ local function untrackPlayer(player: Player)
 	if conn then
 		conn:Disconnect()
 		tracking[player] = nil
+	end
+	local muteConn = muting[player]
+	if muteConn then
+		muteConn:Disconnect()
+		muting[player] = nil
 	end
 end
 
