@@ -23,6 +23,8 @@ local DataService = require(ReplicatedStorage.Packages.DataService).client
 local WebResolver = require(ReplicatedStorage.SharedModules.WebResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 
+local HoverHighlight = require(script.Parent.HoverHighlight)
+
 local CleanWeb = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanWeb") :: RemoteEvent
 
 local TOOL_ID = ToolConfig.vacuum.UniqueID
@@ -65,6 +67,10 @@ local startedClean: { [Instance]: boolean } = {}
 -- Looping vacuum sound played for the duration of a clean. Built in init so its clone is
 -- preloaded during the startup window.
 local vacuumSound: SoundManager.SustainedSound? = nil
+
+-- White outline over the web the vacuum is currently pointed at -- the same hover cue the
+-- carryable garbage uses, so every cleanable reads the same way. Built in init.
+local hoverHighlight: HoverHighlight.HoverHighlight? = nil
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -227,6 +233,34 @@ local function onClick()
 	end
 end
 
+-- Per frame: outline the web the vacuum is pointed at, so the player can see what a click would
+-- clean before they click it. Deliberately narrow -- it only lights up what THIS click would
+-- actually clean: vacuum equipped, a web of the business whose job we hold, and not one that's
+-- already cleaning (its progress bar is the feedback then). Everything else clears the outline.
+-- The early-out means an unequipped vacuum costs nothing per frame (no raycast).
+local function updateHover()
+	local outline = hoverHighlight
+	if not outline then
+		return
+	end
+	if equippedTool == nil or busy then
+		outline:set(nil)
+		return
+	end
+
+	local result = aim()
+	local identity = if result then WebResolver.resolve(result.Instance) else nil
+	if
+		not identity
+		or localPlayer:GetAttribute(Config.ActiveJobAttribute) ~= identity.businessId
+		or startedClean[identity.web]
+	then
+		outline:set(nil)
+		return
+	end
+	outline:set(identity.web)
+end
+
 local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
@@ -259,6 +293,7 @@ end
 
 function VacuumController.init()
 	vacuumSound = SoundManager.createSustained("VacuumAudio")
+	hoverHighlight = HoverHighlight.new("VacuumHover")
 
 	-- Start collecting spill folders so the aim ray can pass through spills to the webs near them.
 	watchSpillFolders()
@@ -274,6 +309,10 @@ function VacuumController.init()
 	if localPlayer.Character then
 		watch(localPlayer.Character)
 	end
+
+	-- Hover follows the camera/cursor, so it belongs on the render step -- on Heartbeat the outline
+	-- would trail the aim by a frame.
+	RunService.RenderStepped:Connect(updateHover)
 end
 
 return VacuumController

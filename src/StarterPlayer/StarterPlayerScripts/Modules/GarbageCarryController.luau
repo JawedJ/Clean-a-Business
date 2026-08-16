@@ -38,6 +38,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local GarbageResolver = require(ReplicatedStorage.SharedModules.GarbageResolver)
 local GarbageVisibility = require(script.Parent.GarbageVisibility)
+local HoverHighlight = require(script.Parent.HoverHighlight)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local CarryGarbage = Remotes:WaitForChild("CarryGarbage") :: RemoteEvent
@@ -45,14 +46,6 @@ local GarbageCarry = Remotes:WaitForChild("GarbageCarry") :: RemoteEvent
 local GarbageMove = Remotes:WaitForChild("GarbageMove") :: RemoteEvent
 
 local localPlayer = Players.LocalPlayer
-
--- White hover outline, drawn OVER the piece (AlwaysOnTop) rather than shaded onto it, so it reads
--- clearly even on pale or busy garbage models -- an occluded outline on a light-coloured piece is
--- almost invisible. The hover already requires a clear line of sight (it comes from a raycast), so
--- drawing on top can't reveal anything through a wall.
-local HIGHLIGHT_COLOR = Color3.fromRGB(255, 255, 255)
-local HIGHLIGHT_FILL_TRANSPARENCY = 0.2
-local HIGHLIGHT_DEPTH_MODE = Enum.HighlightDepthMode.AlwaysOnTop
 
 -- How far past the ranges the aim ray is allowed to reach. The range checks themselves are done
 -- from the character (not the camera), so the ray only has to be long enough to still HIT a piece
@@ -137,9 +130,10 @@ local carriedByOthers: { [string]: Player } = {}
 -- untouched for GarbageResetSeconds goes home.
 local lastTouched: { [string]: number } = {}
 
--- The piece currently outlined, and the Highlight doing it (one instance, re-adorned).
+-- The piece currently outlined, and the shared white hover outline doing it (see HoverHighlight --
+-- the same effect every other cleanable uses).
 local hovered: Instance? = nil
-local highlight: Highlight? = nil
+local highlight: HoverHighlight.HoverHighlight? = nil
 
 -- The aim ray ignores our own character (we're standing right next to what we're aiming at). The
 -- filter is refreshed on each respawn rather than rebuilt per frame -- the hover check runs every
@@ -253,15 +247,8 @@ local function setHovered(garbage: PVInstance?)
 	hovered = garbage
 
 	local outline = highlight
-	if not outline then
-		return
-	end
-	if garbage then
-		outline.Adornee = garbage
-		outline.Enabled = true
-	else
-		outline.Adornee = nil
-		outline.Enabled = false
+	if outline then
+		outline:set(garbage)
 	end
 end
 
@@ -576,18 +563,8 @@ local function watchTools(root: Instance)
 end
 
 function GarbageCarryController.init()
-	-- One reusable outline, parented to the PlayerGui so it survives respawns and never has to be
-	-- rebuilt per hover.
-	local outline = Instance.new("Highlight")
-	outline.Name = "GarbageHover"
-	outline.FillColor = HIGHLIGHT_COLOR
-	outline.OutlineColor = HIGHLIGHT_COLOR
-	outline.FillTransparency = HIGHLIGHT_FILL_TRANSPARENCY
-	outline.OutlineTransparency = 0
-	outline.DepthMode = HIGHLIGHT_DEPTH_MODE
-	outline.Enabled = false
-	outline.Parent = localPlayer:WaitForChild("PlayerGui")
-	highlight = outline
+	-- One reusable outline, re-adorned per hover (see HoverHighlight).
+	highlight = HoverHighlight.new("GarbageHover")
 
 	GarbageCarry.OnClientEvent:Connect(function(player, surfaceId)
 		if typeof(player) ~= "Instance" or not player:IsA("Player") then

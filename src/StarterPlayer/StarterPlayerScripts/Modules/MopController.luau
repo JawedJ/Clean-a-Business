@@ -32,6 +32,7 @@ local DataService = require(ReplicatedStorage.Packages.DataService).client
 local SpillResolver = require(ReplicatedStorage.SharedModules.SpillResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 
+local HoverHighlight = require(script.Parent.HoverHighlight)
 local JobController = require(script.Parent.JobController)
 local SpillVisibility = require(script.Parent.SpillVisibility)
 
@@ -82,6 +83,10 @@ local bars: { [Model]: { gui: BillboardGui, fill: Frame } } = {}
 -- preloaded during the startup window. `soundOn` tracks state so we only start/stop on a change.
 local mopSound: SoundManager.SustainedSound? = nil
 local soundOn = false
+
+-- White outline over the spill the mop is currently pointed at -- the same hover cue the carryable
+-- garbage uses, so every cleanable reads the same way. Built in init.
+local hoverHighlight: HoverHighlight.HoverHighlight? = nil
 
 local function setMopSound(on: boolean)
 	if on == soundOn then
@@ -242,6 +247,34 @@ local function onHeartbeat(dt: number)
 	end
 end
 
+-- Per frame: outline the spill the mop is pointed at, so the player can see what holding click
+-- would clean before they hold it. Unlike the broom/vacuum this does NOT stop while the clean runs
+-- -- mopping is a hold on the very spill under the aim, so the outline staying up is the point.
+-- Spills already finished this job are skipped. The early-out means an unequipped mop costs
+-- nothing per frame (no raycast).
+local function updateHover()
+	local outline = hoverHighlight
+	if not outline then
+		return
+	end
+	if equippedTool == nil or not hasActiveJob() then
+		outline:set(nil)
+		return
+	end
+
+	local result = aim()
+	local identity = if result then SpillResolver.resolve(result.Instance) else nil
+	if
+		not identity
+		or identity.businessId ~= localPlayer:GetAttribute(Config.ActiveJobAttribute)
+		or doneSpills[identity.model]
+	then
+		outline:set(nil)
+		return
+	end
+	outline:set(identity.model)
+end
+
 local function startFiring()
 	firing = true
 end
@@ -321,6 +354,7 @@ end
 function MopController.init()
 	-- Short looping swish played while actively mopping a spill (see setMopSound).
 	mopSound = SoundManager.createSustained("MopNoise")
+	hoverHighlight = HoverHighlight.new("MopHover")
 
 	-- Whenever the job changes (loading a new job, or the current one ending), drop our per-spill
 	-- state so the spills are dirty again for the next run. We no longer touch Transparency (spills
@@ -342,6 +376,9 @@ function MopController.init()
 	end
 
 	RunService.Heartbeat:Connect(onHeartbeat)
+	-- Hover follows the camera/cursor, so it belongs on the render step -- on Heartbeat the outline
+	-- would trail the aim by a frame.
+	RunService.RenderStepped:Connect(updateHover)
 end
 
 return MopController

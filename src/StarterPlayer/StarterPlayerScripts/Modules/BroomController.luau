@@ -19,6 +19,8 @@ local DataService = require(ReplicatedStorage.Packages.DataService).client
 local DecalResolver = require(ReplicatedStorage.SharedModules.DecalResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 
+local HoverHighlight = require(script.Parent.HoverHighlight)
+
 local CleanDecal = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CleanDecal") :: RemoteEvent
 
 local TOOL_ID = ToolConfig.startingBroom.UniqueID
@@ -61,6 +63,10 @@ local startedClean: { [Model]: boolean } = {}
 -- Looping brush sound played for the duration of a clean. Built in init so its
 -- clone is preloaded during the startup window.
 local brushSound: SoundManager.SustainedSound? = nil
+
+-- White outline over the stain the broom is currently pointed at -- the same hover cue the
+-- carryable garbage uses, so every cleanable reads the same way. Built in init.
+local hoverHighlight: HoverHighlight.HoverHighlight? = nil
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -209,6 +215,34 @@ local function onClick()
 	end
 end
 
+-- Per frame: outline the stain the broom is pointed at, so the player can see what a click would
+-- clean before they click it. Deliberately narrow -- it only lights up what THIS click would
+-- actually clean: broom equipped, a stain of the business whose job we hold, and not one that's
+-- already cleaning (its progress bar is the feedback then). Everything else clears the outline.
+-- The early-out means an unequipped broom costs nothing per frame (no raycast).
+local function updateHover()
+	local outline = hoverHighlight
+	if not outline then
+		return
+	end
+	if equippedTool == nil or busy then
+		outline:set(nil)
+		return
+	end
+
+	local result = aim()
+	local identity = if result then DecalResolver.resolve(result.Instance) else nil
+	if
+		not identity
+		or localPlayer:GetAttribute(Config.ActiveJobAttribute) ~= identity.businessId
+		or startedClean[identity.model]
+	then
+		outline:set(nil)
+		return
+	end
+	outline:set(identity.model)
+end
+
 local function bindTool(tool: Tool)
 	tool.Equipped:Connect(function()
 		equippedTool = tool
@@ -241,6 +275,7 @@ end
 
 function BroomController.init()
 	brushSound = SoundManager.createSustained("BrushAudio")
+	hoverHighlight = HoverHighlight.new("BroomHover")
 
 	-- Start collecting spill folders so the aim ray can pass through spills to the stains under them.
 	watchSpillFolders()
@@ -256,6 +291,10 @@ function BroomController.init()
 	if localPlayer.Character then
 		watch(localPlayer.Character)
 	end
+
+	-- Hover follows the camera/cursor, so it belongs on the render step -- on Heartbeat the outline
+	-- would trail the aim by a frame.
+	RunService.RenderStepped:Connect(updateHover)
 end
 
 return BroomController
