@@ -19,7 +19,12 @@
 --     slightly further than the outline invites. A mouse click goes along the SAME aim ray the
 --     outline is drawn from, so whatever is highlighted is exactly what a click takes. A TAP instead
 --     goes through the pressed pixel, so aiming at a piece and tapping elsewhere on the screen --
---     driving, panning -- doesn't grab it. See aimRay and the InputBegan handler.
+--     driving, panning -- doesn't grab it. A tap that lands on nothing is forgiven by a ring of
+--     samples around it, and where that ring finds SEVERAL pieces (a heap in a corner) the one
+--     nearest the player wins. See aimRay, findPickupTarget and the InputBegan handler.
+--     A held TOOL can't get in the way of any of this: the floating tool hangs between the camera
+--     and whatever is being aimed at, so ToolFloatController takes its parts out of raycasting
+--     (CanQuery) -- a tap goes straight THROUGH the broom to the garbage behind it.
 --   * LETTING GO -- a mouse click drops what we're holding; a TAP never does (TOUCH_CAN_DROP), since
 --     the movement stick and the camera pan region arrive here as ordinary unprocessed touches.
 --     A dedicated HUD button (DropButtonController) drops as well, on every platform -- it's the
@@ -131,8 +136,8 @@ local TOUCH_CAN_DROP = false
 -- This is what keeps "the tap must land on the garbage" from making pickup fiddly. The radius is a
 -- fraction of viewport height (floored in pixels) so a fingertip covers about the same share of the
 -- screen on a phone as on a tablet.
-local TAP_TOLERANCE_SCALE = 0.035
-local TAP_TOLERANCE_MIN_PIXELS = 22
+local TAP_TOLERANCE_SCALE = 0.02
+local TAP_TOLERANCE_MIN_PIXELS = 14
 local TAP_TOLERANCE_SAMPLES = 8
 
 local GarbageCarryController = {}
@@ -283,6 +288,46 @@ local function findTarget(range: number, screenPoint: Vector2?): (PVInstance?, s
 	return identity.garbage :: PVInstance, identity.surfaceId
 end
 
+-- Can the player actually SEE this piece? The proximity outline below doesn't come from a ray, so
+-- without this the piece OFFERED can be one on the far side of a wall -- pointing the player at
+-- something they can't see, and (before the outline was made Occluded) drawing its highlight
+-- straight through that wall.
+--
+-- Cast from the CAMERA, not the character: the question is what the player can see, and in third
+-- person those are different points. The piece itself is excluded (it's the ray's destination), and
+-- a hit landing within LOS_SLACK of it still counts as clear -- a piece resting on the floor or
+-- pressed against a wall sits close enough to that geometry that an exact test would call it hidden.
+local LOS_SLACK = 1.5
+
+local losParams = RaycastParams.new()
+losParams.FilterType = Enum.RaycastFilterType.Exclude
+-- Reused rather than rebuilt: this runs per frame, and a fresh table each time is collector churn.
+local losFilter: { Instance } = {}
+
+local function canSee(piece: PVInstance, position: Vector3): boolean
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return true
+	end
+	local origin = camera.CFrame.Position
+	local delta = position - origin
+	local distance = delta.Magnitude
+	if distance <= LOS_SLACK then
+		return true
+	end
+
+	table.clear(losFilter)
+	local model = localPlayer.Character
+	if model then
+		table.insert(losFilter, model)
+	end
+	table.insert(losFilter, piece)
+	losParams.FilterDescendantsInstances = losFilter
+
+	local result = Workspace:Raycast(origin, delta, losParams)
+	return result == nil or result.Distance >= distance - LOS_SLACK
+end
+
 -- The piece of this job's garbage NEAREST the player within `range`, or nil. The fallback for when
 -- the player isn't looking at any piece in particular: standing next to a bag of litter offers it
 -- without having to put the crosshair on it, which is what makes picking up off the floor -- where
@@ -312,8 +357,10 @@ local function findNearest(range: number): (PVInstance?, string?)
 		if not position then
 			continue
 		end
+		-- canSee LAST: it's the only expensive test here, and it's only worth asking about a piece
+		-- that would actually win.
 		local distance = (from - position).Magnitude
-		if distance <= range and distance < nearestDistance then
+		if distance <= range and distance < nearestDistance and canSee(piece, position) then
 			nearest, nearestId, nearestDistance = piece, surfaceId, distance
 		end
 	end
@@ -467,6 +514,13 @@ end
 -- A pickup at `screenPoint` -- or, when nil, wherever the player is AIMING, which is the same ray
 -- the outline is drawn from. Forgives a near-miss when `tolerant` (a finger, not a cursor): the
 -- exact pixel first, then a ring around it. See the TAP_TOLERANCE constants.
+--
+-- The exact pixel always wins outright -- a tap that lands ON a piece means that piece, even if
+-- another is closer. It's only the forgiveness ring, where the tap hit nothing and we're guessing at
+-- what was meant, that has to choose: there the CLOSEST piece to the player wins rather than
+-- whichever sample happened to run first. With a heap of garbage in one corner the ring routinely
+-- catches two or three pieces at once, and taking them in sample order picked an arbitrary one --
+-- often one further back, behind the piece the player was obviously reaching for.
 local function findPickupTarget(screenPoint: Vector2?, tolerant: boolean): (PVInstance?, string?)
 	local garbage, surfaceId = findTarget(pickupRange(), screenPoint)
 	if surfaceId or not tolerant or not screenPoint then
@@ -478,14 +532,29 @@ local function findPickupTarget(screenPoint: Vector2?, tolerant: boolean): (PVIn
 		TAP_TOLERANCE_MIN_PIXELS,
 		(if camera then camera.ViewportSize.Y else 0) * TAP_TOLERANCE_SCALE
 	)
+	local from = rootPosition()
 
+	local nearest: PVInstance? = nil
+	local nearestId: string? = nil
+	local nearestDistance = math.huge
 	for i = 1, TAP_TOLERANCE_SAMPLES do
 		local angle = (i / TAP_TOLERANCE_SAMPLES) * math.pi * 2
 		local sample = screenPoint + Vector2.new(math.cos(angle), math.sin(angle)) * radius
-		garbage, surfaceId = findTarget(pickupRange(), sample)
-		if surfaceId then
-			return garbage, surfaceId
+		local hit, hitId = findTarget(pickupRange(), sample)
+		if hit and hitId then
+			-- No character to measure from (mid-respawn): first hit is as good as any.
+			if not from then
+				return hit, hitId
+			end
+			local position = GarbageResolver.getPosition(hit)
+			local distance = if position then (from - position).Magnitude else math.huge
+			if distance < nearestDistance then
+				nearest, nearestId, nearestDistance = hit, hitId, distance
+			end
 		end
+	end
+	if nearestId then
+		return nearest, nearestId
 	end
 	return nil, nil
 end

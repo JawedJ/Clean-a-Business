@@ -156,10 +156,20 @@ end
 -- The floating tool sits out in front of the character, so its parts must not collide with
 -- the world/character, and must be massless so their offset weight doesn't drag the
 -- character's physics around.
+--
+-- They're also taken out of RAYCASTING (CanQuery). The tool hangs between the camera and whatever
+-- the player is aiming at, and it's big on screen -- so every aim ray in the game (cleaning, the
+-- garbage hover, and above all a mobile TAP, which is cast through the pressed pixel rather than the
+-- crosshair) could hit the player's own tool instead of the thing behind it. Tapping a piece of
+-- garbage "through" the broom simply failed. Each controller could exclude the tool from its own
+-- filter, but a tool nobody's rays can hit is the same answer everywhere and can't be forgotten by
+-- the next one. Local-only: this runs on the owner's client, and nothing else needs to raycast a
+-- floating tool either.
 local function makeNonCollidable(tool: Tool)
 	for _, desc in tool:GetDescendants() do
 		if desc:IsA("BasePart") then
 			desc.CanCollide = false
+			desc.CanQuery = false
 			desc.Massless = true
 		end
 	end

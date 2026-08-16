@@ -1009,13 +1009,28 @@ below.
     but **never with a character**: it can't shove a player, trap them, or be stood on.
 
 - **Flow.** `GarbageCarryController` (client) raycasts each frame; a free piece of the active job's
-  garbage within `GarbageHoverRange` gets a **white `Highlight`** (`AlwaysOnTop` — an occluded
-  outline on a pale model is nearly invisible). When the aim ray hits **no** piece, the outline falls
+  garbage within `GarbageHoverRange` gets a **white `Highlight`** (`Occluded`, in `HoverHighlight` —
+  geometry in front of a piece hides its outline, so a highlight never hangs through a wall; the
+  cost is a fainter outline on pale models, answered with fill transparency/colour rather than by
+  going back on top). When the aim ray hits **no** piece, the outline falls
   back to the **nearest free piece within pickup range** (`findNearest`), so garbage at the player's
-  feet is offered without aiming down at it. That fallback is a *suggestion only* — a click is always
+  feet is offered without aiming down at it. That fallback runs its own **line-of-sight** raycast
+  from the camera (`canSee`, with 1.5 studs of slack so a piece resting against the floor or a wall
+  still counts as visible) — occlusion only hides such an outline, so without the check the piece
+  behind the wall would still be the one being *offered*. That fallback is a *suggestion only* — a click is always
   the piece the crosshair is on, never whatever is nearest, so aiming stays exact and the outline can
   legitimately point at something a click wouldn't take. A click sends **`CarryGarbage`** with the
-  `surfaceId` (out to the longer `GarbagePickupRange`), or `nil` to let go.
+  `surfaceId` (out to the longer `GarbagePickupRange`), or `nil` to let go. On **touch** the ray goes
+  through the tapped pixel instead, and a tap that hits nothing is forgiven by a ring of 8 samples
+  around it (`TAP_TOLERANCE_*`, radius `max(22px, 3.5% of viewport height)`); when that ring catches
+  **several** pieces — a heap in a corner — the one **nearest the player** wins, rather than whichever
+  sample ran first. A tap that lands squarely *on* a piece still takes that piece.
+- **The held tool can't block a tap.** The floating tool hangs between the camera and whatever the
+  player is aiming at and is large on screen, so `ToolFloatController` sets **`CanQuery = false`** on
+  its parts alongside `CanCollide`/`Massless` (`makeNonCollidable`). Aim rays — cleaning, the garbage
+  hover, and above all a mobile **tap**, which is cast through the pressed pixel rather than the
+  crosshair — pass straight through it to what's behind. Done once, in the one place that owns the
+  floating tool, rather than as a filter each aiming controller has to remember.
   `GarbageCarryService` validates the active job, that no **party member** already holds that
   `surfaceId`, and the range — measured against the last position that *session* reported, falling
   back to the authored home — then publishes **`GarbageCarry`** `(carrier, surfaceId?, businessId?)`
@@ -1330,7 +1345,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb
   Modules/WebVisibility.luau       web visibility: hidden unless on the job (reparented to HiddenWebs holder); per-client hide-on-vacuum + reparent restore on redo; getWebCount / getActiveVisibleWebs
   Modules/GarbageVisibility.luau   garbage is CLONED, not shown/hidden: authored pieces go off-world permanently (AuthoredGarbage holder, home CFrame recorded) and each job gets this client's own local clones of that business's pieces, built in place in the CleanableGarbage folder so GarbageResolver still resolves them. Rebuilding them IS the job-start reset. getGarbageCount / getPiece / getPieces / getHome / hideOne / takePiece (hand the clone over WITHOUT destroying it -- the shredder's animation needs it in the world but untouchable)
-  Modules/GarbageCarryController.luau  garbage carry: white AlwaysOnTop hover outline, click to pick up / let go (CarryGarbage by surfaceId) -- the pickup ray goes through the CLICKED/TAPPED pixel, not the crosshair, so tapping away from a piece you're aiming at doesn't grab it; a TAP never DROPS (mouse click does, mobile uses a button calling .drop()) because the dynamic thumbstick and camera pan region read raw input, so gameProcessed doesn't shield them and driving/panning would otherwise let go of the piece, physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
+  Modules/GarbageCarryController.luau  garbage carry: white Occluded hover outline (aim first, else the nearest VISIBLE piece in reach), click to pick up / let go (CarryGarbage by surfaceId) -- the pickup ray goes through the CLICKED/TAPPED pixel, not the crosshair, so tapping away from a piece you're aiming at doesn't grab it; a TAP never DROPS (mouse click does, mobile uses a button calling .drop()) because the dynamic thumbstick and camera pan region read raw input, so gameProcessed doesn't shield them and driving/panning would otherwise let go of the piece, physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
   Modules/GarbageShredController.luau  the CLEAN half of garbage: watches the active business's shredder Hitbox for one of OUR clones (ShredGarbage), and on the server's GarbageCleaned takes the clone out of GarbageVisibility, freezes it and drives its pivot p1 -> hold -> p2 with a side-to-side shake, ShredderSFX playing positionally out of the hitbox and a yellow VfxManager.shredDebris shower riding it down, until it vanishes; counts it via JobController.onGarbageCleaned and bins anything still animating when the job ends
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui; a job is never held empty-handed -- it starts with the pressure washer out, and the only thing that empties the hands is carrying garbage, after which the last-held tool is put back
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown

@@ -4,11 +4,17 @@
 -- webs). Walls are deliberately excluded -- they're EditableImage overlays painted onto the
 -- building's own geometry, so an outline would trace the whole wall rather than the dirt.
 --
--- The look is the garbage carry outline, kept here so all four cleanables read identically: drawn
--- OVER the target (AlwaysOnTop) rather than shaded onto it, so it stays visible on pale or busy
--- geometry -- an occluded outline on a light-coloured piece is almost invisible. Every hover that
--- uses this comes from a raycast (so it already requires a clear line of sight), which is why
--- drawing on top can't reveal anything through a wall.
+-- The look is the garbage carry outline, kept here so all four cleanables read identically. It is
+-- OCCLUDED: geometry in front of the target hides the outline, exactly as it hides the target. The
+-- alternative (AlwaysOnTop) draws it over everything, which is stronger on pale or busy geometry but
+-- means an outline hanging in the air through a wall -- and a highlight that ignores walls reads as
+-- a bug, not as emphasis. If it turns out too faint on light-coloured pieces, lower
+-- HIGHLIGHT_FILL_TRANSPARENCY or pick a colour with more contrast rather than going back on top.
+--
+-- Callers still owe a visibility check when they pick a target WITHOUT a ray: the aim hovers get one
+-- for free (a raycast can't reach through a wall), and garbage's proximity hover
+-- (GarbageCarryController.findNearest) tests it explicitly. Occlusion only hides such an outline --
+-- the piece would still be the thing a pickup targets.
 --
 -- One Highlight per owner, created once and re-adorned: Highlight instances are relatively
 -- expensive to build, and only one tool is ever equipped at a time so at most one is enabled.
@@ -18,7 +24,7 @@ local Players = game:GetService("Players")
 
 local HIGHLIGHT_COLOR = Color3.fromRGB(255, 255, 255)
 local HIGHLIGHT_FILL_TRANSPARENCY = 0.2
-local HIGHLIGHT_DEPTH_MODE = Enum.HighlightDepthMode.AlwaysOnTop
+local HIGHLIGHT_DEPTH_MODE = Enum.HighlightDepthMode.Occluded
 
 local localPlayer = Players.LocalPlayer
 
