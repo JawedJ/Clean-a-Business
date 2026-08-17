@@ -56,9 +56,10 @@ local CleaningConfig = {
 	-- grouping parts; GarbageResolver climbs to the folder child either way.
 	--
 	-- Garbage is not cleaned in place: the player walks up to it and CARRIES it (see
-	-- GarbageCarryService / GarbageCarryController), floating it in front of their crosshair until
-	-- they click again to let go. The carrier owns it on the network, so its movement replicates to
-	-- everyone without a per-frame remote.
+	-- GarbageCarryService / GarbageCarryController), floating it AROUND their crosshair -- up to
+	-- GarbageCarryLimit pieces at once, ringed so the centre of the screen stays clear -- until they
+	-- let go. The carrier owns it on the network, so its movement replicates to everyone without a
+	-- per-frame remote.
 	--
 	-- A piece is ALWAYS unanchored and always collides with the building: that's what stops a player
 	-- walking their piece through a wall and out of the map, and what makes a dropped piece fall and
@@ -89,6 +90,22 @@ local CleaningConfig = {
 	-- How far in front of the crosshair (studs, from the camera along the aim ray) carried garbage is
 	-- pulled toward -- i.e. how far out from the player the piece floats while held.
 	GarbageCarryDistance = 7,
+	-- How many pieces a player may hold at once. They float in a ring around the crosshair rather
+	-- than in front of it -- one above it, two either side of it, three in a triangle about it -- so
+	-- the centre of the screen stays clear for aiming at (and picking up) the next piece. The server
+	-- enforces this too; the client only stops asking. See GarbageCarryController's slot layout.
+	GarbageCarryLimit = 3,
+	-- The clear space (studs) held pieces are given: how far the NEAREST FACE of a held piece is kept
+	-- from the crosshair, and how much air is left between two neighbouring pieces in the ring. Both
+	-- are measured off the pieces' own sizes (like the shredder queue's gap), so a bin bag and a
+	-- crumpled can are both spaced properly rather than one overlapping and the other floating away.
+	--
+	-- The clearance is deliberately SMALL: a single held piece should sit just clear of the crosshair,
+	-- close enough to read as being held in front of the player rather than parked at the top of the
+	-- screen. It's measured along the direction the piece actually sits in (so the height of a piece
+	-- hovering above the crosshair, not its longest side), which is what lets it be this tight.
+	GarbageCarryClearStuds = 0.25,
+	GarbageCarryGapStuds = 0.6,
 	-- How long (seconds) a piece sits untouched where it was dropped before it returns to the
 	-- position it was authored at. Restarts on every pickup/drop, so a piece being worked with is
 	-- never yanked out from under the player.

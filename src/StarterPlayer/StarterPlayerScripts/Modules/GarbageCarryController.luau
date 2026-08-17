@@ -28,24 +28,32 @@
 --     A held TOOL can't get in the way of any of this: the floating tool hangs between the camera
 --     and whatever is being aimed at, so ToolFloatController takes its parts out of raycasting
 --     (CanQuery) -- a tap goes straight THROUGH the broom to the garbage behind it.
---   * LETTING GO -- a mouse click drops what we're holding; a TAP never does (TOUCH_CAN_DROP), since
---     the movement stick and the camera pan region arrive here as ordinary unprocessed touches.
---     A dedicated HUD button (InteractButtonController) drops as well -- on touch, where it's the
---     only way to let go. With empty hands that same button picks up instead, taking whatever the
---     CROSSHAIR is on (never the proximity outline -- see setAimed).
---   * CARRY -- the held piece is DRAGGED, not teleported: an AlignPosition/AlignOrientation pair
---     pulls it toward a point in front of the crosshair, keeping its authored tilt and turning with
---     the camera. Dragging it with physics rather than writing its CFrame is what makes the world's
+--   * LETTING GO -- a mouse click over nothing drops EVERYTHING we're holding; a TAP never does
+--     (TOUCH_CAN_DROP), since the movement stick and the camera pan region arrive here as ordinary
+--     unprocessed touches. A dedicated HUD button (InteractButtonController) drops as well -- on
+--     touch, where it's the only way to let go, and there it means drop the moment our hands aren't
+--     empty. With empty hands that same button picks up instead, taking whatever the CROSSHAIR is on
+--     (never the proximity outline -- see setAimed).
+--   * HOW MANY -- up to Config.GarbageCarryLimit pieces at once, so a run can be walked to the
+--     shredder in armfuls instead of one trip per piece. They are ringed AROUND the crosshair rather
+--     than stacked in front of it -- one sits above it, two sit either side of it, three sit in a
+--     triangle about it -- which is what keeps the centre of the screen (the only thing a pickup
+--     ever aims down) clear of what we're already holding. Held pieces are also taken out of the aim
+--     ray's way (refreshRayFilter) and out of every pickup search, so with an armful the player is
+--     still aiming at the world rather than at their own load.
+--   * CARRY -- each held piece is DRAGGED, not teleported: an AlignPosition/AlignOrientation pair
+--     pulls it toward its own slot in that ring, keeping its authored tilt and turning with the
+--     camera. Dragging it with physics rather than writing its CFrame is what makes the world's
 --     collisions apply -- a piece shoved at a wall stops at the wall instead of passing through it
---     and stranding itself out of bounds. (It passes freely through CHARACTERS: the clones sit in a
---     collision group that ignores players.) The carry point is also clamped to stop short of
---     whatever we're aiming at, so looking down doesn't grind the piece into the floor.
+--     and stranding itself out of bounds. (It passes freely through CHARACTERS, and while held
+--     through the OTHER pieces in the ring: see CARRIED_GROUP.) Every slot is clamped to stop short
+--     of whatever stands in front of it, so looking down doesn't grind the load into the floor.
 --   * PARTY -- our clone is ours alone, so movement can't replicate by itself. Instead the carrier
---     streams its piece's CFrame (GarbageMove) and the other members position THEIR clone of the
---     same surfaceId from it, anchored while it's in someone else's hands and released -- to fall
---     under local physics -- when they let go.
+--     streams each held piece's CFrame (GarbageMove) and the other members position THEIR clone of
+--     the same surfaceId from it, anchored while it's in someone else's hands and released -- to
+--     fall under local physics -- when they let go.
 --   * TOOLS -- carrying is hands-full: picking up unequips whatever tool is held, and equipping a
---     tool drops the piece. (Both directions, so the two mechanics can never overlap.)
+--     tool drops everything held. (Both directions, so the two mechanics can never overlap.)
 --
 -- A piece left alone for GarbageResetSeconds goes back to where it was authored, so a run of
 -- kicked-about garbage tidies itself up without waiting for the next job.
@@ -74,6 +82,31 @@ local localPlayer = Players.LocalPlayer
 -- standing at arm's length.
 local AIM_MARGIN = 4
 
+-- The collision group a clone normally sits in (GarbageVisibility builds them in it), and the one it
+-- is moved into for as long as it's HELD. The held group doesn't collide with itself, so the pieces
+-- ringed around the crosshair pass through each other instead of barging one another out of their
+-- slots; both groups are declared, and paired against the players', by GarbageCarryService.
+local GARBAGE_GROUP = "CleanableGarbage"
+local CARRIED_GROUP = "CarriedGarbage"
+
+-- Where each held piece floats, in CAMERA space (x = right, y = up), indexed by HOW MANY are held.
+-- Unit directions: the distance out from the crosshair is worked out per armful from the pieces'
+-- own sizes (see slotSeparation and the crosshair rule in onRenderStepped), because a ring that fits
+-- three bin bags would fling three crushed cans off the edges of the screen.
+--
+-- One piece sits ABOVE the crosshair rather than on it -- the centre of the screen is what a pickup
+-- aims down, so it's the one place a held piece must never be. Two split either side of it, and
+-- three take an equilateral triangle about it (up, down-left, down-right), which is the arrangement
+-- that holds three shapes as far from each other as it does from the crosshair.
+-- Only the arrangements the game actually uses are written out (one to Config.GarbageCarryLimit);
+-- anything beyond them falls back to an even ring, so raising the limit is a one-line change here
+-- rather than a way to break the carry (see slotLayout).
+local SLOT_LAYOUTS: { { Vector2 } } = {
+	{ Vector2.new(0, 1) },
+	{ Vector2.new(-1, 0), Vector2.new(1, 0) },
+	{ Vector2.new(0, 1), Vector2.new(-0.866, -0.5), Vector2.new(0.866, -0.5) },
+}
+
 -- Let go automatically if the carried piece ends up this far (studs) from the player. Measured off
 -- the carry distance so raising how far out the piece floats can't make the guard start misfiring on
 -- a perfectly normal carry; the slack covers the piece lagging behind a sprinting player. What it's
@@ -100,10 +133,13 @@ local CARRY_MIN_TORQUE = 5000
 local CARRY_SURFACE_BUFFER = 1.5
 local CARRY_MIN_DISTANCE = 2.5
 
--- How often (seconds) the carried piece's position is streamed to the rest of the party, and how far
--- it must have moved to be worth a packet. A party member's copy is a smoothed follow, not a
+-- How often (seconds) each carried piece's position is streamed to the rest of the party, and how
+-- far it must have moved to be worth a packet. A party member's copy is a smoothed follow, not a
 -- frame-exact mirror, so this is deliberately far below the frame rate.
-local RELAY_INTERVAL = 1 / 20
+--
+-- The interval is per PIECE and scaled by how many are held, so an armful of three doesn't send
+-- three times the traffic one does: the budget is the same either way, spread across the load.
+local RELAY_INTERVAL = 1 / 30
 local RELAY_MIN_DISTANCE = 0.05
 
 -- After letting go, how long we wait for the piece to fall and settle before reporting where it
@@ -163,22 +199,42 @@ local TAP_TIE_PIXELS = 12
 
 local GarbageCarryController = {}
 
--- The piece the SERVER says we're holding (a surfaceId), and our clone of it. Set only from the
--- GarbageCarry confirmation, so we never drive a piece we weren't actually given.
-local carriedId: string? = nil
-local carried: PVInstance? = nil
--- The carried piece's authored rotation and the camera yaw at pickup: the piece keeps its own tilt
--- and turns with us, rather than snapping to face the camera.
-local carriedRotation = CFrame.identity
-local carriedYaw = 0
--- The constraints dragging the carried piece, and the attachment they act on. All three are ours,
--- built on pickup and destroyed on drop.
-local carryAttachment: Attachment? = nil
-local alignPosition: AlignPosition? = nil
-local alignOrientation: AlignOrientation? = nil
--- Relay bookkeeping: when we last sent, and from where.
-local lastRelayAt = 0
-local lastRelayPosition: Vector3? = nil
+-- One piece the SERVER says we're holding.
+type Held = {
+	-- The piece's surfaceId (what the server speaks in) and our clone of it.
+	id: string,
+	piece: PVInstance,
+	-- Its authored rotation and the camera yaw at the moment it was picked up: the piece keeps its
+	-- own tilt and turns with us, rather than snapping to face the camera.
+	rotation: CFrame,
+	yaw: number,
+	-- Its bounding box (studs), measured once at pickup: what the ring's spacing is worked out from,
+	-- so nothing in an armful overlaps its neighbour or covers the crosshair.
+	size: Vector3,
+	-- The constraints dragging it, and the attachment they act on. All three are ours, built on
+	-- pickup and destroyed when it leaves our hands.
+	attachment: Attachment?,
+	align: AlignPosition?,
+	orientation: AlignOrientation?,
+	-- Relay bookkeeping, per piece: when we last sent it, and from where.
+	relayAt: number,
+	relayPosition: Vector3?,
+}
+
+-- What we're holding, oldest first -- the same order the server appended them in, and the order the
+-- ring's slots are handed out in, so a piece doesn't jump slots on a whim. Filled only from the
+-- GarbageCarry confirmation, so we never drive a piece we weren't actually given. `heldById` is the
+-- same entries keyed for lookup (the release messages, the pickup searches and the idle sweep all
+-- ask "is this piece in our hands" by id).
+local held: { Held } = {}
+local heldById: { [string]: Held } = {}
+
+-- Scratch for the ring's per-frame layout, parallel to `held`: the direction each piece's slot lies
+-- in and the rotation it's being turned to. Both are worked out for the whole armful before any of
+-- it is placed (the spacing depends on every piece), and both are reused rather than rebuilt --
+-- this runs every frame, and a fresh table each time is pure collector churn.
+local slotDirections: { Vector3 } = {}
+local slotRotations: { CFrame } = {}
 
 -- Told whenever our own hands go from empty to full or back (see onCarryingChanged) -- the interact
 -- button is shown off this. Party members' carries never reach these: they're about OUR hands.
@@ -209,32 +265,38 @@ local highlight: HoverHighlight.HoverHighlight? = nil
 -- -- is what the interact button shows off and takes.
 local aimedId: string? = nil
 
--- The aim ray ignores our own character (we're standing right next to what we're aiming at). The
--- filter is refreshed on each respawn rather than rebuilt per frame -- the hover check runs every
--- frame, and a fresh table each time is pure collector churn.
+-- Every ray cast here ignores our own character (we're standing right next to what we're aiming at)
+-- and everything we're already HOLDING. Held pieces have to be excluded for two separate reasons and
+-- both matter: they float around the crosshair, so a piece in the ring would otherwise be what the
+-- aim ray hits -- an armful would blind the player to the world -- and the slot ray that keeps a
+-- piece clear of walls would be stopped by the very piece it's placing (and by its neighbours).
+--
+-- The filter is refreshed on each respawn and whenever our hands change, rather than rebuilt per
+-- frame -- these run every frame, and a fresh table each time is pure collector churn.
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local function refreshRayFilter()
-	local model = localPlayer.Character
-	rayParams.FilterDescendantsInstances = if model then { model } else {}
-end
-
--- The carry ray ignores our character AND the piece we're holding (it sits in the way of its own
--- target). Rebuilt on pickup, not per frame.
-local carryRayParams = RaycastParams.new()
-carryRayParams.FilterType = Enum.RaycastFilterType.Exclude
-
-local function refreshCarryRayFilter(garbage: PVInstance?)
-	local model = localPlayer.Character
 	local exclude: { Instance } = {}
+	local model = localPlayer.Character
 	if model then
 		table.insert(exclude, model)
 	end
-	if garbage then
-		table.insert(exclude, garbage)
+	for _, entry in held do
+		table.insert(exclude, entry.piece)
 	end
-	carryRayParams.FilterDescendantsInstances = exclude
+	rayParams.FilterDescendantsInstances = exclude
+end
+
+-- Is this piece in OUR hands right now? Asked by every pickup search (we can't grab what we're
+-- already holding) and by the idle-reset sweep.
+local function isHeld(surfaceId: string): boolean
+	return heldById[surfaceId] ~= nil
+end
+
+-- Are we already holding as many pieces as we're allowed?
+local function handsFull(): boolean
+	return #held >= Config.GarbageCarryLimit
 end
 
 local function activeJob(): string?
@@ -308,7 +370,10 @@ local function findTarget(range: number, screenPoint: Vector2?): (PVInstance?, s
 	if not identity or identity.businessId ~= businessId then
 		return nil, nil
 	end
-	if carriedByOthers[identity.surfaceId] then
+	-- Spoken for: a party member has it, or it's already in our own ring. (The ray can't hit one of
+	-- ours -- they're filtered out -- but a piece is only offered if a pickup could take it, and
+	-- this is the one place that question is answered for every caller.)
+	if carriedByOthers[identity.surfaceId] or isHeld(identity.surfaceId) then
 		return nil, nil
 	end
 
@@ -354,6 +419,12 @@ local function canSee(piece: PVInstance, position: Vector3): boolean
 		table.insert(losFilter, model)
 	end
 	table.insert(losFilter, piece)
+	-- What we're carrying doesn't count as something blocking the view: the ring floats between the
+	-- camera and everything else, so counting it would have an armful hiding the very garbage the
+	-- proximity outline exists to offer.
+	for _, entry in held do
+		table.insert(losFilter, entry.piece)
+	end
 	losParams.FilterDescendantsInstances = losFilter
 
 	local result = Workspace:Raycast(origin, delta, losParams)
@@ -382,7 +453,7 @@ local function findNearest(range: number): (PVInstance?, string?)
 	-- Only the active job's clones are in here at all, and a piece already fed into the shredder has
 	-- been taken out of it -- so being in this table is most of "can be picked up".
 	for surfaceId, piece in GarbageVisibility.getPieces() do
-		if carriedByOthers[surfaceId] then
+		if carriedByOthers[surfaceId] or isHeld(surfaceId) then
 			continue
 		end
 		local position = GarbageResolver.getPosition(piece)
@@ -448,29 +519,69 @@ local function dragPart(garbage: PVInstance): BasePart?
 	return part.AssemblyRootPart or part
 end
 
--- Tear down the drag (on drop, on losing the piece, on respawn).
-local function releaseDrag()
-	refreshCarryRayFilter(nil)
-	if alignPosition then
-		alignPosition:Destroy()
-		alignPosition = nil
+-- How big this piece is, for the ring's spacing: its bounding box, measured once when it's picked
+-- up. The two spacing rules read it differently and both readings matter -- see slotSeparation
+-- (which needs a figure that holds whichever way the piece faces) and halfExtentAlong (which needs
+-- the piece's reach in one exact direction).
+local function pieceSize(garbage: PVInstance): Vector3
+	if garbage:IsA("BasePart") then
+		return garbage.Size
 	end
-	if alignOrientation then
-		alignOrientation:Destroy()
-		alignOrientation = nil
+	local _, extents = (garbage :: Model):GetBoundingBox()
+	return extents
+end
+
+-- How far a box of `size`, turned to `rotation`, reaches from its own centre along `direction` (a
+-- unit vector). The standard box support sum: each of its three axes contributes as much reach as
+-- that axis is turned toward `direction` -- the same trick GarbageShredController's worldHeight uses
+-- to stack the shredder queue, asked here about an arbitrary direction rather than straight up.
+--
+-- This is what lets a lone piece sit JUST above the crosshair: what has to clear the crosshair is
+-- the piece's half-HEIGHT, and taking half its longest side instead parks anything long and thin far
+-- higher than it needs to be.
+local function halfExtentAlong(size: Vector3, rotation: CFrame, direction: Vector3): number
+	return (
+		math.abs(direction:Dot(rotation.RightVector)) * size.X
+		+ math.abs(direction:Dot(rotation.UpVector)) * size.Y
+		+ math.abs(direction:Dot(rotation.LookVector)) * size.Z
+	) / 2
+end
+
+-- Move a piece into (or out of) the held collision group, so the pieces in an armful pass through
+-- each other rather than fighting for their slots. Wrapped: the groups are registered on the SERVER
+-- and reach us by replication, and a piece picked up in the first moments of a session (or during a
+-- live reload) mustn't error out of the carry over a name that hasn't landed yet -- it would simply
+-- collide as it always did.
+local function setCarriedCollision(garbage: PVInstance, carried: boolean)
+	pcall(function()
+		for _, part in GarbageResolver.getParts(garbage) do
+			part.CollisionGroup = if carried then CARRIED_GROUP else GARBAGE_GROUP
+		end
+	end)
+end
+
+-- Tear down one piece's drag (on drop, on losing the piece, on respawn).
+local function releaseDrag(entry: Held)
+	if entry.align then
+		entry.align:Destroy()
+		entry.align = nil
 	end
-	if carryAttachment then
-		carryAttachment:Destroy()
-		carryAttachment = nil
+	if entry.orientation then
+		entry.orientation:Destroy()
+		entry.orientation = nil
+	end
+	if entry.attachment then
+		entry.attachment:Destroy()
+		entry.attachment = nil
 	end
 end
 
 -- Build the drag for a piece the server just handed us: an attachment sitting at the piece's pivot,
--- and the two constraints that pull that attachment to wherever we're aiming.
-local function buildDrag(garbage: PVInstance)
-	releaseDrag()
-	refreshCarryRayFilter(garbage)
+-- and the two constraints that pull that attachment to its slot in the ring.
+local function buildDrag(entry: Held)
+	releaseDrag(entry)
 
+	local garbage = entry.piece
 	local part = dragPart(garbage)
 	if not part then
 		return
@@ -482,7 +593,7 @@ local function buildDrag(garbage: PVInstance)
 	attachment.Name = "GarbageCarryAttachment"
 	attachment.CFrame = part.CFrame:Inverse() * garbage:GetPivot()
 	attachment.Parent = part
-	carryAttachment = attachment
+	entry.attachment = attachment
 
 	-- Enough force to lift the piece briskly, not enough to win against a wall (see CARRY_GRAVITIES).
 	local mass = math.max(part.AssemblyMass, 0.1)
@@ -497,7 +608,7 @@ local function buildDrag(garbage: PVInstance)
 	position.Responsiveness = CARRY_RESPONSIVENESS
 	position.Position = garbage:GetPivot().Position
 	position.Parent = part
-	alignPosition = position
+	entry.align = position
 
 	local orientation = Instance.new("AlignOrientation")
 	orientation.Name = "GarbageCarryOrientation"
@@ -508,14 +619,14 @@ local function buildDrag(garbage: PVInstance)
 	orientation.Responsiveness = CARRY_RESPONSIVENESS
 	orientation.CFrame = garbage:GetPivot().Rotation
 	orientation.Parent = part
-	alignOrientation = orientation
+	entry.orientation = orientation
 end
 
 -- Announce a change in whether we're holding anything, deduped: the paths that clear the carry
 -- overlap (a drop, a respawn, a job ending all land here), and a listener showing a button shouldn't
 -- have to filter repeats of the state it's already in.
 local function notifyCarrying()
-	local carrying = carriedId ~= nil
+	local carrying = #held > 0
 	if carrying == lastCarryState then
 		return
 	end
@@ -525,16 +636,18 @@ local function notifyCarrying()
 	end
 end
 
--- Watch whether the local player is holding a piece. Fires immediately with the current state, then
--- on every flip -- same shape as JobUiController.onHudVisibilityChanged.
+-- Watch whether the local player is holding ANY garbage. Fires immediately with the current state,
+-- then on every flip -- same shape as JobUiController.onHudVisibilityChanged. Deliberately a
+-- boolean rather than a count: every listener (the tool restore, the interact button) cares about
+-- empty vs not, and taking one piece of three out of an armful shouldn't churn them.
 function GarbageCarryController.onCarryingChanged(callback: (boolean) -> ())
 	table.insert(carryListeners, callback)
 	callback(lastCarryState)
 end
 
--- True while we're holding a piece of garbage.
+-- True while we're holding at least one piece of garbage.
 function GarbageCarryController.isCarrying(): boolean
-	return carriedId ~= nil
+	return #held > 0
 end
 
 -- Watch whether the crosshair is on a piece we could pick up. Fires immediately with the current
@@ -549,17 +662,22 @@ function GarbageCarryController.hasAimTarget(): boolean
 	return aimedId ~= nil
 end
 
--- Ask the server to pick a piece up, or (nil) to let go of what we're holding. The server answers on
--- GarbageCarry; nothing moves until it does.
-local function request(surfaceId: string?)
-	CarryGarbage:FireServer(surfaceId)
+-- Ask the server to pick a piece up (a surfaceId), to let go of one particular piece (a surfaceId
+-- with `release`), or to let go of everything (nil). The server answers on GarbageCarry; nothing
+-- moves until it does.
+local function request(surfaceId: string?, release: boolean?)
+	CarryGarbage:FireServer(surfaceId, release)
 end
 
--- Let go of whatever we're holding, from anywhere. This is the mobile interact button's drop entry
+-- Let go of EVERYTHING we're holding, from anywhere. This is the mobile interact button's drop entry
 -- point, since a tap never drops (see TOUCH_CAN_DROP); harmless to call with empty hands. The server
 -- still decides -- we only ask, and act on the GarbageCarry confirmation like every other path here.
+--
+-- All of it, not the newest piece: the only drop gesture there is says "empty my hands", and with no
+-- way to point at one piece of an armful (they're all off the crosshair by design) picking one for
+-- the player would just be a guess they'd have to undo.
 function GarbageCarryController.drop()
-	if carriedId then
+	if #held > 0 then
 		request(nil)
 	end
 end
@@ -570,7 +688,7 @@ end
 -- aimed at, which during a job is always the centre of the screen. Harmless when the crosshair is on
 -- nothing or our hands are already full.
 function GarbageCarryController.pickup()
-	if carriedId then
+	if handsFull() then
 		return
 	end
 	local surfaceId = aimedId
@@ -582,7 +700,7 @@ function GarbageCarryController.pickup()
 	request(surfaceId)
 end
 
--- Click / tap: drop what we're carrying, else pick up whatever the crosshair is on.
+-- Click / tap: pick up whatever the crosshair is on, else drop what we're carrying.
 -- How far a piece can be grabbed from. Touch reaches further -- see GarbagePickupRangeTouchBonus.
 local function pickupRange(): number
 	return Config.GarbagePickupRange + (if IS_MOBILE then Config.GarbagePickupRangeTouchBonus else 0)
@@ -650,7 +768,7 @@ local function findTapTarget(screenPoint: Vector2): (PVInstance?, string?)
 	local best = math.huge
 
 	for surfaceId, piece in GarbageVisibility.getPieces() do
-		if carriedByOthers[surfaceId] then
+		if carriedByOthers[surfaceId] or isHeld(surfaceId) then
 			continue
 		end
 		local position = GarbageResolver.getPosition(piece)
@@ -705,38 +823,60 @@ end
 -- passes nil instead and picks up along the aim ray -- see the InputBegan handler for why.
 -- `canDrop` is what separates a mouse click (which lets go of what we're holding) from a touch
 -- (which never does -- see TOUCH_CAN_DROP).
+--
+-- PICKING UP COMES FIRST, and that ordering is the whole point of an armful: a click that lands on a
+-- piece of garbage takes it, whether our hands are empty or already have two in them. Only a click
+-- on NOTHING means "let go" -- so the player fills their hands by clicking garbage and empties them
+-- by clicking away from it, and never has to put down what they're carrying to pick up more.
 local function onClick(screenPoint: Vector2?, canDrop: boolean, tolerant: boolean)
-	if carriedId then
-		if canDrop then
-			request(nil)
+	if not handsFull() then
+		local _, surfaceId = findPickupTarget(screenPoint, tolerant)
+		if surfaceId then
+			-- Empty our hands of TOOLS up front rather than waiting for the confirmation, so the tool
+			-- is already away by the time the piece appears in front of us.
+			unequipTools()
+			request(surfaceId)
+			return
 		end
-		return
 	end
-	local _, surfaceId = findPickupTarget(screenPoint, tolerant)
-	if not surfaceId then
-		return
+	if canDrop and #held > 0 then
+		request(nil)
 	end
-	-- Empty our hands up front rather than waiting for the confirmation, so the tool is already
-	-- away by the time the piece appears in front of us.
-	unequipTools()
-	request(surfaceId)
 end
 
--- Stop carrying locally: drop the drag and forget the piece. The server has its own copy of this
--- state; this is only our end of it.
-local function clearCarry()
-	carriedId = nil
-	carried = nil
-	lastRelayPosition = nil
-	releaseDrag()
+-- Stop carrying one piece locally: tear its drag down, hand it back to the ordinary garbage
+-- collision group and forget it. The server has its own copy of this state; this is only our end of
+-- it. Safe for a piece we aren't holding.
+local function clearOne(surfaceId: string)
+	local entry = heldById[surfaceId]
+	if not entry then
+		return
+	end
+	heldById[surfaceId] = nil
+	local index = table.find(held, entry)
+	if index then
+		table.remove(held, index)
+	end
+	releaseDrag(entry)
+	-- Back to colliding with its own kind. (Harmless on a piece the shredder has already taken and
+	-- frozen -- that one collides with nothing at all.)
+	setCarriedCollision(entry.piece, false)
+	refreshRayFilter()
 	notifyCarrying()
+end
+
+-- Stop carrying EVERYTHING locally (a respawn, a job ending, a death).
+local function clearCarry()
+	for _, entry in table.clone(held) do
+		clearOne(entry.id)
+	end
 end
 
 -- Tell the server where a piece we just dropped came to rest, once it's had time to fall. Skipped if
 -- it's back in someone's hands by then -- their carry is a fresher truth than our settle.
 local function reportWhereItLanded(surfaceId: string)
 	task.delay(SETTLE_REPORT_DELAY, function()
-		if carriedId == surfaceId or carriedByOthers[surfaceId] then
+		if isHeld(surfaceId) or carriedByOthers[surfaceId] then
 			return
 		end
 		local piece = GarbageVisibility.getPiece(surfaceId)
@@ -746,21 +886,24 @@ local function reportWhereItLanded(surfaceId: string)
 	end)
 end
 
--- The server confirmed a carry state for someone on our session. `surfaceId` nil = they let go.
-local function onCarryChanged(player: Player, surfaceId: string?)
+-- The server confirmed a carry state for ONE piece and one player on our session: `holding` says
+-- whether they just took it or just let it go. Always about a single piece -- letting go of an
+-- armful arrives as one of these per piece -- so nothing here has to guess which piece was meant.
+local function onCarryChanged(player: Player, surfaceId: string, holding: boolean)
 	-- Either way this piece has just been handled, so its idle reset starts over.
-	if surfaceId then
-		lastTouched[surfaceId] = os.clock()
-	end
+	lastTouched[surfaceId] = os.clock()
 
 	if player == localPlayer then
-		if not surfaceId then
-			local dropped = carriedId
-			if dropped then
-				lastTouched[dropped] = os.clock()
-				reportWhereItLanded(dropped)
+		if not holding then
+			-- Only worth a settle report if it really was in our hands: it's OUR clone's resting place
+			-- the server is being told about, and the server only accepts one from the last carrier.
+			if heldById[surfaceId] then
+				clearOne(surfaceId)
+				reportWhereItLanded(surfaceId)
 			end
-			clearCarry()
+			return
+		end
+		if heldById[surfaceId] then
 			return
 		end
 
@@ -768,40 +911,44 @@ local function onCarryChanged(player: Player, surfaceId: string?)
 		if not piece then
 			return
 		end
-		carriedId = surfaceId
-		carried = piece
 		-- Ours to simulate again (it may have been anchored while a member carried it).
 		setPieceAnchored(piece, false)
 		-- Snapshot the piece's authored tilt + our current yaw, so it keeps its orientation and
 		-- simply turns with the camera while carried. The yaw comes off the same aim ray the carry
 		-- uses, so the piece doesn't twitch on the first frame it's held.
-		carriedRotation = piece:GetPivot().Rotation
 		local ray = aimRay()
 		local look = if ray then ray.Direction else Vector3.new(0, 0, -1)
-		carriedYaw = math.atan2(-look.X, -look.Z)
-		buildDrag(piece)
-		-- Whatever we were about to grab, we're holding something now -- flip the button to "drop"
-		-- here rather than letting the next frame do it, so it never shows a stale image.
+		local entry: Held = {
+			id = surfaceId,
+			piece = piece,
+			rotation = piece:GetPivot().Rotation,
+			yaw = math.atan2(-look.X, -look.Z),
+			size = pieceSize(piece),
+			attachment = nil,
+			align = nil,
+			orientation = nil,
+			relayAt = 0,
+			relayPosition = nil,
+		}
+		-- Appended, so the ring hands out slots in pickup order (the same order the server keeps).
+		table.insert(held, entry)
+		heldById[surfaceId] = entry
+		setCarriedCollision(piece, true)
+		buildDrag(entry)
+		-- It's in our hands now, so it's neither an aim target nor a ray obstacle any more.
+		refreshRayFilter()
 		setHovered(nil)
-		setAimed(nil)
+		if handsFull() then
+			-- Nothing more can be taken -- flip the button to "drop" here rather than letting the next
+			-- frame do it, so it never shows a stale image.
+			setAimed(nil)
+		end
 		notifyCarrying()
 		return
 	end
 
-	-- A party member. Forget anything they were holding before, then take up the new piece: ours is
-	-- anchored and driven by their relay for as long as it's in their hands.
-	for id, holder in carriedByOthers do
-		if holder == player then
-			carriedByOthers[id] = nil
-			local piece = GarbageVisibility.getPiece(id)
-			if piece then
-				-- Released: let it fall and settle on our side too.
-				setPieceAnchored(piece, false)
-				lastTouched[id] = os.clock()
-			end
-		end
-	end
-	if surfaceId then
+	-- A party member: ours is anchored and driven by their relay for as long as it's in their hands.
+	if holding then
 		carriedByOthers[surfaceId] = player
 		local piece = GarbageVisibility.getPiece(surfaceId)
 		if piece then
@@ -810,23 +957,32 @@ local function onCarryChanged(player: Player, surfaceId: string?)
 		if hovered and hovered == GarbageVisibility.getPiece(surfaceId) then
 			setHovered(nil)
 		end
+	elseif carriedByOthers[surfaceId] == player then
+		carriedByOthers[surfaceId] = nil
+		local piece = GarbageVisibility.getPiece(surfaceId)
+		if piece then
+			-- Released: let it fall and settle on our side too.
+			setPieceAnchored(piece, false)
+		end
 	end
 end
 
--- Stream the carried piece's position to the rest of the party, throttled -- it's a follow, not a
--- frame-exact mirror.
-local function relay(garbage: PVInstance, surfaceId: string)
+-- Stream one carried piece's position to the rest of the party, throttled -- it's a follow, not a
+-- frame-exact mirror. The throttle is per piece and widened by how many we're holding, so an armful
+-- costs the same traffic as a single piece rather than three times it.
+local function relay(entry: Held)
 	local now = os.clock()
-	if now - lastRelayAt < RELAY_INTERVAL then
+	if now - entry.relayAt < RELAY_INTERVAL * #held then
 		return
 	end
-	local pivot = garbage:GetPivot()
-	if lastRelayPosition and (pivot.Position - lastRelayPosition).Magnitude < RELAY_MIN_DISTANCE then
+	local pivot = entry.piece:GetPivot()
+	local last = entry.relayPosition
+	if last and (pivot.Position - last).Magnitude < RELAY_MIN_DISTANCE then
 		return
 	end
-	lastRelayAt = now
-	lastRelayPosition = pivot.Position
-	GarbageMove:FireServer(surfaceId, pivot)
+	entry.relayAt = now
+	entry.relayPosition = pivot.Position
+	GarbageMove:FireServer(entry.id, pivot)
 end
 
 -- Is this piece close enough to be OUTLINED? The aim ray below reaches the full pickup range (what
@@ -840,11 +996,55 @@ local function withinHoverRange(piece: PVInstance): boolean
 	return (from - position).Magnitude <= Config.GarbageHoverRange
 end
 
--- Per frame: outline what we're aiming at, or aim the drag holding what we're carrying.
+-- The slot directions for an armful of `count`: the hand-tuned arrangement if there is one, else an
+-- even ring built from the top and cached. The fallback exists so that raising
+-- Config.GarbageCarryLimit past the written layouts still holds the extra pieces properly spaced
+-- rather than leaving them undriven in mid-air.
+local function slotLayout(count: number): { Vector2 }
+	local layout = SLOT_LAYOUTS[count]
+	if layout then
+		return layout
+	end
+	local built: { Vector2 } = {}
+	for index = 1, count do
+		local angle = math.pi / 2 - (index - 1) * (2 * math.pi / count)
+		table.insert(built, Vector2.new(math.cos(angle), math.sin(angle)))
+	end
+	SLOT_LAYOUTS[count] = built
+	return built
+end
+
+-- How far out the ring has to sit to keep `count` pieces clear OF EACH OTHER, given the biggest of
+-- them reaches `maxRadius` from its centre to a corner. `count` slots evenly spaced round a circle
+-- of radius R leave 2*R*sin(pi/count) between neighbours, and that has to cover both their
+-- half-widths plus the gap; turned around, R = (2*maxRadius + gap) / (2*sin(pi/count)).
+--
+-- Nothing to ask of a LONE piece -- it has no neighbour to clear, so the crosshair rule alone places
+-- it (see onRenderStepped), which is what lets it sit just above the crosshair instead of out at
+-- whatever radius three pieces would have needed.
+--
+-- Deliberately conservative, unlike the crosshair rule: `maxRadius` is half the piece's LONGEST
+-- side, because two neighbours turn with the camera and past each other, so the figure has to hold
+-- whichever way they end up facing. Still sized off the pieces themselves rather than fixed, for the
+-- same reason the shredder's queue is: fixed spacing either overlaps three bin bags or flings three
+-- crushed cans out to the edges of the screen.
+local function slotSeparation(count: number, maxRadius: number): number
+	if count < 2 then
+		return 0
+	end
+	return (2 * maxRadius + Config.GarbageCarryGapStuds) / (2 * math.sin(math.pi / count))
+end
+
+-- Per frame: outline what we're aiming at, and aim the drags holding what we're carrying. Both, not
+-- either -- with room left in our hands the player is still hunting for the next piece while three
+-- are floating around their crosshair.
 local function onRenderStepped()
-	local garbage = carried
-	local surfaceId = carriedId
-	if not garbage or not surfaceId then
+	if handsFull() then
+		-- Nothing more can be taken, so nothing is on offer: the button reads "drop" and no piece
+		-- lights up under the crosshair.
+		setAimed(nil)
+		setHovered(nil)
+	else
 		-- ONE aim ray, cast to the longer PICKUP range, answers both questions: what the interact
 		-- button would take (anything the crosshair is on), and what to outline (the same piece, but
 		-- only once it's inside the shorter hover range). Casting twice down the same pixel would only
@@ -856,51 +1056,106 @@ local function onRenderStepped()
 		-- floor beside us is offered without having to aim down at it. See findNearest.
 		local target = if aimed and withinHoverRange(aimed) then aimed else nil
 		setHovered(target or findNearest(pickupRange()))
-		return
 	end
 
-	-- Hands full: nothing is on offer, so the button reads as "drop" rather than "pick up".
-	setAimed(nil)
-
-	-- The job (or the piece) can end under us; the server drops the carry, but stop driving it the
-	-- moment it's gone rather than waiting for the round trip.
-	if not garbage.Parent or not activeJob() then
+	local count = #held
+	-- The job can end under us; the server drops the carry, but stop driving it the moment it's gone
+	-- rather than waiting for the round trip.
+	if count == 0 or not activeJob() then
 		return
 	end
-
-	local position = alignPosition
-	local orientation = alignOrientation
-	if not position or not orientation then
-		return
-	end
+	local layout = slotLayout(count)
 
 	local ray = aimRay()
-	if not ray then
+	local camera = Workspace.CurrentCamera
+	if not ray or not camera then
 		return
 	end
 
-	-- Hold the piece at the carry distance, but never PAST a surface: if the aim ray hits something
-	-- closer than that (the floor when looking down, a wall when facing one), the carry point stops
-	-- short of it. Otherwise the target sits inside the geometry and the constraint grinds the piece
-	-- into it until it pops through -- which is how carried garbage ends up under the map.
+	-- The centre the ring is drawn about: the carry distance down the aim ray, but never PAST a
+	-- surface. If the ray hits something closer than that (the floor when looking down, a wall when
+	-- facing one), the centre stops short of it -- otherwise it sits inside the geometry and the
+	-- constraints grind the load into it until it pops through, which is how carried garbage ends up
+	-- under the map.
+	local origin = ray.Origin
 	local direction = ray.Direction.Unit
 	local distance = Config.GarbageCarryDistance
-	local blocked = Workspace:Raycast(ray.Origin, direction * distance, carryRayParams)
+	local blocked = Workspace:Raycast(origin, direction * distance, rayParams)
 	if blocked then
 		distance = math.max(blocked.Distance - CARRY_SURFACE_BUFFER, CARRY_MIN_DISTANCE)
 	end
-	position.Position = ray.Origin + direction * distance
-	-- Turn the piece with the camera (about world up) from the yaw it was picked up at, keeping its
-	-- authored tilt intact.
+	local centre = origin + direction * distance
+
+	-- The ring is laid out in the CAMERA's own right/up, so it stays put on screen (a slot "above the
+	-- crosshair" is above it however the player is looking) and never rolls.
+	local frame = camera.CFrame
+	local right, up = frame.RightVector, frame.UpVector
+
 	local yaw = math.atan2(-direction.X, -direction.Z)
-	orientation.CFrame = CFrame.Angles(0, yaw - carriedYaw, 0) * carriedRotation
 
-	relay(garbage, surfaceId)
+	-- Work the ring's radius out before placing anything, because it's ONE radius for the whole ring:
+	-- spacing each piece at its own distance would put two small ones close enough to touch as soon
+	-- as either turned, and would have an armful sitting at three different depths from the crosshair.
+	--
+	-- Two demands, and the ring takes whichever is larger:
+	--   * CLEAR OF THE CROSSHAIR. The centre of the screen is what a pickup aims down, so each piece
+	--     has to clear it by its own reach TOWARD it -- the exact half-extent along the direction that
+	--     piece sits in, so a lone piece hovers just above the crosshair by its own half-height
+	--     however long it happens to be.
+	--   * CLEAR OF EACH OTHER (slotSeparation), which is nothing at all for a single piece.
+	table.clear(slotDirections)
+	table.clear(slotRotations)
+	local clear = 0
+	local widest = 0
+	for index, entry in held do
+		local offset = layout[index]
+		-- The layout's directions are unit vectors and the camera's axes orthonormal, so this is too.
+		local towards = right * offset.X + up * offset.Y
+		local rotation = CFrame.Angles(0, yaw - entry.yaw, 0) * entry.rotation
+		slotDirections[index] = towards
+		slotRotations[index] = rotation
+		clear = math.max(clear, halfExtentAlong(entry.size, rotation, towards) + Config.GarbageCarryClearStuds)
+		widest = math.max(widest, math.max(entry.size.X, entry.size.Y, entry.size.Z) / 2)
+	end
+	local radius = math.max(clear, slotSeparation(count, widest))
 
-	-- Wedged and left behind (see MAX_CARRY_DISTANCE): let go rather than tow it through the level.
 	local from = rootPosition()
-	if from and (from - garbage:GetPivot().Position).Magnitude > MAX_CARRY_DISTANCE then
-		request(nil)
+
+	for index, entry in held do
+		local piece = entry.piece
+		local align, orientation = entry.align, entry.orientation
+		if not piece.Parent or not align or not orientation then
+			continue
+		end
+
+		local target = centre + slotDirections[index] * radius
+		-- Each slot gets the same treatment the centre did, along its OWN line from the camera: with
+		-- the ring spread out, a piece off to one side can be inside a wall the middle of the screen
+		-- is nowhere near.
+		local delta = target - origin
+		local reach = delta.Magnitude
+		if reach > CARRY_MIN_DISTANCE then
+			local towards = delta / reach
+			local hit = Workspace:Raycast(origin, towards * reach, rayParams)
+			if hit then
+				target = origin + towards * math.max(hit.Distance - CARRY_SURFACE_BUFFER, CARRY_MIN_DISTANCE)
+			end
+		end
+
+		align.Position = target
+		-- Turned with the camera (about world up) from the yaw it was picked up at, keeping its
+		-- authored tilt intact. Worked out in the pass above, since the spacing depends on it: which
+		-- way a piece faces is what decides how far it reaches toward the crosshair.
+		orientation.CFrame = slotRotations[index]
+
+		relay(entry)
+
+		-- Wedged and left behind (see MAX_CARRY_DISTANCE): let go of THAT piece rather than tow it
+		-- through the level -- the rest of the armful is fine and stays in our hands. The allowance
+		-- grows with the ring, since a slot is that much further out than the carry point itself.
+		if from and (from - piece:GetPivot().Position).Magnitude > MAX_CARRY_DISTANCE + radius then
+			request(entry.id, true)
+		end
 	end
 end
 
@@ -914,7 +1169,7 @@ local function sweepIdlePieces()
 		if not touched or now - touched < Config.GarbageResetSeconds then
 			continue
 		end
-		if surfaceId == carriedId or carriedByOthers[surfaceId] then
+		if isHeld(surfaceId) or carriedByOthers[surfaceId] then
 			continue
 		end
 		local home = GarbageVisibility.getHome(surfaceId)
@@ -931,7 +1186,7 @@ local function sweepIdlePieces()
 	end
 end
 
--- Equipping a tool drops the piece: the two are mutually exclusive.
+-- Equipping a tool drops everything held: the two are mutually exclusive.
 local boundTools: { [Tool]: boolean } = {}
 
 local function tryBindTool(inst: Instance)
@@ -940,7 +1195,7 @@ local function tryBindTool(inst: Instance)
 	end
 	boundTools[inst] = true
 	inst.Equipped:Connect(function()
-		if carriedId then
+		if #held > 0 then
 			request(nil)
 		end
 	end)
@@ -957,23 +1212,27 @@ function GarbageCarryController.init()
 	-- One reusable outline, re-adorned per hover (see HoverHighlight).
 	highlight = HoverHighlight.new("GarbageHover")
 
-	GarbageCarry.OnClientEvent:Connect(function(player, surfaceId, businessId)
+	GarbageCarry.OnClientEvent:Connect(function(player, surfaceId, businessId, holding)
 		if typeof(player) ~= "Instance" or not player:IsA("Player") then
 			return
 		end
-		if surfaceId ~= nil and type(surfaceId) ~= "string" then
+		if type(surfaceId) ~= "string" then
 			return
 		end
 		-- A PICKUP is only honoured on the job it was made on. Attribute replication (which is how we
 		-- learn a job started or ended) and this remote are separate channels with no ordering between
 		-- them, so a pickup sent just before a job ended can arrive after we've torn that job down and
 		-- built the next job's clones -- and acting on it would drag the fresh clone of that surfaceId
-		-- into someone's hands the moment the new job began, with nobody having touched it. A DROP is
+		-- into someone's hands the moment the new job began, with nobody having touched it. A RELEASE is
 		-- never filtered: letting go has to apply no matter when it lands.
-		if surfaceId and businessId ~= activeJob() then
-			return
+		if holding == true then
+			if businessId ~= activeJob() then
+				return
+			end
+			onCarryChanged(player, surfaceId, true)
+		else
+			onCarryChanged(player, surfaceId, false)
 		end
-		onCarryChanged(player, surfaceId)
 	end)
 
 	-- A party member's carried piece moved: put OUR clone of it there. It's anchored for as long as

@@ -15,7 +15,10 @@
 --   * WHO HOLDS WHAT, per session. A piece is identified by its surfaceId (every session's clone of
 --     a piece shares it), so one member of a party can't grab what another member is already
 --     holding. Sessions are independent: two sessions may hold "the same" piece at once, because
---     they are physically different objects.
+--     they are physically different objects. A player may hold up to Config.GarbageCarryLimit
+--     pieces at a time -- an ORDERED list, because the client rings them around the crosshair in
+--     the order they were picked up and every member has to lay the same piece out in the same
+--     slot.
 --   * THE RELAY. The carrier streams its clone's CFrame (GarbageMove); we forward it to the OTHER
 --     members of their session, who drive their own clone from it. That's what lets a party watch a
 --     piece move in a member's hands. It never leaves the session, so nobody else's garbage twitches.
@@ -38,9 +41,13 @@ local JobService = require(script.Parent.JobService)
 local PlayerCollisionService = require(script.Parent.PlayerCollisionService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
--- Client -> server: a surfaceId asks to pick that piece up, nil asks to let go.
+-- Client -> server: (surfaceId, release). A surfaceId alone asks to pick that piece up; with
+-- `release` true it asks to let go of that ONE piece (a wedged piece the carrier's own guard gave
+-- up on); no surfaceId at all asks to let go of EVERYTHING (the drop button, a click on empty air).
 local CarryGarbage = Remotes:WaitForChild("CarryGarbage") :: RemoteEvent
--- Server -> clients on the session: (carrier, surfaceId-or-nil).
+-- Server -> clients on the session: (carrier, surfaceId, businessId?, holding). One message per
+-- PIECE either way -- letting go of three pieces is three releases -- so a client never has to
+-- guess which of a carrier's pieces a message was about.
 local GarbageCarry = Remotes:WaitForChild("GarbageCarry") :: RemoteEvent
 -- Client -> server -> the rest of the session: (carrier, surfaceId, cframe), the carried piece's
 -- live position.
@@ -54,6 +61,13 @@ local RANGE_TOLERANCE = 3
 -- Collision group the garbage clones live in (set client-side, on the clones). Registered here --
 -- and paired against the players' group -- so the rule is declared once, on the authority.
 local GARBAGE_GROUP = "CleanableGarbage"
+-- The group a piece is moved into WHILE IT'S HELD, and back out of when it's let go. It behaves
+-- exactly like the one above -- solid against the building, transparent to characters -- except
+-- that it doesn't collide with ITSELF: a player holding three pieces has them ringed around the
+-- crosshair a fixed distance apart, and two of them colliding would have the constraints shoving
+-- each other out of their slots for as long as they were held. The pairing is declared here for
+-- the same reason the one above is: the clients only set names, the authority owns the rules.
+local CARRIED_GROUP = "CarriedGarbage"
 
 local GarbageCarryService = {}
 
@@ -74,10 +88,12 @@ type SessionState = {
 }
 local sessions: { [any]: SessionState } = setmetatable({}, { __mode = "k" }) :: any
 
--- What each player is holding right now (a surfaceId), and the session they were holding it on --
--- remembered because a drop usually happens as they LEAVE the job, when the session is gone from
--- JobService and we could no longer find the state to clear.
-local carrying: { [Player]: string } = {}
+-- What each player is holding right now (surfaceIds, oldest first -- the client's slot order), and
+-- the session they were holding them on -- remembered because a drop usually happens as they LEAVE
+-- the job, when the session is gone from JobService and we could no longer find the state to clear.
+-- Both entries are dropped entirely once a player's hands are empty, so an idle player costs
+-- nothing here.
+local carrying: { [Player]: { string } } = {}
 local carriedOn: { [Player]: SessionState } = {}
 
 -- Who was told about each carrier's pickup, so the drop reaches exactly the same people even after
@@ -140,9 +156,15 @@ end
 --
 -- Drops carry no stamp and are never filtered: letting go must always apply, whatever it arrives
 -- alongside.
-local function broadcast(listeners: { Player }, player: Player, surfaceId: string?, businessId: string?)
+local function broadcast(
+	listeners: { Player },
+	player: Player,
+	surfaceId: string,
+	businessId: string?,
+	holding: boolean
+)
 	for _, member in listeners do
-		GarbageCarry:FireClient(member, player, surfaceId, businessId)
+		GarbageCarry:FireClient(member, player, surfaceId, businessId, holding)
 	end
 end
 
@@ -156,31 +178,59 @@ local function sessionAudience(player: Player): { Player }
 	return listeners
 end
 
--- Let go of whatever `player` is carrying and publish the drop. Their client lets its clone fall
--- under its own physics; the other members' clients do the same with theirs. Safe to call when
--- they're carrying nothing.
-function GarbageCarryService.drop(player: Player)
-	local surfaceId = carrying[player]
-	if not surfaceId then
-		return
-	end
-	carrying[player] = nil
-
-	local state = carriedOn[player]
-	carriedOn[player] = nil
-	if state and state.carriedBy[surfaceId] == player then
-		state.carriedBy[surfaceId] = nil
-	end
-
-	-- Tell whoever heard the pickup, plus anyone on the session now (a member who joined since).
-	local listeners = audience[player] or {}
-	audience[player] = nil
+-- Everyone who has to hear about `player` letting go: whoever heard the pickup, plus anyone on the
+-- session now (a member who joined since).
+local function releaseAudience(player: Player): { Player }
+	-- A COPY: the stored audience is the one their next release will start from too, and letting a
+	-- release grow it would have it drifting further from "who heard the pickup" with every piece.
+	local stored = audience[player]
+	local listeners: { Player } = if stored then table.clone(stored) else {}
 	for _, member in sessionAudience(player) do
 		if not table.find(listeners, member) then
 			table.insert(listeners, member)
 		end
 	end
-	broadcast(listeners, player, nil)
+	return listeners
+end
+
+-- Let go of ONE of the pieces `player` is carrying and publish that release. Their client lets its
+-- clone fall under its own physics; the other members' clients do the same with theirs. No-op if
+-- they aren't holding this piece.
+local function release(player: Player, surfaceId: string)
+	local list = carrying[player]
+	local index = if list then table.find(list, surfaceId) else nil
+	if not list or not index then
+		return
+	end
+	table.remove(list, index)
+
+	local state = carriedOn[player]
+	if state and state.carriedBy[surfaceId] == player then
+		state.carriedBy[surfaceId] = nil
+	end
+
+	local listeners = releaseAudience(player)
+	broadcast(listeners, player, surfaceId, nil, false)
+
+	-- Hands empty: forget them entirely rather than leaving an empty list behind.
+	if #list == 0 then
+		carrying[player] = nil
+		carriedOn[player] = nil
+		audience[player] = nil
+	end
+end
+
+-- Let go of EVERYTHING `player` is carrying. Safe to call when they're carrying nothing. This is
+-- what a job change, a respawn or a disconnect does, and what the drop button asks for.
+function GarbageCarryService.drop(player: Player)
+	local list = carrying[player]
+	if not list then
+		return
+	end
+	-- Over a copy: `release` mutates the list it's given.
+	for _, surfaceId in table.clone(list) do
+		release(player, surfaceId)
+	end
 end
 
 -- Let go of a specific piece on `player`'s session, whoever is holding it (which may be a party
@@ -190,7 +240,9 @@ function GarbageCarryService.dropPiece(player: Player, surfaceId: string)
 	local state = sessionFor(player)
 	local holder = state and state.carriedBy[surfaceId]
 	if holder then
-		GarbageCarryService.drop(holder)
+		-- Only THIS piece: the shredder swallowing one of a carrier's three doesn't cost them the
+		-- other two.
+		release(holder, surfaceId)
 	end
 end
 
@@ -215,12 +267,17 @@ local function knownPosition(state: SessionState, businessId: string, surfaceId:
 end
 
 local function tryPickUp(player: Player, surfaceId: string)
-	-- One piece at a time: a request to grab another is a request to swap, so let go first.
-	GarbageCarryService.drop(player)
-
 	local businessId = JobService.getActiveJob(player)
 	local state = sessionFor(player)
 	if not businessId or not state then
+		return
+	end
+	-- Hands full, or already holding this very piece. Refused rather than swapped (which is what a
+	-- second pickup used to mean, back when the limit was one): with room for three there is no
+	-- sensible piece to give up in exchange, and the client stops asking at the same count anyway --
+	-- this is the authority's copy of that rule, not a race the player can win.
+	local list = carrying[player]
+	if list and (#list >= Config.GarbageCarryLimit or table.find(list, surfaceId)) then
 		return
 	end
 	-- Spoken for by a party member. (Another SESSION holding "the same" piece is irrelevant -- their
@@ -244,12 +301,16 @@ local function tryPickUp(player: Player, surfaceId: string)
 
 	state.carriedBy[surfaceId] = player
 	state.lastCarrier[surfaceId] = player
-	carrying[player] = surfaceId
+	local held = list or {}
+	carrying[player] = held
+	-- Appended, never inserted: the client's ring is laid out in this order, so the piece just
+	-- grabbed takes the newest slot on every member's screen.
+	table.insert(held, surfaceId)
 	carriedOn[player] = state
 
 	local listeners = sessionAudience(player)
 	audience[player] = listeners
-	broadcast(listeners, player, surfaceId, businessId)
+	broadcast(listeners, player, surfaceId, businessId, true)
 end
 
 -- Find every authored piece: remember where it belongs and pin it. Also catches pieces that
@@ -271,14 +332,25 @@ function GarbageCarryService.init()
 	pcall(function()
 		PhysicsService:RegisterCollisionGroup(GARBAGE_GROUP)
 	end)
+	pcall(function()
+		PhysicsService:RegisterCollisionGroup(CARRIED_GROUP)
+	end)
 	PhysicsService:CollisionGroupSetCollidable(GARBAGE_GROUP, PlayerCollisionService.GROUP, false)
+	PhysicsService:CollisionGroupSetCollidable(CARRIED_GROUP, PlayerCollisionService.GROUP, false)
+	-- Held pieces pass through each other (see CARRIED_GROUP) but still shove the loose garbage on
+	-- the floor about, exactly as a single carried piece always has.
+	PhysicsService:CollisionGroupSetCollidable(CARRIED_GROUP, CARRIED_GROUP, false)
 
 	registerAll()
 
-	CarryGarbage.OnServerEvent:Connect(function(player, surfaceId)
-		-- Anything that isn't a surfaceId = "let go".
+	CarryGarbage.OnServerEvent:Connect(function(player, surfaceId, releasing)
+		-- Anything that isn't a surfaceId = "let go of everything".
 		if type(surfaceId) ~= "string" then
 			GarbageCarryService.drop(player)
+			return
+		end
+		if releasing == true then
+			release(player, surfaceId)
 			return
 		end
 		tryPickUp(player, surfaceId)
@@ -291,7 +363,8 @@ function GarbageCarryService.init()
 			return
 		end
 
-		local holding = carrying[player] == surfaceId
+		local list = carrying[player]
+		local holding = list ~= nil and table.find(list, surfaceId) ~= nil
 		local state = if holding then carriedOn[player] else sessionFor(player)
 		if not state then
 			return

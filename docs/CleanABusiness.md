@@ -789,7 +789,9 @@ ids), the garbage carry tunables `GarbagePickupRange` (13) / `GarbagePickupRange
 extra reach on touch only — aiming with a finger is imprecise, and since the server can't verify a
 device it allows the bonus for everyone) / `GarbageHoverRange` (13, its own knob so
 the outline can be pulled in independently) / `GarbageCarryDistance` (7, how far out front a held
-piece floats) / `GarbageResetSeconds` (60), the shredder's layout
+piece floats) / `GarbageCarryLimit` (3, pieces held at once) / `GarbageCarryClearStuds` (0.9, air
+between a held piece and the crosshair) / `GarbageCarryGapStuds` (0.6, air between two held pieces) /
+`GarbageResetSeconds` (60), the shredder's layout
 `ShredderModelName`/`ShredderHitboxName`/`ShredderEntryPartName`/`ShredderExitPartName` and its three
 animation beats `GarbageShredEntrySeconds` (0.3) / `GarbageShredHoldSeconds` (0.45) /
 `GarbageShredDropSeconds` (2) — shared because the server waits out the same total before counting
@@ -965,7 +967,8 @@ aim ray excludes the player's own character and every business's spill folders.
 
 ### Garbage carrying (implemented)
 The **fifth** cleanable kind, and the only one with no tool: the player walks up to a piece of
-litter, clicks it, and **carries** it in front of them. Getting rid of it is *Garbage shredding*,
+litter, clicks it, and **carries** it — up to **`GarbageCarryLimit`** (**3**) pieces at once, ringed
+around the crosshair rather than stacked in front of it. Getting rid of it is *Garbage shredding*,
 below.
 
 - A piece of **garbage** is a **direct child of** a business's `CleanableGarbage` folder, at:
@@ -991,9 +994,33 @@ below.
     every other session. **Rebuilding the clones IS the job-start reset**, the same fresh slate
     re-accepting a job gives the stains and webs.
 
+- **An armful, ringed round the crosshair.** Up to **`GarbageCarryLimit`** pieces are held at once,
+  each with its own drag, and each aimed at a **slot** in a ring centred `GarbageCarryDistance` studs
+  down the aim ray: **one** sits above the crosshair, **two** split either side of it, **three** take
+  an equilateral triangle about it (`SLOT_LAYOUTS`; beyond that, an even ring is generated).
+  - The centre of the screen is what a pickup aims down, so it is the one place a held piece never
+    sits. Held pieces are also filtered **out of the aim ray** and out of every pickup search, so an
+    armful never blocks, outlines, or gets re-grabbed as the player hunts for the next piece.
+  - The ring's radius is computed per armful from the pieces' **own sizes**, as the larger of two
+    demands. **Clear of the crosshair**: each piece's *exact* half-extent along the direction its
+    slot lies in (`halfExtentAlong` — the box support sum, the same trick the shredder queue's
+    `worldHeight` uses) plus `GarbageCarryClearStuds` (**0.25**). Measuring the direction that
+    actually matters — the *height* of a piece hovering above the crosshair, not its longest side —
+    is what lets a lone piece sit **just** above the crosshair rather than parked near the top of
+    the screen. **Clear of each other** (`slotSeparation`): wide enough that `2·R·sin(π/n)` between
+    neighbours covers their half-widths plus `GarbageCarryGapStuds`, which is conservative (half the
+    longest side) because neighbours turn past each other — and is **zero for a single piece**, so
+    the lone slot is placed by the crosshair rule alone. Fixed spacing would either overlap three
+    bin bags or fling three crushed cans off the screen.
+  - While held, a piece moves into a **`CarriedGarbage`** collision group that is non-collidable
+    **with itself** (and with players), so the pieces in a ring pass through each other instead of
+    barging one another out of their slots. It goes back to `CleanableGarbage` on release.
+  - Each slot is raycast-clamped along **its own** line from the camera, not just the ring's centre:
+    spread out, a piece off to one side can be inside a wall the middle of the screen misses.
+
 - **Physics, not teleporting.** A carried piece is **dragged** by an `AlignPosition` +
-  `AlignOrientation` pair toward a point `GarbageCarryDistance` studs down the crosshair ray,
-  keeping its authored tilt and turning with the camera. Dragging rather than writing its `CFrame`
+  `AlignOrientation` pair toward its slot, keeping its authored tilt and turning with the camera.
+  Dragging rather than writing its `CFrame`
   is what makes the building's collisions apply — shove a piece at a wall and it stops at the wall
   instead of passing through and stranding itself out of bounds. Guards, each learned from a real
   failure:
@@ -1004,8 +1031,9 @@ below.
     piece through the floor.
   - `MaxVelocity` is capped at **35**; faster than that, a small part clears a thin floor in a
     single physics step and tunnels through it.
-  - A piece that ends up more than `GarbageCarryDistance + 15` studs away (wedged behind geometry
-    while the player walks off) is **dropped automatically** rather than towed through the level.
+  - A piece that ends up more than `GarbageCarryDistance + 15` studs (plus the ring's radius) away —
+    wedged behind geometry while the player walks off — is **dropped automatically** rather than
+    towed through the level. Only *that* piece: the rest of the armful stays in hand.
   - Clones sit in a **`CleanableGarbage` collision group**, registered in the place and paired
     non-collidable against `PlayerCollisionService.GROUP` — so garbage collides with the building
     but **never with a character**: it can't shove a player, trap them, or be stood on.
@@ -1022,7 +1050,12 @@ below.
   behind the wall would still be the one being *offered*. That fallback is a *suggestion only* — a click is always
   the piece the crosshair is on, never whatever is nearest, so aiming stays exact and the outline can
   legitimately point at something a click wouldn't take. A click sends **`CarryGarbage`** with the
-  `surfaceId` (out to the longer `GarbagePickupRange`), or `nil` to let go. On **touch** the ray goes
+  `surfaceId` (out to the longer `GarbagePickupRange`); `(surfaceId, true)` releases that one piece,
+  and no `surfaceId` at all releases **everything** held.
+  **Picking up comes first**: a click that lands on a free piece takes it whether the player's hands
+  are empty or already hold two, and only a click on *nothing* means "let go". So an armful is
+  filled by clicking garbage and emptied by clicking away from it — never by putting a piece down
+  first. On **touch** the ray goes
   through the tapped pixel instead, and a tap that hits nothing is forgiven by a ring of 8 samples
   around it (`TAP_TOLERANCE_*`, radius `max(22px, 3.5% of viewport height)`); when that ring catches
   **several** pieces — a heap in a corner — the one **nearest the player** wins, rather than whichever
@@ -1033,17 +1066,25 @@ below.
   hover, and above all a mobile **tap**, which is cast through the pressed pixel rather than the
   crosshair — pass straight through it to what's behind. Done once, in the one place that owns the
   floating tool, rather than as a filter each aiming controller has to remember.
-  `GarbageCarryService` validates the active job, that no **party member** already holds that
+  `GarbageCarryService` validates the active job, that the player isn't already at
+  `GarbageCarryLimit` (or holding that very piece), that no **party member** already holds that
   `surfaceId`, and the range — measured against the last position that *session* reported, falling
-  back to the authored home — then publishes **`GarbageCarry`** `(carrier, surfaceId?, businessId?)`
-  to the session. Nothing moves until that confirmation arrives. The `businessId` **stamps a pickup
-  with the job it was made on**, and a client ignores a pickup that doesn't match the job it's on:
+  back to the authored home — then publishes **`GarbageCarry`**
+  `(carrier, surfaceId, businessId?, holding)` to the session. **One message per piece** either way,
+  so letting go of three is three releases and no client has to guess which piece was meant; the
+  server keeps each player's held `surfaceId`s as an **ordered list**, which is the order every
+  member lays the ring out in. A second pickup is **refused, not swapped** — with room for three
+  there is nothing to swap for. Nothing moves until that confirmation arrives. The `businessId`
+  **stamps a pickup with the job it was made on**, and a client ignores a pickup that doesn't match
+  the job it's on:
   attributes (how a client learns a job started/ended) and remotes are separate replication channels
   with no ordering between them, so a pickup sent just before a job ends can arrive after the next
   job's clones exist — and acting on it would drop that piece into the carrier's hands the instant
   the new job began. Drops are unstamped and always applied.
-- **Party sharing.** A clone can't replicate itself, so the carrier streams its piece's CFrame on
-  **`GarbageMove`** (20 Hz, throttled by distance) and the server forwards it to the **other**
+- **Party sharing.** A clone can't replicate itself, so the carrier streams each held piece's CFrame
+  on **`GarbageMove`** (throttled by distance, and per piece at `1/30 s × pieces held` — so an
+  armful of three costs the same traffic as one piece, not three times it) and the server forwards
+  it to the **other**
   members of that session only. They anchor their own clone of that `surfaceId` while it's in
   someone else's hands and drive it from the relay, then release it to local physics on the drop —
   so a dropped piece can settle a stud or two differently per screen, the accepted cost of local
@@ -1052,9 +1093,10 @@ below.
   believe the piece is up where it was released — and refuse a legitimate re-grab from beside where
   it landed. The client therefore sends **one** final `GarbageMove` 2s after its own drop, which
   the server accepts only from that piece's **last carrier**, and only while nobody else holds it.
-- **Hands-full.** Picking up **unequips** any held tool, and equipping a tool **drops** the piece —
-  both directions, so the carry and the cleaning tools can never overlap. A carry is also dropped
-  automatically on job end/switch, respawn/death, and disconnect.
+- **Hands-full.** Picking up **unequips** any held tool, and equipping a tool **drops everything
+  held** — both directions, so the carry and the cleaning tools can never overlap. Carries are also
+  dropped automatically on job end/switch, respawn/death, and disconnect. The shredder swallowing a
+  piece releases **only that piece** (`dropPiece`), so walking an armful in feeds it one at a time.
 - **Idle reset.** A piece untouched for `GarbageResetSeconds` (**60s**) returns to its authored
   home (velocity zeroed, or it arrives still rolling). Client-side, since the pieces are local.
 - **Session state** lives in a **weak-keyed** table on the shared `JobServer`, so a finished
@@ -1306,7 +1348,7 @@ ServerScriptService/
   Modules/DecalCleaningService.luau  server-authoritative broom timer; reports to job; hide via DecalCleaned to every session member
   Modules/SpillCleaningService.luau  validates client CleanSpill reports against the active job, pays the flat per-spill reward, records in JobServer (deduped), relays SpillCleaned to the other session members
   Modules/WebCleaningService.luau    server-authoritative vacuum timer (mirrors DecalCleaningService); validates CleanWeb, runs UseTime, pays flat per-web reward, records in JobServer, hide via WebCleaned to every session member; parks boundary clicks (pendingClick)
-  Modules/GarbageCarryService.luau   who holds which piece of garbage, PER SESSION (keyed by surfaceId on a weak-keyed table off the JobServer): validates CarryGarbage against the active job / party-member conflict / range, publishes GarbageCarry, relays the carrier's GarbageMove to the rest of their session (plus the post-drop settle report), drops on job change / respawn / leave. Pins the AUTHORED pieces still (anchored, non-colliding) as clone templates and registers the CleanableGarbage collision group non-collidable vs PlayerCollisionService.GROUP. Moves no instances -- the carried thing is a client-local clone
+  Modules/GarbageCarryService.luau   who holds which pieces of garbage (up to GarbageCarryLimit each, an ordered list), PER SESSION (keyed by surfaceId on a weak-keyed table off the JobServer): validates CarryGarbage against the active job / carry limit / party-member conflict / range, publishes GarbageCarry per piece (holding true|false), relays the carrier's GarbageMove to the rest of their session (plus the post-drop settle report), releases one piece (shredder, wedged) or all (job change / respawn / leave). Pins the AUTHORED pieces still (anchored, non-colliding) as clone templates and registers the CleanableGarbage + CarriedGarbage collision groups non-collidable vs PlayerCollisionService.GROUP (and CarriedGarbage vs itself, so an armful can't barge itself apart). Moves no instances -- the carried thing is a client-local clone
   Modules/GarbageShredService.luau   the CLEAN half of garbage: validates a client's ShredGarbage report (on that job, a real authored piece, not already cleaned, the building has a shredder), dedupes the duplicate reports a party's clones produce via a weak-keyed per-session in-flight set, drops it from its carrier's hands, confirms with GarbageCleaned to every session member, then -- after the animation's own length -- pays 4 XP / 4 Cash and calls JobServer.markGarbageCleaned
   Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService
   Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups; rewardSilently() pays the same with no popup/chime (used by the per-second wall wash, which would otherwise spam them)
@@ -1343,13 +1385,13 @@ StarterPlayer/StarterPlayerScripts/
   Modules/CleanableSurface.luau    dirt-overlay OOP class
   Modules/PressureWasherController.luau   tool input + raycast + cleaning; fires a VfxManager.cleanBurst sprite every 0.2s while dirt is actually coming off
   Modules/WashJoystickController.luau  TOUCH ONLY, shown only while the pressure washer is equipped: ScreenGui.JoystickRange.WashButton is the washer's trigger, held -> PressureWasherController.setFiring. Left Active = FALSE on purpose (the one control here that is): an active GuiButton swallows its touch, and the default camera's pan region only sees touches the GUI didn't take -- holding the trigger would freeze the camera. Inactive, the swipe still pans, and the press is picked up off UserInputService and hit-tested with GetGuiObjectsAtPosition. Nothing here touches the camera. The knob follows the thumb inside its ring (clamped to the room left in it) and snaps back to its authored position on release
-  Modules/InteractButtonController.luau  TOUCH ONLY: ScreenGui.InteractButton picks up whatever the CROSSHAIR is on (GarbageCarryController.pickup) with empty hands, drops what's carried otherwise, image per state, hidden when neither
+  Modules/InteractButtonController.luau  TOUCH ONLY: ScreenGui.InteractButton picks up whatever the CROSSHAIR is on (GarbageCarryController.pickup) with EMPTY hands only; the moment anything is held it is purely DROP (all of it), even with room left in the armful -- on touch the way to take another piece is to tap that piece. Image per state, hidden when neither
   Modules/BroomController.luau     broom input + raycast + cosmetic bar (clicks gated to the active job)
   Modules/MopController.luau       mop input + raycast + client-driven spill fade (hold-to-clean, Power/sec) + persistent per-spill billboard bar; fires CleanSpill on full fade
   Modules/VacuumController.luau    vacuum input + raycast + cosmetic bar (mirrors BroomController; clicks gated to the active job); aim ray excludes spill folders; fires CleanWeb
   Modules/WebVisibility.luau       web visibility: hidden unless on the job (reparented to HiddenWebs holder); per-client hide-on-vacuum + reparent restore on redo; getWebCount / getActiveVisibleWebs
   Modules/GarbageVisibility.luau   garbage is CLONED, not shown/hidden: authored pieces go off-world permanently (AuthoredGarbage holder, home CFrame recorded) and each job gets this client's own local clones of that business's pieces, built in place in the CleanableGarbage folder so GarbageResolver still resolves them. Rebuilding them IS the job-start reset. getGarbageCount / getPiece / getPieces / getHome / hideOne / takePiece (hand the clone over WITHOUT destroying it -- the shredder's animation needs it in the world but untouchable)
-  Modules/GarbageCarryController.luau  garbage carry: white Occluded hover outline (aim first, else the nearest VISIBLE piece in reach), click to pick up / let go (CarryGarbage by surfaceId) -- the pickup ray goes through the CLICKED/TAPPED pixel, not the crosshair, so tapping away from a piece you're aiming at doesn't grab it; a TAP never DROPS (mouse click does, mobile uses a button calling .drop()) because the dynamic thumbstick and camera pan region read raw input, so gameProcessed doesn't shield them and driving/panning would otherwise let go of the piece, physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
+  Modules/GarbageCarryController.luau  garbage carry, up to GarbageCarryLimit (3) pieces at once: white Occluded hover outline (aim first, else the nearest VISIBLE piece in reach), click a piece to pick it up / click nothing to let go of everything (CarryGarbage by surfaceId; pickup always wins over dropping, so an armful is filled by clicking garbage and emptied by clicking away from it). Held pieces are ringed AROUND the crosshair -- one above it, two either side, three in a triangle (SLOT_LAYOUTS), spaced from their own sizes -- the exact half-extent toward the crosshair (halfExtentAlong) so a lone piece sits JUST above it, plus slotSeparation between neighbours -- so nothing overlaps or covers the aim point -- put in the self-non-colliding CarriedGarbage group, and filtered out of every ray and every pickup search so an armful never blocks the next grab. The pickup ray goes through the CLICKED/TAPPED pixel, not the crosshair, so tapping away from a piece you're aiming at doesn't grab it; a TAP never DROPS (mouse click does, mobile uses a button calling .drop()) because the dynamic thumbstick and camera pan region read raw input, so gameProcessed doesn't shield them and driving/panning would otherwise let go of the piece, physics drag (AlignPosition + AlignOrientation, finite force, raycast-clamped carry point, velocity capped) so the building's collisions stop a piece leaving the map; relays its CFrame to the party (GarbageMove) and drives its own clone of a member's carried piece from theirs; unequips tools on pickup + drops on equip; 60s idle reset back to the authored home
   Modules/GarbageShredController.luau  the CLEAN half of garbage: watches the active business's shredder Hitbox for one of OUR clones (ShredGarbage), and on the server's GarbageCleaned takes the clone out of GarbageVisibility, freezes it and drives its pivot p1 -> hold -> p2 with a side-to-side shake, ShredderSFX playing positionally out of the hitbox and a yellow VfxManager.shredDebris shower riding it down, until it vanishes; counts it via JobController.onGarbageCleaned and bins anything still animating when the job ends
   Modules/InventoryController.luau custom hotbar: shows ImageButton{N} per owned SlotNumber, equips on click/number key (never unequips), disables default Backpack CoreGui; a job is never held empty-handed -- it starts with the pressure washer out, and the only thing that empties the hands is carrying garbage, after which the last-held tool is put back
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown

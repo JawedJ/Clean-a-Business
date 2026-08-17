@@ -9,10 +9,16 @@
 --     Note this is the crosshair, NOT the white outline: the outline also offers the nearest piece
 --     in reach when you're not aiming at anything, and the button must never take something the
 --     player didn't point at.
---   * hands FULL -- the drop image; a press lets go.
+--   * holding ANYTHING -- the drop image; a press lets go of the lot.
 --
 -- Neither -- empty hands, crosshair on nothing -- and it's hidden, so it only ever appears when
 -- there's something for it to do.
+--
+-- The second state wins the moment the player's hands stop being empty, even though they may still
+-- have room for another piece or two (Config.GarbageCarryLimit). That's deliberate: on touch, the
+-- way to pick garbage up is to TAP the piece itself, so the button is free to be the one thing a tap
+-- can't do. Making it pick up while the player had an armful would also make it the button that
+-- can't put anything down -- exactly when they most need to.
 --
 -- TOUCH ONLY. Dropping is the reason it has to exist: a tap never drops, since the movement stick and
 -- the camera pan region arrive at GarbageCarryController as ordinary unprocessed touches (see
@@ -55,14 +61,15 @@ local InteractButtonController = {}
 -- The currently bound button, refreshed each time the ScreenGui is (re)bound.
 local button: GuiButton? = nil
 
--- Carrying wins over aiming: while our hands are full the aim target is cleared anyway, and "drop"
--- is the only thing a press could sensibly mean.
+-- Carrying wins over aiming: with anything in hand, "drop" is the only thing a press could sensibly
+-- mean -- picking the next piece up is the tap on that piece (see the header).
 local function refresh()
 	local current = button
 	if not current or not current.Parent then
 		return
 	end
 
+	-- Anything at all in hand, not a full armful: see the header.
 	local carrying = GarbageCarryController.isCarrying()
 	local show = IS_MOBILE and (carrying or GarbageCarryController.hasAimTarget())
 	current.Visible = show
