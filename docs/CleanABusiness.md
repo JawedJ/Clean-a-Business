@@ -785,11 +785,13 @@ the folder names `BusinessesFolderName`/`CleanablesFolderName`/`WallsFolderName`
 `DecalsFolderName`/`SpillsFolderName`/`WebsFolderName`/`GarbageFolderName`/`InteriorFolderName`
 (props/windows the cleaning ray ignores), `HitboxName`/`SurfaceIdAttribute` (stains/walls, and also
 the web id) + `SpillSurfaceIdAttribute`/`GarbageSurfaceIdAttribute` (the capital-S spill and garbage
-ids), the garbage carry tunables `GarbagePickupRange` (13) / `GarbagePickupRangeTouchBonus` (12,
-extra reach on touch only — aiming with a finger is imprecise, and since the server can't verify a
-device it allows the bonus for everyone) / `GarbageHoverRange` (13, its own knob so
+ids), the garbage carry tunables `GarbagePickupRange` (13, the same on **every device** — touch
+used to get a +12 bonus for finger imprecision, which the server then had to allow for everyone
+since device type is an unverifiable client claim; a finger is answered by the screen-space tap
+search instead, and the server's check now runs tight against this figure) / `GarbageHoverRange`
+(13, its own knob so
 the outline can be pulled in independently) / `GarbageCarryDistance` (7, how far out front a held
-piece floats) / `GarbageCarryLimit` (3, pieces held at once) / `GarbageCarryClearStuds` (0.9, air
+piece floats) / `GarbageCarryLimit` (3, pieces held at once) / `GarbageCarryClearStuds` (0.25, air
 between a held piece and the crosshair) / `GarbageCarryGapStuds` (0.6, air between two held pieces) /
 `GarbageResetSeconds` (60), the shredder's layout
 `ShredderModelName`/`ShredderHitboxName`/`ShredderEntryPartName`/`ShredderExitPartName` and its three
@@ -1017,6 +1019,13 @@ below.
     barging one another out of their slots. It goes back to `CleanableGarbage` on release.
   - Each slot is raycast-clamped along **its own** line from the camera, not just the ring's centre:
     spread out, a piece off to one side can be inside a wall the middle of the screen misses.
+  - Every ray here — the aim ray, the ring's clamps and `canSee` — excludes the active job's
+    **shredder markers** (`Hitbox`, `p1`, `p2`; `shredderMarkers`, resolved on job change with the
+    usual stream-in retry). Those are invisible `CanCollide = false` volumes a piece is *meant* to be
+    pushed into — the hitbox is how a piece is fed in at all — but to a ray they were ordinary
+    geometry filling the column of air above the mouth (at the gas station the hitbox spans the 2.2
+    studs sitting directly on the machine's body). Clamping to it parked the load above the mouth so
+    it would never go in, and pulled it back toward the player just for aiming at the machine.
 
 - **Physics, not teleporting.** A carried piece is **dragged** by an `AlignPosition` +
   `AlignOrientation` pair toward its slot, keeping its authored tilt and turning with the camera.

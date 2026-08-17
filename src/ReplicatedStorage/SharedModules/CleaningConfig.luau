@@ -73,16 +73,14 @@ local CleaningConfig = {
 	GarbageSurfaceIdAttribute = "SurfaceId",
 	-- How close (studs, character root -> the garbage's position) the player must be to pick a piece
 	-- up. The server re-checks this with a small tolerance for lag.
-	GarbagePickupRange = 13,
-	-- Extra reach (studs) for TOUCH devices only. Aiming with a finger on a small screen is far less
-	-- precise than with a cursor, so mobile players get to grab a piece from further back rather than
-	-- having to walk right on top of it.
 	--
-	-- The SERVER can't tell a phone from a desktop -- device type is a client claim, and one worth
-	-- nothing -- so its range check allows this bonus for EVERYONE. That is the deliberate trade: the
-	-- validation exists to stop pickups from across the building, which 13 + 12 + slack still does,
-	-- and the worst a desktop player gains by faking it is a reach that mobile has anyway.
-	GarbagePickupRangeTouchBonus = 12,
+	-- ONE range for every device. Touch used to get a bonus on top of this (aiming with a finger is
+	-- less precise than with a cursor, so reaching further made up for it), but a finger's imprecision
+	-- is answered where it actually is -- in how a TAP is matched to a piece, which searches SCREEN
+	-- space with a fingertip's tolerance (see GarbageCarryController.findTapTarget) -- and not by
+	-- letting phones grab garbage from twice as far away. It also let the server's check run tight
+	-- against this figure: with no bonus to allow for, there's nothing for a desktop client to claim.
+	GarbagePickupRange = 13,
 	-- How close the player must be for a piece to light up under the crosshair. Kept as its own knob
 	-- (rather than reusing the pickup range) so the outline can be pulled in independently later; at
 	-- the same value, everything you can pick up also lights up.

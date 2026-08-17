@@ -67,6 +67,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local GarbageResolver = require(ReplicatedStorage.SharedModules.GarbageResolver)
+local ShredderResolver = require(ReplicatedStorage.SharedModules.ShredderResolver)
 local GarbageVisibility = require(script.Parent.GarbageVisibility)
 local HoverHighlight = require(script.Parent.HoverHighlight)
 
@@ -151,6 +152,13 @@ local SETTLE_REPORT_DELAY = 2
 -- How often (seconds) the idle-reset sweep runs. It only has to notice a piece has been sitting
 -- untouched for a minute, so it can be lazy.
 local RESET_SWEEP_INTERVAL = 2
+
+-- How long a job's shredder is looked for before giving up, and how often. The building is already
+-- replicated by the time a job can be accepted; this only covers a cold join racing the stream-in,
+-- and a business with no cleanable garbage authors no shredder at all -- so giving up is a normal
+-- outcome, not an error. (Same shape, and the same reason, as GarbageShredController's wait.)
+local SHREDDER_WAIT_SECONDS = 10
+local SHREDDER_RETRY_INTERVAL = 0.5
 
 local TOOL_ID_ATTRIBUTE = "ToolId"
 
@@ -273,6 +281,16 @@ local aimedId: string? = nil
 --
 -- The filter is refreshed on each respawn and whenever our hands change, rather than rebuilt per
 -- frame -- these run every frame, and a fresh table each time is pure collector churn.
+-- ...and the active job's SHREDDER MARKERS: its hitbox and the two animation markers (p1/p2) inside
+-- it. All three are invisible volumes a piece is meant to be pushed straight INTO -- the hitbox is
+-- how a piece is fed in at all -- but to a ray they're ordinary geometry, so the carry point was
+-- being stopped short of the mouth. That did two visible things, both reported: garbage lowered onto
+-- the machine stuck above it and refused to go in, and simply aiming at the shredder yanked the load
+-- back toward the player (the clamp pulls the carry point in to just short of whatever it hits, and
+-- the hitbox stands well out in front of the machine). They're excluded from the aim ray for the
+-- same reason: a piece behind the mouth should still be pickable through it.
+local shredderMarkers: { Instance } = {}
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -284,6 +302,9 @@ local function refreshRayFilter()
 	end
 	for _, entry in held do
 		table.insert(exclude, entry.piece)
+	end
+	for _, marker in shredderMarkers do
+		table.insert(exclude, marker)
 	end
 	rayParams.FilterDescendantsInstances = exclude
 end
@@ -302,6 +323,49 @@ end
 local function activeJob(): string?
 	local id = localPlayer:GetAttribute(Config.ActiveJobAttribute)
 	return if type(id) == "string" then id else nil
+end
+
+-- Point the ray filters at the active job's shredder markers (hitbox + p1/p2), or at nothing when
+-- there's no job. Kept as a list rather than looked up per ray: this feeds a filter that's rebuilt
+-- only when something changes, and the machine can't move under a job.
+--
+-- Retried for a while, because on a cold join the building may still be streaming in when the job
+-- starts, and given up on quietly -- a business with no cleanable garbage authors no shredder. The
+-- token is what stops a retry loop from a job that has since ended installing its markers over the
+-- current job's.
+local shredderToken = 0
+
+local function refreshShredderMarkers()
+	shredderToken += 1
+	local token = shredderToken
+	local businessId = activeJob()
+
+	if #shredderMarkers > 0 then
+		table.clear(shredderMarkers)
+		refreshRayFilter()
+	end
+	if not businessId then
+		return
+	end
+
+	task.spawn(function()
+		local deadline = os.clock() + SHREDDER_WAIT_SECONDS
+		while shredderToken == token do
+			local shredder = ShredderResolver.find(businessId)
+			if shredder then
+				table.clear(shredderMarkers)
+				table.insert(shredderMarkers, shredder.hitbox)
+				table.insert(shredderMarkers, shredder.entry)
+				table.insert(shredderMarkers, shredder.exit)
+				refreshRayFilter()
+				return
+			end
+			if os.clock() > deadline then
+				return
+			end
+			task.wait(SHREDDER_RETRY_INTERVAL)
+		end
+	end)
 end
 
 local function humanoid(): Humanoid?
@@ -419,6 +483,11 @@ local function canSee(piece: PVInstance, position: Vector3): boolean
 		table.insert(losFilter, model)
 	end
 	table.insert(losFilter, piece)
+	-- The shredder's invisible volumes don't hide anything, so they mustn't be able to call a piece
+	-- standing behind them unseeable (see shredderMarkers).
+	for _, marker in shredderMarkers do
+		table.insert(losFilter, marker)
+	end
 	-- What we're carrying doesn't count as something blocking the view: the ring floats between the
 	-- camera and everything else, so counting it would have an armful hiding the very garbage the
 	-- proximity outline exists to offer.
@@ -701,10 +770,10 @@ function GarbageCarryController.pickup()
 end
 
 -- Click / tap: pick up whatever the crosshair is on, else drop what we're carrying.
--- How far a piece can be grabbed from. Touch reaches further -- see GarbagePickupRangeTouchBonus.
-local function pickupRange(): number
-	return Config.GarbagePickupRange + (if IS_MOBILE then Config.GarbagePickupRangeTouchBonus else 0)
-end
+--
+-- How far a piece can be grabbed from is Config.GarbagePickupRange on EVERY device -- touch no
+-- longer reaches further than a mouse. What a finger needs isn't more reach but a fairer test of
+-- what it landed on, which is findTapTarget's job below.
 
 -- Where a piece sits on SCREEN and how big it looks there: the centre of its bounding box in pixels,
 -- the radius of that box in pixels, and its depth in front of the camera (studs along the look
@@ -755,7 +824,7 @@ local function findTapTarget(screenPoint: Vector2): (PVInstance?, string?)
 		return nil, nil
 	end
 
-	local range = pickupRange()
+	local range = Config.GarbagePickupRange
 	local tolerance = math.max(TAP_TOLERANCE_MIN_PIXELS, camera.ViewportSize.Y * TAP_TOLERANCE_SCALE)
 
 	-- A ray through the pressed pixel still runs, but only as one more candidate: a hit means the
@@ -815,7 +884,7 @@ local function findPickupTarget(screenPoint: Vector2?, tolerant: boolean): (PVIn
 	if tolerant and screenPoint then
 		return findTapTarget(screenPoint)
 	end
-	return findTarget(pickupRange(), screenPoint)
+	return findTarget(Config.GarbagePickupRange, screenPoint)
 end
 
 -- `screenPoint` is where a TAP landed: on touch, picking up requires it to be on (or near) the piece
@@ -1049,13 +1118,13 @@ local function onRenderStepped()
 		-- button would take (anything the crosshair is on), and what to outline (the same piece, but
 		-- only once it's inside the shorter hover range). Casting twice down the same pixel would only
 		-- create a way for the two to disagree.
-		local aimed, aimedSurfaceId = findTarget(pickupRange())
+		local aimed, aimedSurfaceId = findTarget(Config.GarbagePickupRange)
 		setAimed(aimedSurfaceId)
 
 		-- The outline, unlike the button, falls back to the nearest piece in reach -- so garbage on the
 		-- floor beside us is offered without having to aim down at it. See findNearest.
 		local target = if aimed and withinHoverRange(aimed) then aimed else nil
-		setHovered(target or findNearest(pickupRange()))
+		setHovered(target or findNearest(Config.GarbagePickupRange))
 	end
 
 	local count = #held
@@ -1338,6 +1407,8 @@ function GarbageCarryController.init()
 		table.clear(lastTouched)
 		setHovered(nil)
 		setAimed(nil)
+		-- A different building means a different shredder to see through.
+		refreshShredderMarkers()
 	end)
 
 	watchTools(localPlayer)
@@ -1350,6 +1421,8 @@ function GarbageCarryController.init()
 		watchTools(model)
 	end)
 	refreshRayFilter()
+	-- Covers a client that inits already on a job (a live reload, a rejoin).
+	refreshShredderMarkers()
 	if localPlayer.Character then
 		watchTools(localPlayer.Character)
 	end

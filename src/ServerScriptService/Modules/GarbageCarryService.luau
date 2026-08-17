@@ -292,9 +292,11 @@ local function tryPickUp(player: Player, surfaceId: string)
 	if not root or not root:IsA("BasePart") or not position then
 		return
 	end
-	-- The touch bonus is allowed for everyone: we can't verify a device, and the check's job is to
-	-- stop pickups from across the building, not to police the last few studs. See CleaningConfig.
-	local maxRange = Config.GarbagePickupRange + Config.GarbagePickupRangeTouchBonus + RANGE_TOLERANCE
+	-- The same range every client uses, plus the lag slack. It used to have to allow a touch-only
+	-- bonus for EVERYONE (device type is a client claim and worth nothing), which left the check a
+	-- dozen studs looser than any device actually needed; with one range for all devices there's
+	-- nothing to make room for. See CleaningConfig.
+	local maxRange = Config.GarbagePickupRange + RANGE_TOLERANCE
 	if (root.Position - position).Magnitude > maxRange then
 		return
 	end
