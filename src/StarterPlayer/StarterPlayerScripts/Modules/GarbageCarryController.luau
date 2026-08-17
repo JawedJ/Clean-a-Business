@@ -19,9 +19,12 @@
 --     slightly further than the outline invites. A mouse click goes along the SAME aim ray the
 --     outline is drawn from, so whatever is highlighted is exactly what a click takes. A TAP instead
 --     goes through the pressed pixel, so aiming at a piece and tapping elsewhere on the screen --
---     driving, panning -- doesn't grab it. A tap that lands on nothing is forgiven by a ring of
---     samples around it, and where that ring finds SEVERAL pieces (a heap in a corner) the one
---     nearest the player wins. See aimRay, findPickupTarget and the InputBegan handler.
+--     driving, panning -- doesn't grab it. A tap doesn't have to LAND on a piece, though: every
+--     piece in reach is measured against the pressed pixel in SCREEN space, and the one whose
+--     on-screen silhouette the finger is on (or nearest to) wins -- with the piece closest to the
+--     camera winning when several are equally under it. And a touch only counts once it LIFTS, and
+--     only if it stayed put while it was down: a camera swipe that begins over a piece of garbage is
+--     a swipe, not a grab. See aimRay, findTapTarget and the InputBegan/Ended handlers.
 --     A held TOOL can't get in the way of any of this: the floating tool hangs between the camera
 --     and whatever is being aimed at, so ToolFloatController takes its parts out of raycasting
 --     (CanQuery) -- a tap goes straight THROUGH the broom to the garbage behind it.
@@ -48,6 +51,7 @@
 -- kicked-about garbage tidies itself up without waiting for the next job.
 
 local Players = game:GetService("Players")
+local GuiService = game:GetService("GuiService")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
@@ -126,20 +130,36 @@ local IS_MOBILE = UserInputService.TouchEnabled
 --
 -- Touches can't be trusted to mean "let go" here: the default dynamic thumbstick and the camera pan
 -- region read raw input rather than sitting behind a GuiButton, so `gameProcessed` is false for them
--- and driving or panning arrived as a click. Picking up is safe from the same problem because it
--- needs the tap to land ON a piece of garbage, which a stick or a camera swipe never does.
+-- and driving or panning arrived as a click. Picking up survives the same problem by being fussier
+-- about what a touch has to LOOK like -- it must both land near a piece and stay a tap rather than a
+-- swipe (see the TOUCH_TAP constants) -- but there's no equivalent test for a drop: a swipe over
+-- empty air is exactly what a "drop" gesture would be.
 local TOUCH_CAN_DROP = false
 
 -- FINGER TOLERANCE. A tap is nowhere near as precise as a cursor, and a piece of garbage is a small
--- target on a phone -- so a tap that lands just OFF a piece still picks it up. The pressed pixel is
--- tried first; if it hits nothing, a ring of samples around it is tried before giving up.
---
--- This is what keeps "the tap must land on the garbage" from making pickup fiddly. The radius is a
--- fraction of viewport height (floored in pixels) so a fingertip covers about the same share of the
--- screen on a phone as on a tablet.
-local TAP_TOLERANCE_SCALE = 0.02
-local TAP_TOLERANCE_MIN_PIXELS = 14
-local TAP_TOLERANCE_SAMPLES = 8
+-- target on a phone -- so a tap that lands just OFF a piece still picks it up: how far outside a
+-- piece's on-screen silhouette the finger may land and still mean it (see findTapTarget). Scaled off
+-- viewport height (floored in pixels) so a fingertip covers about the same share of the screen on a
+-- phone as on a tablet.
+local TAP_TOLERANCE_SCALE = 0.032
+local TAP_TOLERANCE_MIN_PIXELS = 26
+
+-- TAP vs SWIPE. The camera pan region reads raw input rather than sitting behind a GuiButton, so a
+-- look-around swipe reaches us as an ordinary touch -- and acting the moment one BEGAN meant a swipe
+-- that happened to start on (or near) a piece of garbage picked it up mid-camera-adjust. So a touch
+-- is only a pickup once it ENDS, and only if it behaved like a tap: it has to lift soon enough, and
+-- never stray further than this from where it landed. Drift is the real test -- a flick is fast but
+-- travels; a deliberate press barely moves -- and the duration cap is generous enough that resting a
+-- finger on a piece before lifting still picks it up. Scaled off viewport height for the same reason
+-- the tap tolerance is.
+local TOUCH_TAP_MAX_SECONDS = 0.6
+local TOUCH_TAP_MAX_DRIFT_SCALE = 0.02
+local TOUCH_TAP_MAX_DRIFT_MIN_PIXELS = 14
+
+-- How close two pieces' scores have to be for the tap to count as landing on BOTH -- at which point
+-- the one nearest the CAMERA wins. This is what settles a bundle: two bags overlapping on screen
+-- score within a few pixels of each other, and the one in front is the one the player pressed.
+local TAP_TIE_PIXELS = 12
 
 local GarbageCarryController = {}
 
@@ -568,52 +588,116 @@ local function pickupRange(): number
 	return Config.GarbagePickupRange + (if IS_MOBILE then Config.GarbagePickupRangeTouchBonus else 0)
 end
 
--- A pickup at `screenPoint` -- or, when nil, wherever the player is AIMING, which is the same ray
--- the outline is drawn from. Forgives a near-miss when `tolerant` (a finger, not a cursor): the
--- exact pixel first, then a ring around it. See the TAP_TOLERANCE constants.
+-- Where a piece sits on SCREEN and how big it looks there: the centre of its bounding box in pixels,
+-- the radius of that box in pixels, and its depth in front of the camera (studs along the look
+-- vector). Nil for a piece behind the camera.
 --
--- The exact pixel always wins outright -- a tap that lands ON a piece means that piece, even if
--- another is closer. It's only the forgiveness ring, where the tap hit nothing and we're guessing at
--- what was meant, that has to choose: there the CLOSEST piece to the player wins rather than
--- whichever sample happened to run first. With a heap of garbage in one corner the ring routinely
--- catches two or three pieces at once, and taking them in sample order picked an arbitrary one --
--- often one further back, behind the piece the player was obviously reaching for.
-local function findPickupTarget(screenPoint: Vector2?, tolerant: boolean): (PVInstance?, string?)
-	local garbage, surfaceId = findTarget(pickupRange(), screenPoint)
-	if surfaceId or not tolerant or not screenPoint then
-		return garbage, surfaceId
+-- The bounding box, not the pivot: a model's pivot can sit anywhere (often at one corner or on the
+-- floor beneath it), and what a finger is pressing is the shape, not the origin. The radius is what
+-- makes the test fair across sizes and distances -- a bin bag two studs away covers a hundred pixels
+-- and a crumpled can twenty studs away covers eight, and "the finger is ON it" has to mean the same
+-- thing for both.
+local function screenFootprint(camera: Camera, piece: PVInstance): (Vector2?, number, number)
+	local centre: Vector3, size: Vector3
+	if piece:IsA("BasePart") then
+		centre, size = piece.Position, piece.Size
+	else
+		local boxCFrame, boxSize = (piece :: Model):GetBoundingBox()
+		centre, size = boxCFrame.Position, boxSize
 	end
 
-	local camera = Workspace.CurrentCamera
-	local radius = math.max(
-		TAP_TOLERANCE_MIN_PIXELS,
-		(if camera then camera.ViewportSize.Y else 0) * TAP_TOLERANCE_SCALE
-	)
-	local from = rootPosition()
+	local point = camera:WorldToViewportPoint(centre)
+	local depth = point.Z
+	if depth <= 0 then
+		return nil, 0, 0
+	end
+	-- Pixels per stud at this depth, from the (vertical) field of view.
+	local perStud = camera.ViewportSize.Y / (2 * depth * math.tan(math.rad(camera.FieldOfView) / 2))
+	return Vector2.new(point.X, point.Y), (size.Magnitude / 2) * perStud, depth
+end
 
-	local nearest: PVInstance? = nil
-	local nearestId: string? = nil
-	local nearestDistance = math.huge
-	for i = 1, TAP_TOLERANCE_SAMPLES do
-		local angle = (i / TAP_TOLERANCE_SAMPLES) * math.pi * 2
-		local sample = screenPoint + Vector2.new(math.cos(angle), math.sin(angle)) * radius
-		local hit, hitId = findTarget(pickupRange(), sample)
-		if hit and hitId then
-			-- No character to measure from (mid-respawn): first hit is as good as any.
-			if not from then
-				return hit, hitId
-			end
-			local position = GarbageResolver.getPosition(hit)
-			local distance = if position then (from - position).Magnitude else math.huge
-			if distance < nearestDistance then
-				nearest, nearestId, nearestDistance = hit, hitId, distance
-			end
+-- What a TAP at `screenPoint` meant. Everything in pickup range is scored by how far OUTSIDE its
+-- on-screen silhouette the finger landed (0 = the finger is on the piece), and the best score wins.
+--
+-- This is deliberately NOT "raycast the pressed pixel, and if that misses try a ring around it",
+-- which is what it used to be. Two things went wrong with rays. A small piece far away is a handful
+-- of pixels wide, so the exact pixel misses constantly and the ring -- a fixed radius out -- steps
+-- straight OVER it and lands on whatever is behind, which is how a tap on a distant can picked up
+-- the bag two studs past it. And a ray through a BUNDLE slips between the parts of the piece in
+-- front and hits the one behind, so pressing the near bag took the far one. Measuring in screen
+-- space asks the question the player is actually asking -- what is under my finger -- and answers it
+-- for a four-pixel target as well as a four-hundred-pixel one.
+--
+-- Ties (a bundle: several silhouettes under the same finger, scores within TAP_TIE_PIXELS) go to the
+-- piece nearest the CAMERA. That's the one drawn on top, so it's the one the player pressed.
+local function findTapTarget(screenPoint: Vector2): (PVInstance?, string?)
+	local camera = Workspace.CurrentCamera
+	local from = rootPosition()
+	if not camera or not from or not activeJob() then
+		return nil, nil
+	end
+
+	local range = pickupRange()
+	local tolerance = math.max(TAP_TOLERANCE_MIN_PIXELS, camera.ViewportSize.Y * TAP_TOLERANCE_SCALE)
+
+	-- A ray through the pressed pixel still runs, but only as one more candidate: a hit means the
+	-- finger is provably on that piece, so it scores 0 -- it doesn't get to win a tie against
+	-- something nearer that the finger is equally on.
+	local _, hitId = findTarget(range, screenPoint)
+
+	type Candidate = { piece: PVInstance, id: string, score: number, depth: number }
+	local candidates: { Candidate } = {}
+	local best = math.huge
+
+	for surfaceId, piece in GarbageVisibility.getPieces() do
+		if carriedByOthers[surfaceId] then
+			continue
+		end
+		local position = GarbageResolver.getPosition(piece)
+		if not position or (from - position).Magnitude > range then
+			continue
+		end
+		local centre, radius, depth = screenFootprint(camera, piece)
+		if not centre then
+			continue
+		end
+		local score = if surfaceId == hitId then 0 else math.max((centre - screenPoint).Magnitude - radius, 0)
+		if score > tolerance then
+			continue
+		end
+		-- canSee LAST: it's the only expensive test here, and only a piece in the running is worth
+		-- asking about. A ray hit is proof of sight already.
+		if surfaceId ~= hitId and not canSee(piece, position) then
+			continue
+		end
+		table.insert(candidates, { piece = piece, id = surfaceId, score = score, depth = depth })
+		best = math.min(best, score)
+	end
+
+	local chosen: Candidate? = nil
+	for _, candidate in candidates do
+		if candidate.score > best + TAP_TIE_PIXELS then
+			continue
+		end
+		if not chosen or candidate.depth < chosen.depth then
+			chosen = candidate
 		end
 	end
-	if nearestId then
-		return nearest, nearestId
+	if not chosen then
+		return nil, nil
 	end
-	return nil, nil
+	return chosen.piece, chosen.id
+end
+
+-- A pickup at `screenPoint` -- or, when nil, wherever the player is AIMING, which is the same ray
+-- the outline is drawn from. A finger (`tolerant`) gets the screen-space search above; a cursor gets
+-- the exact ray, because on desktop "what the outline offers" and "what a click takes" have to stay
+-- the same question.
+local function findPickupTarget(screenPoint: Vector2?, tolerant: boolean): (PVInstance?, string?)
+	if tolerant and screenPoint then
+		return findTapTarget(screenPoint)
+	end
+	return findTarget(pickupRange(), screenPoint)
 end
 
 -- `screenPoint` is where a TAP landed: on touch, picking up requires it to be on (or near) the piece
@@ -907,10 +991,37 @@ function GarbageCarryController.init()
 		end
 	end)
 
-	-- InputObject.Position is in the same screen space ViewportPointToRay takes, so a TAP's ray goes
-	-- through the exact pixel that was pressed.
+	-- InputObject.Position is NOT in the space the camera works in: it's measured from below the
+	-- topbar, while ViewportPointToRay, WorldToViewportPoint and Camera.ViewportSize all measure from
+	-- the top of the screen. (GetMouseLocation, which the aim ray uses, is already in the camera's
+	-- space -- the two input sources disagree, which is why this conversion belongs here at the
+	-- boundary rather than inside aimRay.) Left unconverted, every tap was read as landing GetGuiInset
+	-- pixels -- 36 and up, more on a notched phone -- ABOVE the finger, so a tap on a piece of garbage
+	-- aimed over its head at whatever stood behind it. A fixed pixel offset is barely noticeable on a
+	-- bag filling half the screen and completely decides the answer on a small or distant one, which
+	-- is what made tapping feel unreliable exactly when the target got hard to hit.
 	local function inputPoint(input: InputObject): Vector2
-		return Vector2.new(input.Position.X, input.Position.Y)
+		local inset = GuiService:GetGuiInset()
+		return Vector2.new(input.Position.X + inset.X, input.Position.Y + inset.Y)
+	end
+
+	-- Touches in flight: where each one started (camera space), when, and the furthest it has strayed
+	-- from that point. A touch is only a PICKUP once it ends, and only if it stayed a tap -- see
+	-- isTap and the TOUCH_TAP constants.
+	type Touch = { origin: Vector2, startedAt: number, drift: number }
+	local touches: { [InputObject]: Touch } = {}
+
+	-- Did this touch stay still enough, and end soon enough, to be a tap rather than a swipe?
+	local function isTap(touch: Touch): boolean
+		if os.clock() - touch.startedAt > TOUCH_TAP_MAX_SECONDS then
+			return false
+		end
+		local camera = Workspace.CurrentCamera
+		local allowed = math.max(
+			TOUCH_TAP_MAX_DRIFT_MIN_PIXELS,
+			(if camera then camera.ViewportSize.Y else 0) * TOUCH_TAP_MAX_DRIFT_SCALE
+		)
+		return touch.drift <= allowed
 	end
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -931,7 +1042,32 @@ function GarbageCarryController.init()
 			-- otherwise grab whatever sits under the crosshair.
 			onClick(nil, true, false)
 		elseif input.UserInputType == Enum.UserInputType.Touch then
-			onClick(inputPoint(input), TOUCH_CAN_DROP, true)
+			-- Nothing happens yet: a touch isn't a pickup until it ends as a tap (see InputEnded).
+			touches[input] = { origin = inputPoint(input), startedAt = os.clock(), drift = 0 }
+		end
+	end)
+
+	-- How far this touch has strayed from where it started. The FURTHEST it has been, not where it is
+	-- now: a pan that swings out and comes back to rest near its origin was still a pan.
+	UserInputService.InputChanged:Connect(function(input)
+		local touch = touches[input]
+		if touch then
+			touch.drift = math.max(touch.drift, (inputPoint(input) - touch.origin).Magnitude)
+		end
+	end)
+
+	-- The touch let go. If it stayed a tap, act on where it STARTED -- that's the pixel the player
+	-- chose; the finger drifting a few pixels before lifting doesn't change what they were pointing
+	-- at. `gameProcessed` is deliberately not consulted here: whether this touch is ours was settled
+	-- when it began, and a finger that happens to lift over a button shouldn't swallow the tap.
+	UserInputService.InputEnded:Connect(function(input)
+		local touch = touches[input]
+		if not touch then
+			return
+		end
+		touches[input] = nil
+		if isTap(touch) then
+			onClick(touch.origin, TOUCH_CAN_DROP, true)
 		end
 	end)
 
