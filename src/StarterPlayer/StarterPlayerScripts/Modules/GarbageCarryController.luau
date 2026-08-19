@@ -589,9 +589,8 @@ local function dragPart(garbage: PVInstance): BasePart?
 end
 
 -- How big this piece is, for the ring's spacing: its bounding box, measured once when it's picked
--- up. The two spacing rules read it differently and both readings matter -- see slotSeparation
--- (which needs a figure that holds whichever way the piece faces) and halfExtentAlong (which needs
--- the piece's reach in one exact direction).
+-- up. Both spacing rules read it through halfExtentAlong, each asking about the one direction it
+-- cares about -- toward the crosshair, and along the ring toward the neighbouring pieces.
 local function pieceSize(garbage: PVInstance): Vector3
 	if garbage:IsA("BasePart") then
 		return garbage.Size
@@ -1083,25 +1082,52 @@ local function slotLayout(count: number): { Vector2 }
 	return built
 end
 
--- How far out the ring has to sit to keep `count` pieces clear OF EACH OTHER, given the biggest of
--- them reaches `maxRadius` from its centre to a corner. `count` slots evenly spaced round a circle
--- of radius R leave 2*R*sin(pi/count) between neighbours, and that has to cover both their
--- half-widths plus the gap; turned around, R = (2*maxRadius + gap) / (2*sin(pi/count)).
+-- How far out the ring has to sit to keep the held pieces clear OF EACH OTHER, given `layout`'s slot
+-- directions and the camera axes (`right`, `up`) the ring is drawn in. Reads the armful's sizes from
+-- `held` and the rotations onRenderStepped has just worked out into `slotRotations`.
 --
 -- Nothing to ask of a LONE piece -- it has no neighbour to clear, so the crosshair rule alone places
 -- it (see onRenderStepped), which is what lets it sit just above the crosshair instead of out at
 -- whatever radius three pieces would have needed.
 --
--- Deliberately conservative, unlike the crosshair rule: `maxRadius` is half the piece's LONGEST
--- side, because two neighbours turn with the camera and past each other, so the figure has to hold
--- whichever way they end up facing. Still sized off the pieces themselves rather than fixed, for the
--- same reason the shredder's queue is: fixed spacing either overlaps three bin bags or flings three
--- crushed cans out to the edges of the screen.
-local function slotSeparation(count: number, maxRadius: number): number
+-- Every neighbouring PAIR is measured along the CHORD between their two slots -- the line the two
+-- actually crowd each other on -- and each piece contributes only its half-extent in that one
+-- direction, at the rotation it is currently sitting at. Because the slot directions are unit
+-- vectors, the chord's direction doesn't depend on the radius at all and its length is simply
+-- `span * radius`, so the radius that makes a pair fit is (their two half-extents + the gap) / span.
+-- The ring takes the largest such radius over all the pairs.
+--
+-- The point of doing it per pair and per direction is that GarbageCarryGapStuds then means what it
+-- says: the air left between the two pieces' facing surfaces, whatever their shapes and however they
+-- are turned. It used to be one formula over half the biggest piece's LONGEST side, with no
+-- direction in it at all, which made the gap mean very different things depending on the shape --
+-- two tall bags either side of the crosshair were held apart by half their HEIGHT even though what
+-- faced each other was their narrow width, leaving several studs of air where the config asked for a
+-- fraction of one. (On a diagonal chord it erred the other way, since a box reaches further toward
+-- its corner than half its longest side.) Re-measuring per frame costs nothing at an armful of three
+-- and tracks the pieces as they turn.
+local function slotSeparation(layout: { Vector2 }, right: Vector3, up: Vector3): number
+	local count = #layout
 	if count < 2 then
 		return 0
 	end
-	return (2 * maxRadius + Config.GarbageCarryGapStuds) / (2 * math.sin(math.pi / count))
+
+	local separation = 0
+	for index = 1, count do
+		local nextIndex = if index == count then 1 else index + 1
+		local chord = layout[nextIndex] - layout[index]
+		local span = chord.Magnitude
+		-- Two slots on top of each other have no chord to measure along; there's no such layout, but
+		-- dividing by it would poison the whole ring's radius.
+		if span > 1e-4 then
+			local direction = (right * chord.X + up * chord.Y) / span
+			local needed = halfExtentAlong(held[index].size, slotRotations[index], direction)
+				+ halfExtentAlong(held[nextIndex].size, slotRotations[nextIndex], direction)
+				+ Config.GarbageCarryGapStuds
+			separation = math.max(separation, needed / span)
+		end
+	end
+	return separation
 end
 
 -- Per frame: outline what we're aiming at, and aim the drags holding what we're carrying. Both, not
@@ -1175,7 +1201,6 @@ local function onRenderStepped()
 	table.clear(slotDirections)
 	table.clear(slotRotations)
 	local clear = 0
-	local widest = 0
 	for index, entry in held do
 		local offset = layout[index]
 		-- The layout's directions are unit vectors and the camera's axes orthonormal, so this is too.
@@ -1184,9 +1209,8 @@ local function onRenderStepped()
 		slotDirections[index] = towards
 		slotRotations[index] = rotation
 		clear = math.max(clear, halfExtentAlong(entry.size, rotation, towards) + Config.GarbageCarryClearStuds)
-		widest = math.max(widest, math.max(entry.size.X, entry.size.Y, entry.size.Z) / 2)
 	end
-	local radius = math.max(clear, slotSeparation(count, widest))
+	local radius = math.max(clear, slotSeparation(layout, right, up))
 
 	local from = rootPosition()
 

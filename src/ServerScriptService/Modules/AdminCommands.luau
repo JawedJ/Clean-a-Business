@@ -28,12 +28,18 @@
 --   /setlevel <level>
 --     Sets the owner's level outright (and zeroes XP, which counts WITHIN a level -- see Leveling),
 --     so level-gated content can be reached without grinding XP. Goes down as well as up.
+--   /reset
+--     Puts every tool in the owner's inventory back to its ToolConfig base -- Level 0 and the
+--     base Range/Radius/UseTime/Power, undoing every upgrade bought on it. Ownership is kept
+--     (Unlocked/Equipped carry over) and nothing is refunded: it resets the upgrade LADDER, not
+--     the inventory, so the next upgrade costs what the first one did again.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DataService = require(ReplicatedStorage.Packages.DataService).server
 local BusinessConfig = require(ReplicatedStorage.SharedModules.BusinessConfig)
+local ToolConfig = require(ReplicatedStorage.SharedModules.ToolConfig)
 local ProgressionService = require(script.Parent.ProgressionService)
 local TutorialService = require(script.Parent.TutorialService)
 
@@ -107,6 +113,37 @@ local function setLevel(player: Player, levelText: string?)
 	print(string.format("[AdminCommands] set %s to level %d", player.Name, level))
 end
 
+-- /reset: put every owned tool back to its ToolConfig base, undoing every upgrade bought on it.
+-- Upgrades are BAKED INTO the stored item (ItemUpgrades.applyUpgrade writes the stepped
+-- Range/Radius/UseTime/Power alongside Level), so zeroing Level alone would leave a maxed tool
+-- with maxed stats. The reliable reset is therefore to write the catalog definition back whole,
+-- carrying over only the two fields that are genuinely per-player state -- Unlocked and Equipped
+-- -- so this never takes a tool away or unequips what's in hand.
+--
+-- Nothing is refunded: this resets the upgrade LADDER (the next level costs what the first one
+-- did again), which is the point when re-testing the cost curve.
+local function resetTools(player: Player)
+	local inventory = DataService:get(player, { "Inventory" })
+	if type(inventory) ~= "table" then
+		return
+	end
+
+	local count = 0
+	for uniqueId, item in inventory do
+		local def = ToolConfig[uniqueId]
+		if def and type(item) == "table" then
+			local base = table.clone(def)
+			base.Unlocked = item.Unlocked
+			base.Equipped = item.Equipped
+			-- Each item written on its own path so the client repaints per slot, exactly as a
+			-- purchase or an upgrade does.
+			DataService:set(player, { "Inventory", uniqueId }, base)
+			count += 1
+		end
+	end
+	print(string.format("[AdminCommands] reset %d tools to base level for %s", count, player.Name))
+end
+
 local function onChatted(player: Player, message: string)
 	-- Tokenize on whitespace runs (tolerates extra spaces): {command, arg1, arg2, ...}.
 	local tokens = {}
@@ -134,6 +171,8 @@ local function onChatted(player: Player, message: string)
 		addGems(player, tokens[2])
 	elseif command == "/setlevel" then
 		setLevel(player, tokens[2])
+	elseif command == "/reset" then
+		resetTools(player)
 	end
 end
 

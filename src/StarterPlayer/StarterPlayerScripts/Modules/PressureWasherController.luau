@@ -427,11 +427,10 @@ local function onHeartbeat()
 		return
 	end
 
-	-- Overlay face only: reject hits on any other face (edges/back), where the dirt
-	-- isn't. The surface knows which face it's on; its world normal is the part-local
-	-- face direction rotated into world space.
-	local faceNormal = part.CFrame:VectorToWorldSpace(Vector3.fromNormalId(surface.face))
-	if result.Normal:Dot(faceNormal) < 0.99 then
+	-- Overlay faces only: reject hits on any other face (edges, or an untextured side),
+	-- where the dirt isn't. The surface knows which faces it put overlays on -- a wall
+	-- textured on more than one side accepts a hit on any of them.
+	if not surface:facesNormal(result.Normal) then
 		resetStroke()
 		return
 	end

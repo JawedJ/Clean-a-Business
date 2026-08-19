@@ -94,16 +94,19 @@ local CleaningConfig = {
 	-- enforces this too; the client only stops asking. See GarbageCarryController's slot layout.
 	GarbageCarryLimit = 3,
 	-- The clear space (studs) held pieces are given: how far the NEAREST FACE of a held piece is kept
-	-- from the crosshair, and how much air is left between two neighbouring pieces in the ring. Both
-	-- are measured off the pieces' own sizes (like the shredder queue's gap), so a bin bag and a
-	-- crumpled can are both spaced properly rather than one overlapping and the other floating away.
+	-- from the crosshair, and how much air is left between the FACING SURFACES of two neighbouring
+	-- pieces in the ring. Both are measured off the pieces' own sizes (like the shredder queue's gap)
+	-- and along the exact direction each rule cares about, so a bin bag and a crumpled can are both
+	-- spaced properly rather than one overlapping and the other floating away -- and so these numbers
+	-- mean the same thing whatever is being carried.
 	--
-	-- The clearance is deliberately SMALL: a single held piece should sit just clear of the crosshair,
-	-- close enough to read as being held in front of the player rather than parked at the top of the
-	-- screen. It's measured along the direction the piece actually sits in (so the height of a piece
-	-- hovering above the crosshair, not its longest side), which is what lets it be this tight.
+	-- BOTH are deliberately SMALL, and for the same reason: each is measured along the direction that
+	-- actually matters rather than off the piece's longest side, so neither has to hold a worst case
+	-- that never happens. A single held piece sits just clear of the crosshair -- close enough to read
+	-- as being held in front of the player rather than parked at the top of the screen -- and two or
+	-- three sit as an armful with barely any air between them rather than spread across the screen.
 	GarbageCarryClearStuds = 0.25,
-	GarbageCarryGapStuds = 0.6,
+	GarbageCarryGapStuds = 0.15,
 	-- How long (seconds) a piece sits untouched where it was dropped before it returns to the
 	-- position it was authored at. Restarts on every pickup/drop, so a piece being worked with is
 	-- never yanked out from under the player.

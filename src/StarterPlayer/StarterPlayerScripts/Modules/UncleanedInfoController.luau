@@ -2,7 +2,7 @@
 
 -- Drives the UNCLEANED readout (PlayerGui.ScreenGui.UncleanedInfo): a one-line breakdown of
 -- what the active job still has left to clean, e.g.
---   UNCLEANED: 3 Floor Tiles, 2 Puddles, 3 Stains, 5 Cobwebs
+--   UNCLEANED: 3 Cleanable Tiles, 2 Puddles, 3 Stains, 5 Cobwebs
 -- Kinds with nothing left (or that the business doesn't have at all) are dropped from the line,
 -- so it shrinks as the job is worked and never lists a kind the player can't find.
 --
@@ -42,7 +42,7 @@ type Remaining = { walls: number, spills: number, decals: number, webs: number, 
 -- Player-facing names per cleanable kind, in the order they're listed. `plural` is used for
 -- anything but exactly one.
 local KINDS: { { get: (Remaining) -> number, singular: string, plural: string } } = {
-	{ get = function(r) return r.walls end, singular = "Floor Tile", plural = "Floor Tiles" },
+	{ get = function(r) return r.walls end, singular = "Cleanable Tile", plural = "Cleanable Tiles" },
 	{ get = function(r) return r.spills end, singular = "Puddle", plural = "Puddles" },
 	{ get = function(r) return r.decals end, singular = "Stain", plural = "Stains" },
 	{ get = function(r) return r.webs end, singular = "Cobweb", plural = "Cobwebs" },
