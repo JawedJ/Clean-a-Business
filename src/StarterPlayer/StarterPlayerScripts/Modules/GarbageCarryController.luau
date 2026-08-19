@@ -108,6 +108,15 @@ local SLOT_LAYOUTS: { { Vector2 } } = {
 	{ Vector2.new(0, 1), Vector2.new(-0.866, -0.5), Vector2.new(0.866, -0.5) },
 }
 
+-- How many held pieces count as a CROWDED armful -- the point at which the ring is pulled in by
+-- Config.GarbageCarryRingScale. Three is where the ring first has to hold pieces apart from each
+-- OTHER as well as from the crosshair, which is what makes it wide. Written as its own number rather
+-- than read off GarbageCarryLimit: it's about how many pieces make a ring look crowded, not about
+-- how many the player is allowed. It does want raising alongside the limit, though -- the tightening
+-- lets the load cover the crosshair, which is only free while a crowded armful is also a FULL one
+-- (see the note where it's applied).
+local CROWDED_ARMFUL = 3
+
 -- Let go automatically if the carried piece ends up this far (studs) from the player. Measured off
 -- the carry distance so raising how far out the piece floats can't make the guard start misfiring on
 -- a perfectly normal carry; the slack covers the piece lagging behind a sprinting player. What it's
@@ -1211,6 +1220,20 @@ local function onRenderStepped()
 		clear = math.max(clear, halfExtentAlong(entry.size, rotation, towards) + Config.GarbageCarryClearStuds)
 	end
 	local radius = math.max(clear, slotSeparation(layout, right, up))
+	-- Both rules above are worst-case-safe, and at a crowded armful the two together hold the pieces
+	-- out far enough that they read as scattered around the player rather than carried. Pull the
+	-- whole ring in by a flat fraction once it's that full. It has to be a scale on the FINAL radius:
+	-- relaxing either rule on its own just leaves the other as the floor (crowd the pieces together
+	-- and the crosshair clearance holds them out; let them near the crosshair and they collide), so
+	-- neither knob alone can bring the ring in. What it costs is that the pieces now overlap each
+	-- other and crowd the crosshair, and at three neither matters: held pieces pass through each
+	-- other (CARRIED_GROUP), and three is currently a FULL armful, which is offered no pickup targets
+	-- at all -- so the crosshair has nothing left to stay clear for. Raise GarbageCarryLimit above
+	-- CROWDED_ARMFUL and that second half stops holding: a crowded-but-not-full armful would be
+	-- aiming through its own load, and CROWDED_ARMFUL should go up with the limit.
+	if count >= CROWDED_ARMFUL then
+		radius *= Config.GarbageCarryRingScale
+	end
 
 	local from = rootPosition()
 

@@ -107,6 +107,19 @@ local CleaningConfig = {
 	-- three sit as an armful with barely any air between them rather than spread across the screen.
 	GarbageCarryClearStuds = 0.25,
 	GarbageCarryGapStuds = 0.15,
+	-- Pulls the ring in once the armful is CROWDED (three pieces -- see GarbageCarryController's
+	-- CROWDED_ARMFUL), as a fraction of the radius the two rules above ask for. They are both
+	-- worst-case-safe -- keep every piece off the crosshair, keep every piece off its neighbours --
+	-- and at three pieces the two together hold an armful out wide enough that it reads as scattered
+	-- around the player rather than carried by them. Neither rule can be tuned down to fix that on
+	-- its own: whichever one is relaxed, the other becomes the floor. So the crowded case gets this
+	-- one honest fudge on top instead.
+	--
+	-- Held pieces pass through each other (CARRIED_GROUP), and a full armful can't pick anything else
+	-- up -- the controller stops offering targets entirely -- so at three pieces neither overlapping
+	-- nor covering the crosshair costs anything. Lower to crowd them further; 1 restores the
+	-- untightened ring.
+	GarbageCarryRingScale = 0.65,
 	-- How long (seconds) a piece sits untouched where it was dropped before it returns to the
 	-- position it was authored at. Restarts on every pickup/drop, so a piece being worked with is
 	-- never yanked out from under the player.
@@ -324,7 +337,7 @@ local CleaningConfig = {
 
 	-- EditableImage resolution (square), in pixels. Lower = cheaper to build/clean,
 	-- at lower cleaning resolution (e.g. 256 is 4x less pixel work than 512).
-	ImageSize = 512,
+	ImageSize = 256,
 
 	-- Fallback brush radius in studs (world space), used only if a cleaning tool's
 	-- per-player Radius isn't available. The live value comes from the player's
