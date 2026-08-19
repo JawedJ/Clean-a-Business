@@ -182,6 +182,14 @@ end
 -- placement is applied a moment later if the profile says it's owed. A new player's profile has
 -- nothing to fetch, so in practice that correction is never the visible path.
 local function placeOnSpawn(player: Player, character: Model, plot: Instance)
+	-- Job rigs are placed by whoever put them on, not by us. Swapping a player into the rig
+	-- (JobRigService) assigns Player.Character, which fires CharacterAdded exactly as a respawn
+	-- does -- so without this the rig would be yanked out of the business it was just teleported
+	-- into and dropped on the plot spawn, taking the player off their job's doorstep.
+	if character:GetAttribute(Config.JobRigAttribute) == true then
+		return
+	end
+
 	local resolved = firstSpawnPending[player] ~= nil
 	spawnCharacterAt(player, character, plot, takeFirstSpawn(player))
 	if resolved then

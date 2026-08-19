@@ -214,6 +214,89 @@ report, so a player can only ever clean the one business they've accepted. Concr
   spawns nothing server-side. The only per-job "loading" is the client's overlays + stain/spill
   restore.
 
+### Job rigs (implemented)
+On the clock the player is a **cat**, seen in **first person**. Two separate rigs, both authored in
+Studio under `ReplicatedStorage.Rigs.Black` (not in this repo, like the Remotes and the UI) and both
+worn only for a job's duration:
+
+- **The job rig** (`Black Cat`) — the full-body R15 character **everyone sees**. Standard part and
+  Motor6D names plus a `Tail1..Tail5` chain, all body parts `Transparency = 1` with the visible
+  geometry welded on as MeshParts.
+- **The viewmodel** (`Viewmodel`) — arms and hands only, hung off the camera, seen by **nobody but
+  the owner**.
+
+**The swap is server-side** (`JobRigService`), because a character everyone sees has to be. On
+accept, `JobService` teleports the player onto the `TeleportPart` as before and *then* swaps them
+into a clone built at that pose — teleport first, so the well-trodden placement path is untouched
+and the rig simply inherits where it landed. The clone is renamed for the player, marked with
+`CleaningConfig.JobRigAttribute`, unanchored at the root (the template is anchored), and assigned to
+`Player.Character`. It is placed **feet-first**: the cat's root sits 3.99 studs above the floor
+against a default avatar's 3.00, so a root-to-root paste would bury its legs, and the swap lifts by
+the difference in `HipHeight` + half-root measured off both bodies. Their equipped tool is
+unequipped first — a tool lives *inside* the character while equipped and would be destroyed with
+the body it was welded to; the Backpack survives untouched. A character added while still on a job
+(a mid-job respawn) is swapped too, so being on the clock and being a cat can't drift apart.
+
+**Restoring** waits for the trip home (`GoHome` → `JobRigService.restore`, `LoadCharacter`), the same
+point the walk-speed restore uses: the job merely *ending* leaves the player stood in the business
+with the summary up, one PlayAgain away from another run, and a replay shouldn't have to re-dress
+them. The respawn *is* the trip home, since `PlotService` places every freshly added character on
+its plot spawn — so only a player who never wore the rig still needs the plain teleport.
+
+**Three things the engine does NOT do for a manually assigned `Player.Character`**, each of which
+cost a bug and is now handled explicitly:
+- **`Camera.CameraSubject` is not set.** The engine sets it on its own spawn path (`LoadCharacter`)
+  only, so the camera stays locked to the Humanoid of the body just destroyed — the player is
+  teleported into the job while their view sits back where they came from. `JobRigController`
+  points it at the rig's Humanoid and re-asserts per frame, since it's racing the engine's own
+  handling of the character change.
+- **`PlayerGui` IS wiped**, exactly as on a respawn. A `ScreenGui` opts out with
+  `ResetOnSpawn = false` (both of this game's are), but anything else parented there has no way to —
+  see `HoverHighlight`, whose outline was silently destroyed at every job start.
+- **Placement is contested.** `PlotService` puts every freshly added character on its plot spawn, so
+  it skips characters carrying the `JobRigAttribute` — otherwise the rig is yanked out of the
+  building it was just teleported into.
+
+**Animations** are played by the **owner's client** (`JobRigController`), which is what replicates
+them to everybody else, exactly as Roblox's own Animate script drives a normal avatar — and depends
+on the Animator having been created by the **server** (a client-made one animates for the owner
+alone). The tail loops for as long as the rig is worn; underneath it the body is idle or walking off
+`MovementState`, the one definition both rigs share so the hands on screen can't disagree with the
+body. Tail sits *below* idle/walk in priority on purpose: it carries `LowerTorso` and
+`HumanoidRootPart` tracks alongside the tail joints, so keeping it under the body animations lets
+those two be won by whatever the body is doing while the tail chain — which idle and walk never
+touch — is still driven entirely by the tail. Any `Animate` script that lands in the rig is dropped,
+so the default R15 walk/run can't play over the top of a body it was never authored for.
+
+**The owner never sees their own job rig** — what they see of themselves is the viewmodel. Hiding is
+per-part `LocalTransparencyModifier` (the client-only knob the engine itself uses for first person,
+and the same one `HidePlayersController` uses on other players), re-asserted each frame just after
+the camera has run, because the engine's own transparency pass writes the same property. An equipped
+tool is deliberately left alone — it's floated into view on purpose, and the player needs to see
+what they're cleaning with.
+
+**The viewmodel** (`ViewmodelController`) is a client-only clone parented to
+`Workspace.CurrentCamera`. Nothing a client creates replicates, and the camera is outside Workspace
+proper, so it is invisible to everyone else, casts no shadows, and — the reason the camera is the
+right parent rather than Workspace — cannot be hit by any of the game's aim raycasts. It hangs
+directly between the camera and whatever the player is aiming at, so a raycastable rig would swallow
+every shot (the same trap `ToolFloatController` solves with `CanQuery = false`). Three details are
+load-bearing:
+- **Posed off its `CameraPart`.** The rig carries a `CameraPart` alongside the arms. Rather than
+  moving the real camera with it, the rig is placed each frame so `CameraPart` lands *on* the
+  camera — the animator's camera track then reads as arms swaying against a steady view. The body
+  sway itself lives on the rig's `Control` bone, the animated child of the root that the whole torso
+  and both arms hang from.
+- **Placed with `PivotTo`, never by assigning the root's CFrame.** Off in the camera the rig isn't a
+  physics assembly, so moving the root does *not* drag the Motor6D chain with it — measured: the
+  arms stay behind at the origin.
+- **No Humanoid, and animations loaded only once it is in the DataModel.** A Humanoid makes the
+  engine treat a model as a character (state machine, floor hunting, character controller) — nothing
+  a prop wedged inside the player's own body should be running, so it's stripped and replaced with
+  an `AnimationController`. And a track loaded against an Animator in a model parented to `nil`
+  never resolves: its `Length` sits at 0 forever and it plays nothing, leaving the rig frozen in its
+  authored T-pose with the hands 2.9 studs out to either side of the view.
+
 ### Parties & shared jobs (implemented)
 Play a job **with friends**: one job, one set of cleanables, one completion bar, several players.
 
@@ -1051,7 +1134,10 @@ below.
   garbage within `GarbageHoverRange` gets a **white `Highlight`** (`Occluded`, in `HoverHighlight` —
   geometry in front of a piece hides its outline, so a highlight never hangs through a wall; the
   cost is a fainter outline on pale models, answered with fill transparency/colour rather than by
-  going back on top). When the aim ray hits **no** piece, the outline falls
+  going back on top; the outline is **rebuilt if it loses its parent** — `PlayerGui` is wiped on
+  every character add, the job-rig swap included, and a `Highlight` has no `ResetOnSpawn` to opt out
+  with, so without that check every hover outline in the game dies silently at the first job start).
+  When the aim ray hits **no** piece, the outline falls
   back to the **nearest free piece within pickup range** (`findNearest`), so garbage at the player's
   feet is offered without aiming down at it. That fallback runs its own **line-of-sight** raycast
   from the camera (`canSee`, with 1.5 studs of slack so a piece resting against the floor or a wall
@@ -1293,7 +1379,7 @@ ReplicatedStorage/SharedModules/
   DataTemplate.luau     saved-data shape + defaults (Cash, Gems, Level, Settings, BusinessList, Inventory, PlotButtonsBought, BusinessDescription, Ratings)
   ToolConfig.luau       tool definitions catalog
   BusinessConfig.luau   business definitions catalog (BaseReward/XpReward/RequiredLevel/RequiredItems/DecalWeight/SpillWeight/WebWeight/GarbageWeight)
-  CleaningConfig.luau   cleaning tunables (shared by client + server)
+  CleaningConfig.luau   cleaning tunables (shared by client + server), plus the job-rig names (RigsFolderName/RigSetName/JobRigName/ViewmodelRigName -- both rigs are authored in Studio, not this repo) and JobRigAttribute, the mark that tells a job rig apart from the player's own avatar
   PartyConfig.luau      party tunables: MaxSize 6, the PartyId/PartyLeader attribute keys, and the PartyAction vocabulary (create+businessId/join/ready/leave/kick/disband -- no invites); a party forms AROUND a business and its job starts once every member is ready
   SkillsConfig.luau     skills catalog + math: the 5 skills' effectPerLevel, MAX_LEVEL 5, geometric price (BASE_PRICE 100k, x2/level), multiplier(name, level)
   ItemUpgrades.luau     shared item-upgrade math: MAX_LEVEL 10, geometric cost (BaseUpgradeCost x2.3/level), pure applyUpgrade (Range/Radius/UseTime steps, MIN_USE_TIME floor)
@@ -1359,7 +1445,8 @@ ServerScriptService/
   Modules/WebCleaningService.luau    server-authoritative vacuum timer (mirrors DecalCleaningService); validates CleanWeb, runs UseTime, pays flat per-web reward, records in JobServer, hide via WebCleaned to every session member; parks boundary clicks (pendingClick)
   Modules/GarbageCarryService.luau   who holds which pieces of garbage (up to GarbageCarryLimit each, an ordered list), PER SESSION (keyed by surfaceId on a weak-keyed table off the JobServer): validates CarryGarbage against the active job / carry limit / party-member conflict / range, publishes GarbageCarry per piece (holding true|false), relays the carrier's GarbageMove to the rest of their session (plus the post-drop settle report), releases one piece (shredder, wedged) or all (job change / respawn / leave). Pins the AUTHORED pieces still (anchored, non-colliding) as clone templates and registers the CleanableGarbage + CarriedGarbage collision groups non-collidable vs PlayerCollisionService.GROUP (and CarriedGarbage vs itself, so an armful can't barge itself apart). Moves no instances -- the carried thing is a client-local clone
   Modules/GarbageShredService.luau   the CLEAN half of garbage: validates a client's ShredGarbage report (on that job, a real authored piece, not already cleaned, the building has a shredder), dedupes the duplicate reports a party's clones produce via a weak-keyed per-session in-flight set, drops it from its carrier's hands, confirms with GarbageCleaned to every session member, then -- after the animation's own length -- pays 4 XP / 4 Cash and calls JobServer.markGarbageCleaned
-  Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService
+  Modules/JobRigService.luau         swaps the player's CHARACTER for the job rig (Rigs.Black."Black Cat") on accept and back to their own avatar on the trip home; builds the clone feet-first at the pose the teleport left them in (the cat's root sits ~1 stud higher than an avatar's), renames + marks it with JobRigAttribute, unanchors the root, unequips tools first (an equipped tool lives inside the character), makes the Animator ITSELF so the owner client's animations replicate, drops any engine-inserted Animate script, and re-swaps a character added while still on a job (mid-job respawn)
+  Modules/PlotService.luau           plot (home base) assignment + spawn; onAssigned/onReleased hooks for PlotButtonService; SKIPS placement for job-rig characters -- assigning Player.Character fires CharacterAdded exactly as a respawn does, and the rig would be yanked out of the building it was just teleported into
   Modules/ProgressionService.luau    awards Cash/XP/Gems + reward popups; rewardSilently() pays the same with no popup/chime (used by the per-second wall wash, which would otherwise spam them)
   Modules/ToolService.luau           grants owned+Unlocked items as Backpack Tools (clones from ReplicatedStorage.Items by ToolId), per spawn + on inventory change
   Modules/ShopService.luau           upgrades shop authority: PurchaseItem / UpgradeItem (re-validated, GEM-charged; upgrade math from shared ItemUpgrades)
@@ -1406,6 +1493,9 @@ StarterPlayer/StarterPlayerScripts/
   Modules/MissingHighlightController.luau  reveal remaining cleanables: R key / ScreenGui.HighlightButton -> neon-yellow glow (walls per-pixel via setGlow, stains via Neon parts), 8s + cooldown
   Modules/JobSummaryController.luau end-of-job summary (JobSummary remote): payout / % cleaned / duration, bounced in via UiAnimations.DropIn; offers replay (AcceptJob) or GoHome
   Modules/JobCameraController.luau pins the camera to first person for a job's duration, restores third person after (off ActiveJob)
+  Modules/JobRigController.luau    the job rig (the cat the server swaps you into) on YOUR screen: plays its animations -- tail always, idle/walk off MovementState underneath it, tail kept BELOW them in priority so the body wins the joints they share while the tail chain (which idle/walk never touch) is still all tail -- and keeps the rig invisible to its own owner via per-part LocalTransparencyModifier, re-asserted each frame after the camera pass (the engine's own transparency pass writes the same property), skipping equipped tools. Also points Camera.CameraSubject at the rig's Humanoid: the engine sets that on its OWN spawn path only, so a character handed over by assigning Player.Character leaves the camera locked to the body that was just destroyed
+  Modules/ViewmodelController.luau the first-person arms, a client-only clone of Rigs.Black.Viewmodel parented to Workspace.CurrentCamera (invisible to everyone else, no shadows, and unhittable by every aim ray -- it hangs between the camera and the target, so a raycastable rig would swallow every shot). Posed by pinning its CameraPart ONTO the camera each frame, so the animator's camera track reads as arm sway rather than a moving view; placed with PivotTo, never by assigning the root's CFrame (off in the camera it isn't a physics assembly, so the joint chain does NOT follow the root). Its Humanoid is stripped for an AnimationController -- a Humanoid makes the engine run character logic against a prop wedged inside the player's own body -- and its tracks are loaded only AFTER it is parented into the DataModel: a track loaded against an Animator in a model parented to nil never resolves (Length 0 forever), leaving the rig frozen in its T-pose with the hands out of shot
+  Modules/MovementState.luau       the one definition of "standing still or moving" (idle/walk) for the local player, shared by the viewmodel and the full-body job rig so the hands on screen can't disagree with the body
   Modules/JobGhostController.luau  decides WHO is hidden while you're on a job -- other players on your business, EXCEPT your own party members -- and hands them to HidePlayersController (visuals only; collision is server-side)
   Modules/WarehouseBoardProximity.luau  opens/closes the job board + upgrades shop as you walk in/out of each warehouse board's Hitbox (one data-driven Heartbeat loop)
   Modules/ToolFloatController.luau floats the equipped tool at the right shoulder aimed along the camera look direction, instead of hand-gripped
@@ -1419,6 +1509,7 @@ StarterPlayer/StarterPlayerScripts/
   Modules/PlotButtonSoundController.luau  plot-button feedback off PlotButtonSound: bought -> "ButtonPurchase"; couldn't afford -> silent (no fail SFX)
   Modules/PurchaseSoundController.luau  plays the purchase SFX after ANY completed Robux purchase (dev products, passes, assets) off MarketplaceService's prompt-finished signals
   Modules/BackgroundMusicController.luau  continuous 2D playlist: every Sound under ReplicatedStorage.Audios.BackgroundMusic, back to back forever, reshuffled each pass
+  Modules/HoverHighlight.luau      the white Occluded hover outline shared by garbage/broom/mop/vacuum: one reusable Highlight per owner, re-adorned rather than rebuilt. Parked under PlayerGui -- which the engine WIPES on every character add (respawns and the job-rig swap alike; a ScreenGui opts out with ResetOnSpawn = false, a Highlight has no such property), so ensure() rebuilds it whenever it has lost its parent and re-adorns whatever it was showing. That check runs BEFORE set()'s no-op guard on purpose: a wipe leaves `current` still pointing at the hovered piece, so an owner asking for the same target every frame would take the early exit and never recover
   Modules/UiPreloader.luau         warms StarterGui image assets in the background so HUD doesn't first render blurry
   Modules/UiStrokeScaler.luau      keeps UIStroke thickness consistent across resolutions (Thickness is absolute pixels only, with no Scale term)
 ```

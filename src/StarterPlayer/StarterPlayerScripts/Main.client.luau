@@ -37,6 +37,8 @@ local JobCompletionController = require(Modules:WaitForChild("JobCompletionContr
 local UncleanedInfoController = require(Modules:WaitForChild("UncleanedInfoController"))
 local JobSummaryController = require(Modules:WaitForChild("JobSummaryController"))
 local JobCameraController = require(Modules:WaitForChild("JobCameraController"))
+local ViewmodelController = require(Modules:WaitForChild("ViewmodelController"))
+local JobRigController = require(Modules:WaitForChild("JobRigController"))
 local UiButtonController = require(Modules:WaitForChild("UiButtonController"))
 local SettingsUiController = require(Modules:WaitForChild("SettingsUiController"))
 local CompanyUiController = require(Modules:WaitForChild("CompanyUiController"))
@@ -151,6 +153,13 @@ safeInit("JobCompletionController", JobCompletionController.init)
 safeInit("UncleanedInfoController", UncleanedInfoController.init)
 safeInit("JobSummaryController", JobSummaryController.init)
 safeInit("JobCameraController", JobCameraController.init)
+-- The first-person arms rig, shown in front of the camera for the duration of a job. After
+-- JobCameraController, which locks the camera to first person off the same ActiveJob attribute.
+safeInit("ViewmodelController", ViewmodelController.init)
+-- The full-body job rig (the cat the server swaps them into): plays its animations -- which
+-- replicate, so everyone sees them -- and keeps it invisible to its own owner, who sees the
+-- first-person arms instead.
+safeInit("JobRigController", JobRigController.init)
 safeInit("UiButtonController", UiButtonController.init)
 -- Settings tab (volume sliders). Init BEFORE the music starts so saved volumes apply first.
 safeInit("SettingsUiController", SettingsUiController.init)

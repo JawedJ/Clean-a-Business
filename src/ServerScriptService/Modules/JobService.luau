@@ -35,6 +35,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local BusinessService = require(script.Parent.BusinessService)
+local JobRigService = require(script.Parent.JobRigService)
 local JobServer = require(script.Parent.JobServer)
 local PartyService = require(script.Parent.PartyService)
 local PlotService = require(script.Parent.PlotService)
@@ -260,6 +261,12 @@ local function startJob(businessId: any, members: { Player })
 		jobs[member] = session
 		member:SetAttribute(Config.ActiveJobAttribute, businessId)
 		teleportToJob(characters[member], teleportPart)
+		-- Then swap them into the job rig, which is built at the pose the teleport just left them
+		-- in -- so the rig starts on the TeleportPart without repeating the placement. Teleport
+		-- first (not after) because moving the character the engine has already handed to its owner
+		-- is the well-trodden path; the swap simply inherits where it landed. A no-op on PlayAgain,
+		-- where they're wearing the rig already.
+		JobRigService.applyToJob(member)
 		-- Starting a job is what ends the tutorial's "pick a job" step. A no-op otherwise --
 		-- including for the PlayAgain re-accept, which lands on a later step than the one this
 		-- advances, and for anyone not in the tutorial.
@@ -329,7 +336,15 @@ end
 -- somehow back on a job.
 local function goHome(player: Player)
 	if JobService.getActiveJob(player) == nil then
-		PlotService.sendToPlotSpawn(player)
+		-- Their own avatar back, and the job rig gone: the trip home is where being on the clock
+		-- ends in every sense (same reasoning as the walk-speed restore below -- the job merely
+		-- ENDING leaves them stood in the business, one PlayAgain away from another run, and a
+		-- replay shouldn't have to re-dress them). Respawning them is itself the trip home --
+		-- PlotService puts every freshly added character on its plot spawn -- so only a player who
+		-- never wore the rig still needs the plain teleport.
+		if not JobRigService.restore(player) then
+			PlotService.sendToPlotSpawn(player)
+		end
 
 		-- Give them their free-roam walk speed back. A job pins them to the slower on-the-clock
 		-- speed (JobServer._pinWalkSpeed), and this is the moment they stop being on the clock in

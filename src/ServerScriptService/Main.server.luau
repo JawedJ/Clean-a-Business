@@ -7,6 +7,7 @@ local PortalService = require(game.ServerScriptService.Modules.PortalService)
 local BusinessService = require(game.ServerScriptService.Modules.BusinessService)
 local PartyService = require(game.ServerScriptService.Modules.PartyService)
 local JobService = require(game.ServerScriptService.Modules.JobService)
+local JobRigService = require(game.ServerScriptService.Modules.JobRigService)
 local PlayerCollisionService = require(game.ServerScriptService.Modules.PlayerCollisionService)
 local ShredderCollisionService = require(game.ServerScriptService.Modules.ShredderCollisionService)
 local CleaningService = require(game.ServerScriptService.Modules.CleaningService)
@@ -52,6 +53,10 @@ BusinessService.init()
 -- registers its "member left the party" hook against it and resolves the party on every accept.
 PartyService.init()
 JobService.init()
+-- Puts players in the job rig (the cat everyone sees) for the duration of a job. After JobService,
+-- which drives the swap on accept and the swap back on the trip home; its own init only watches for
+-- mid-job respawns.
+JobRigService.init()
 -- Players never collide with each other (visual hiding is client JobGhostController, job-only).
 PlayerCollisionService.init()
 -- Registers the collision groups that keep the coin reward VFX out of tagged shredders. Must run

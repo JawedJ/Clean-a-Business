@@ -294,6 +294,22 @@ local CleaningConfig = {
 	-- it just holds the line against speed boosts while on the clock. See JobServer.
 	JobWalkSpeed = 16,
 
+	-- THE JOB RIGS. Both live under ReplicatedStorage.<RigsFolderName>.<RigSetName> (authored in
+	-- Studio, not in this repo) and both are worn only while on the clock:
+	--   * JobRigName -- the full-body character EVERYONE sees. On accepting a job the player's
+	--     character is swapped for a clone of it (JobRigService) and swapped back on the trip home.
+	--   * ViewmodelRigName -- the first-person arms only the OWNER sees, hung off their camera
+	--     (ViewmodelController). Never part of the character, never replicated.
+	RigsFolderName = "Rigs",
+	RigSetName = "Black",
+	JobRigName = "Black Cat",
+	ViewmodelRigName = "Viewmodel",
+
+	-- Marks a character model as a job rig rather than the player's own avatar. Set by
+	-- JobRigService on the clone, and read by PlotService, which must not drag a job rig off to the
+	-- plot spawn the way it places every freshly added character.
+	JobRigAttribute = "JobRig",
+
 	-- Part inside each shared business building the player is teleported onto when
 	-- they accept that business's job. (Respawns always go back to the player's plot,
 	-- never the job.) Lifted by TeleportOffset so the character drops in upright.

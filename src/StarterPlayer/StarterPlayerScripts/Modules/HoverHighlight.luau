@@ -16,9 +16,17 @@
 -- (GarbageCarryController.findNearest) tests it explicitly. Occlusion only hides such an outline --
 -- the piece would still be the thing a pickup targets.
 --
--- One Highlight per owner, created once and re-adorned: Highlight instances are relatively
--- expensive to build, and only one tool is ever equipped at a time so at most one is enabled.
--- They live under the PlayerGui so they survive respawns.
+-- One Highlight per owner, created once and re-adorned: Highlight instances are relatively expensive
+-- to build, and only one tool is ever equipped at a time so at most one is enabled.
+--
+-- THE PLAYERGUI IS WIPED ON EVERY CHARACTER ADD, AND TAKES THE OUTLINE WITH IT. That includes
+-- respawns and -- the reason this matters now -- being swapped into the job rig at the start of
+-- every job (JobRigService assigns Player.Character, which the engine treats as a spawn). A
+-- ScreenGui opts out of the wipe with ResetOnSpawn = false; a Highlight has no such property, so it
+-- simply goes. The symptom is silent and total: the owner carries on setting Adornee and Enabled on
+-- an instance that is no longer in the DataModel, so every outline stops appearing for the rest of
+-- the session with nothing logged. Hence ensure() below -- checked before every set, rebuilt when
+-- the outline has lost its parent, and re-adorned to whatever it was showing.
 
 local Players = game:GetService("Players")
 
@@ -33,15 +41,16 @@ HoverHighlight.__index = HoverHighlight
 
 export type HoverHighlight = typeof(setmetatable(
 	{} :: {
+		name: string,
 		highlight: Highlight,
 		current: Instance?,
 	},
 	HoverHighlight
 ))
 
--- Build one reusable outline. `name` only shows up in the explorer, to tell the tools' outlines
--- apart while debugging.
-function HoverHighlight.new(name: string): HoverHighlight
+-- Build the Highlight instance itself. Separate from new() because a wiped outline is rebuilt
+-- through here too -- see ensure().
+local function build(name: string): Highlight
 	local highlight = Instance.new("Highlight")
 	highlight.Name = name
 	highlight.FillColor = HIGHLIGHT_COLOR
@@ -51,16 +60,42 @@ function HoverHighlight.new(name: string): HoverHighlight
 	highlight.DepthMode = HIGHLIGHT_DEPTH_MODE
 	highlight.Enabled = false
 	highlight.Parent = localPlayer:WaitForChild("PlayerGui")
+	return highlight
+end
 
+-- Build one reusable outline. `name` only shows up in the explorer, to tell the tools' outlines
+-- apart while debugging.
+function HoverHighlight.new(name: string): HoverHighlight
 	return setmetatable({
-		highlight = highlight,
+		name = name,
+		highlight = build(name),
 		current = nil,
 	}, HoverHighlight)
+end
+
+-- Replace the outline if it has been wiped out from under us (see the header). Cheap enough to ask
+-- every frame -- it's one property read until the day it isn't. The rebuild re-adorns whatever we
+-- were showing, so a wipe mid-hover doesn't need the caller to change its target to recover.
+function HoverHighlight.ensure(self: HoverHighlight)
+	if self.highlight.Parent then
+		return
+	end
+	self.highlight:Destroy()
+	self.highlight = build(self.name)
+	if self.current then
+		self.highlight.Adornee = self.current
+		self.highlight.Enabled = true
+	end
 end
 
 -- Outline `target`, or clear the outline when nil. Re-setting the same target is a no-op, so this
 -- is cheap to call every frame from an aim loop.
 function HoverHighlight.set(self: HoverHighlight, target: Instance?)
+	-- BEFORE the no-op check, never after: a wipe leaves `current` still pointing at the piece we
+	-- were showing, so an owner that keeps asking for the same target would take the early exit
+	-- every frame and never recover.
+	self:ensure()
+
 	if target == self.current then
 		return
 	end
