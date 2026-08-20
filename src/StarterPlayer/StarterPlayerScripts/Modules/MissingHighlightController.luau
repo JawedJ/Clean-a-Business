@@ -1,13 +1,14 @@
 --!strict
 
--- Press R (or tap the HighlightButton) while on a job to reveal the WALLS you still have left to
--- clean: their still-dirty pixels glow neon yellow for the reveal duration, then the glow clears
--- itself. Pressing it again re-applies against the current state and restarts the timer.
+-- Press R (or tap the HighlightButton) while on a job to reveal what you still have left to clean:
+-- the WALLS and the GARBAGE glow neon yellow for the reveal duration, then the glow clears itself.
+-- Pressing it again re-applies against the current state and restarts the timer.
 --
--- Walls glow per-pixel: only the still-dirty pixels of each wall's dirt overlay light up, so the
--- glow shrinks live as the player cleans (owned by SurfaceManager/CleanableSurface, which hold the
--- editable image). Purely cosmetic and client-side -- it touches nothing on the server. (Stains and
--- webs are deliberately NOT highlighted.)
+-- Each cleanable glows in the way its own owner can: walls per-PIXEL, only the still-dirty pixels of
+-- each wall's dirt overlay, so the glow shrinks live as the player cleans (SurfaceManager /
+-- CleanableSurface hold the editable image); garbage per-PIECE, a Highlight on each piece still in
+-- the job (GarbageVisibility, which owns this session's clones). Purely cosmetic and client-side --
+-- it touches nothing on the server. (Stains, spills and webs are deliberately NOT highlighted.)
 --
 -- The on-screen button (PlayerGui.ScreenGui.HighlightButton) shows only during a job, like
 -- the JobCompletion HUD. Its ScreenGui is re-cloned on every respawn, so we re-bind to the
@@ -18,6 +19,7 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local GarbageVisibility = require(script.Parent.GarbageVisibility)
 local SurfaceManager = require(script.Parent.SurfaceManager)
 
 local localPlayer = Players.LocalPlayer
@@ -49,9 +51,10 @@ local function hasActiveJob(): boolean
 	return type(localPlayer:GetAttribute(Config.ActiveJobAttribute)) == "string"
 end
 
--- Drop the reveal: unglow the walls (per-pixel restore).
+-- Drop the reveal: unglow the walls (per-pixel restore) and the garbage (Highlights removed).
 local function clearGlow()
 	SurfaceManager.setWallsGlow(false)
+	GarbageVisibility.setGlow(false)
 end
 
 local function reveal()
@@ -63,8 +66,9 @@ local function reveal()
 
 	clearGlow()
 
-	-- Walls glow their own remaining-dirt pixels.
+	-- Walls glow their own remaining-dirt pixels; every piece of garbage still in the job glows whole.
 	SurfaceManager.setWallsGlow(true)
+	GarbageVisibility.setGlow(true)
 
 	revealToken += 1
 	local token = revealToken

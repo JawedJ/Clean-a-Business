@@ -39,6 +39,7 @@ local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
 local GarbageResolver = require(ReplicatedStorage.SharedModules.GarbageResolver)
 local JobService = require(script.Parent.JobService)
 local PlayerCollisionService = require(script.Parent.PlayerCollisionService)
+local TutorialService = require(script.Parent.TutorialService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 -- Client -> server: (surfaceId, release). A surfaceId alone asks to pick that piece up; with
@@ -217,6 +218,24 @@ local function release(player: Player, surfaceId: string)
 		carrying[player] = nil
 		carriedOn[player] = nil
 		audience[player] = nil
+
+		-- Empty hands is also what sends the tutorial's "carry it to the shredder" step BACK to the
+		-- one that has them pick a piece up -- however they came to be empty (dropped it, walked out
+		-- of range, died). Deliberately on the last piece rather than each one: a player still
+		-- holding two of three hasn't lost the thing the step is about. A no-op for anyone not on
+		-- that step, which includes feeding the shredder -- GarbageShredService moves the step on
+		-- before it takes the piece out of their hands.
+		--
+		-- Only while the job is still THEIRS, though. Leaving a job empties their hands through this
+		-- same path, and there's no garbage left to send them back to pick up -- their clones went
+		-- with the job -- so sending them back would flash a "pick up some garbage" line over the
+		-- summary screen. Going home is what moves them past those steps instead (see
+		-- TutorialService.notifyGoHome). endJob clears the job before the attribute change that gets
+		-- us here, so by now this reads nil for exactly that case and still reads the job for a
+		-- mid-run death.
+		if JobService.getActiveJob(player) then
+			TutorialService.notifyGarbageDropped(player)
+		end
 	end
 end
 
@@ -313,6 +332,11 @@ local function tryPickUp(player: Player, surfaceId: string)
 	local listeners = sessionAudience(player)
 	audience[player] = listeners
 	broadcast(listeners, player, surfaceId, businessId, true)
+
+	-- Getting a piece into their hands is what ends the tutorial's "pick up some garbage" step. Here
+	-- rather than at the remote, so only a pickup that actually SUCCEEDED counts -- every refusal
+	-- above returns without ever reaching this. A no-op for anyone not on that step.
+	TutorialService.notifyGarbagePickedUp(player)
 end
 
 -- Find every authored piece: remember where it belongs and pin it. Also catches pieces that

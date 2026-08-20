@@ -47,12 +47,12 @@ local BusinessConfig: { [string]: DataTemplate.Business } = {
 	},
 
 	gasStation = {
-		BaseReward = 1500,
+		BaseReward = 7500,
 		Unlocked = true,
 		Name = "Frosty's",
 		UniqueID = "gasStation",
 		Completions = 0,
-		XpReward = 250,
+		XpReward = 999,
 		RequiredLevel = 1,
 		-- Walls only (no stains), so the pressure washer is the only tool needed.
 		RequiredItems = { "pressureWasher" },

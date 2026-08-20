@@ -44,6 +44,7 @@ local GarbageCarryService = require(script.Parent.GarbageCarryService)
 local JobServer = require(script.Parent.JobServer)
 local JobService = require(script.Parent.JobService)
 local ProgressionService = require(script.Parent.ProgressionService)
+local TutorialService = require(script.Parent.TutorialService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 -- Client -> server: "my copy of this piece went into the shredder".
@@ -150,6 +151,14 @@ local function onShred(player: Player, surfaceId: string)
 	end
 	machine.accepted[surfaceId] = true
 	table.insert(machine.queue, { surfaceId = surfaceId, player = player })
+
+	-- Feeding the machine is what ends the tutorial's shredder step. It has to happen BEFORE the
+	-- dropPiece below, not after: emptying the carrier's hands is the same step's signal to send them
+	-- BACK to picking a piece up, so the step must already have moved on by the time the piece
+	-- leaves them. Counted on acceptance rather than on the piece actually going down -- a queued
+	-- piece is still a piece they successfully shredded, and waiting would leave the line up over a
+	-- player with nothing left to do. A no-op for anyone not on that step.
+	TutorialService.notifyGarbageShredded(player)
 
 	-- Accepted, so it's the machine's now rather than the carrier's -- whether it goes down this
 	-- second or waits above the mouth for its turn.

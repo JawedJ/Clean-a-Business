@@ -8,7 +8,8 @@
 --   * Types the step's line into TutorialGui.TutorialText, one character at a time, each with a
 --     click of the TypingAudio SFX.
 --   * Points a scrolling-arrow Beam from the player at whatever the step wants them to walk to --
---     a plot button's Interact pad, or a warehouse board's hitbox.
+--     a plot button's Interact pad, a warehouse board's hitbox, the shredder's mouth, or the
+--     nearest piece of garbage still left in the job they're on.
 --   * Shows the step's TutorialGui overlay (the Wash / Unlock button highlights).
 --   * Narrows the UI down to what the step needs, through TutorialState: which panel may be
 --     opened, whether it may be closed again, whether the job board scrolls, and which tool may be
@@ -30,9 +31,11 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.SharedModules.CleaningConfig)
+local ShredderResolver = require(ReplicatedStorage.SharedModules.ShredderResolver)
 local SoundManager = require(ReplicatedStorage.SharedModules.SoundManager)
 local TutorialConfig = require(ReplicatedStorage.SharedModules.TutorialConfig)
 
+local GarbageVisibility = require(script.Parent.GarbageVisibility)
 local JobUiController = require(script.Parent.JobUiController)
 local TutorialState = require(script.Parent.TutorialState)
 local UpgradesUiController = require(script.Parent.UpgradesUiController)
@@ -46,6 +49,11 @@ local SCREEN_GUI_NAME = "ScreenGui"
 -- board open, so the player can only reach the first row -- the one the highlight is pointing at.
 local JOB_SCROLL_NAME = "ScrollingFrame"
 local WAREHOUSE_NAME = "Warehouse"
+
+-- How much closer (studs) another piece of garbage has to be before the beam gives up on the one
+-- it's already pointing at. Without it the arrow would swap pieces -- and so rebuild the whole beam
+-- -- every time the player's wandering changed which of two nearby pieces ranked first.
+local BEAM_GARBAGE_STICKINESS = 6
 
 local TutorialController = {}
 
@@ -75,6 +83,12 @@ local beam: Beam? = nil
 local originAttachment: Attachment? = nil
 local targetAttachment: Attachment? = nil
 local beamTargetPart: BasePart? = nil
+
+-- The piece of garbage the "Garbage" beam settled on, kept between frames so it can stay on it (see
+-- BEAM_GARBAGE_STICKINESS). Never needs clearing: it's only ever compared by identity against the
+-- pieces still live in GarbageVisibility, so once the piece is shredded this stops matching anything
+-- by itself and the next frame picks afresh.
+local beamGarbagePart: BasePart? = nil
 
 -- === TutorialGui ====================================================================
 
@@ -222,11 +236,68 @@ local function destroyBeam()
 	beamTargetPart = nil
 end
 
--- Walk the player's own plot to whatever the step's beam target names, or nil if any link isn't
--- there yet (no plot assigned, the warehouse hasn't streamed in). Resolved lazily every frame the
--- beam is wanted, exactly like the warehouse proximity hitboxes, so a plot assigned or streamed in
--- late just starts working.
-local function resolveBeamTarget(target: TutorialConfig.BeamTarget): BasePart?
+-- A piece of garbage as something the beam can end on: the piece itself when it's a bare part, else
+-- the model's primary part (or any part of it, for a model authored without one).
+local function garbagePart(piece: PVInstance): BasePart?
+	if piece:IsA("BasePart") then
+		return piece
+	end
+	local model = piece :: Model
+	local part: Instance? = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+	return if part and part:IsA("BasePart") then part else nil
+end
+
+-- The piece of the current job's remaining garbage to point at: the nearest one to the player, but
+-- STICKY -- the piece already being pointed at keeps the beam unless it's gone (shredded, or the job
+-- ended) or another is meaningfully closer. The set comes from GarbageVisibility, which holds only
+-- what's still in the world to clean, so a shredded piece drops out of the running by itself.
+local function resolveGarbageTarget(root: BasePart): BasePart?
+	local nearest: BasePart? = nil
+	local nearestDistance = math.huge
+	local currentDistance: number? = nil
+
+	for _, piece in GarbageVisibility.getPieces() do
+		local part = garbagePart(piece)
+		if part then
+			local distance = (part.Position - root.Position).Magnitude
+			-- Matched by identity against a LIVE piece, so a stale beamGarbagePart can never win.
+			if part == beamGarbagePart then
+				currentDistance = distance
+			end
+			if distance < nearestDistance then
+				nearest = part
+				nearestDistance = distance
+			end
+		end
+	end
+
+	if currentDistance and currentDistance <= nearestDistance + BEAM_GARBAGE_STICKINESS then
+		return beamGarbagePart
+	end
+	beamGarbagePart = nearest
+	return nearest
+end
+
+-- Whatever the step's beam target names, or nil if any link isn't there yet. Resolved lazily every
+-- frame the beam is wanted, exactly like the warehouse proximity hitboxes, so a plot assigned or a
+-- building streamed in late just starts working.
+--
+-- Two kinds hang off the JOB rather than the plot, so they're answered first and never touch it: a
+-- player being walked to the shredder or to a piece of garbage is stood inside the business.
+local function resolveBeamTarget(target: TutorialConfig.BeamTarget, root: BasePart): BasePart?
+	if target.kind == "Garbage" or target.kind == "Shredder" then
+		local businessId = localPlayer:GetAttribute(Config.ActiveJobAttribute)
+		if type(businessId) ~= "string" then
+			return nil -- between jobs: nothing to point into
+		end
+		if target.kind == "Garbage" then
+			return resolveGarbageTarget(root)
+		end
+		local shredder = ShredderResolver.find(businessId)
+		-- p1, the mouth -- the end the player has to walk their armful to.
+		return if shredder then shredder.entry else nil
+	end
+
 	local plotName = localPlayer:GetAttribute(Config.PlotAttribute)
 	if type(plotName) ~= "string" then
 		return nil
@@ -240,11 +311,11 @@ local function resolveBeamTarget(target: TutorialConfig.BeamTarget): BasePart?
 	local part: Instance? = nil
 	if target.kind == "PlotButton" then
 		local buttons = plot:FindFirstChild(Config.PlotButtonsFolderName)
-		local button = buttons and buttons:FindFirstChild(target.name)
+		local button = target.name and buttons and buttons:FindFirstChild(target.name)
 		part = button and button:FindFirstChild(Config.PlotButtonInteractPartName, true)
 	else
 		local warehouse = plot:FindFirstChild(WAREHOUSE_NAME)
-		local board = warehouse and warehouse:FindFirstChild(target.name)
+		local board = target.name and warehouse and warehouse:FindFirstChild(target.name)
 		local union = board and target.union and board:FindFirstChild(target.union)
 		part = union and union:FindFirstChild(Config.HitboxName)
 	end
@@ -309,10 +380,19 @@ local function stepBeam()
 		return
 	end
 
+	-- The root comes first here because the "Garbage" target is resolved RELATIVE to it (nearest
+	-- piece to the player), not just used as the beam's near end.
 	local character = localPlayer.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
-	local targetPart = resolveBeamTarget(target)
-	if not root or not targetPart then
+	if not root then
+		if beam then
+			destroyBeam()
+		end
+		return
+	end
+
+	local targetPart = resolveBeamTarget(target, root)
+	if not targetPart then
 		if beam then
 			destroyBeam()
 		end
@@ -351,7 +431,7 @@ end
 
 -- The parts of a step that depend on live UI state rather than the step change itself: the beam's
 -- target, the scroll lock surviving a respawn, the panel-gated highlight, and noticing that the
--- job board has come up on screen (which is what ends step 7).
+-- job board has come up on screen (which is what ends the OpenJobBoard step).
 local function stepUi()
 	local step = activeStep
 	stepBeam()
@@ -382,7 +462,7 @@ local function stepUi()
 		trackHighlight(step.highlight)
 	end
 
-	-- Step 7 ends when the board is actually on the player's screen, however they opened it.
+	-- A BoardOpen step ends when the board is actually on the player's screen, however they opened it.
 	if step.advance == "BoardOpen" and panelOpen then
 		report(TutorialConfig.Report.BoardOpened, step.number)
 	end

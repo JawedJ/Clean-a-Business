@@ -58,6 +58,54 @@ local activeBusinessId: string? = nil
 local clones: { [string]: PVInstance } = {}
 local cloneHome: { [string]: CFrame } = {}
 
+-- REVEAL GLOW (driven by MissingHighlightController, alongside the walls' per-pixel glow). The walls
+-- recolor their own dirt pixels; a piece of garbage is ordinary geometry, so it gets a whole-piece
+-- Highlight in the same neon yellow instead.
+--
+-- ALWAYS ON TOP, unlike the white hover outline (see HoverHighlight, which argues -- rightly, for a
+-- hover -- that an outline hanging through a wall reads as a bug). The reveal is the opposite case:
+-- the piece it exists to find is the one you already walked past, which is by definition the one
+-- behind the desk, so an occluded glow would light up only the garbage you could see anyway. It's
+-- also on a timer, so the see-through window is a deliberate, brief ability rather than the norm.
+--
+-- One Highlight per live piece. The engine only renders ~31 at once, so if a business is ever
+-- authored with substantially more garbage than that, the excess simply won't glow -- at which point
+-- this wants to become a recolor of the parts rather than more Highlights.
+local GLOW_COLOR = Color3.fromRGB(255, 234, 0)
+-- Tint rather than paint: the piece stays recognisable through the glow.
+local GLOW_FILL_TRANSPARENCY = 0.5
+local GLOW_HIGHLIGHT_NAME = "GarbageRevealGlow"
+
+-- Whether the glow is currently up, and the live Highlight of each glowing piece by surfaceId.
+local glowing = false
+local glowHighlights: { [string]: Highlight } = {}
+
+-- Light one piece up. The Highlight is parented to the CLONE, so destroying the piece takes its glow
+-- with it; the table is only so a piece leaving the job can drop its glow explicitly.
+local function addGlow(surfaceId: string, piece: PVInstance)
+	if glowHighlights[surfaceId] then
+		return
+	end
+	local highlight = Instance.new("Highlight")
+	highlight.Name = GLOW_HIGHLIGHT_NAME
+	highlight.FillColor = GLOW_COLOR
+	highlight.OutlineColor = GLOW_COLOR
+	highlight.FillTransparency = GLOW_FILL_TRANSPARENCY
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Adornee = piece
+	highlight.Parent = piece
+	glowHighlights[surfaceId] = highlight
+end
+
+local function removeGlow(surfaceId: string)
+	local highlight = glowHighlights[surfaceId]
+	if highlight then
+		highlight:Destroy()
+		glowHighlights[surfaceId] = nil
+	end
+end
+
 -- Build this session's own copy of one authored piece, at the position it was authored at. The clone
 -- is unanchored and solid against the building (so a carried piece can't be walked through a wall,
 -- and a dropped one falls and settles), but never collides with a character.
@@ -73,6 +121,11 @@ local function cloneOne(template: Instance, info: Authored)
 	clone.Parent = info.parent
 	clones[info.surfaceId] = clone :: PVInstance
 	cloneHome[info.surfaceId] = info.home
+
+	-- A piece that streamed in mid-reveal joins the glow, rather than being the one piece left dark.
+	if glowing then
+		addGlow(info.surfaceId, clone :: PVInstance)
+	end
 end
 
 -- True if `inst` is an authored piece: a direct child of a CleanableGarbage folder that isn't one of
@@ -124,6 +177,10 @@ local function destroyClones()
 	end
 	table.clear(clones)
 	table.clear(cloneHome)
+	-- The Highlights went with the pieces they were parented to. Dropping the flag too means a job
+	-- swap mid-reveal starts its fresh set of pieces unglowed, whichever order the teardown runs in.
+	table.clear(glowHighlights)
+	glowing = false
 end
 
 -- This session's copy of a whole business's garbage.
@@ -156,6 +213,28 @@ function GarbageVisibility.getHome(surfaceId: string): CFrame?
 	return cloneHome[surfaceId]
 end
 
+-- Turn the "what's left" reveal glow on or off across every piece of garbage still in the job. The
+-- counterpart to SurfaceManager.setWallsGlow; both are driven together by MissingHighlightController.
+-- Pieces are few enough to flip in one go (a job's worth is tens, not the walls' hundreds of faces),
+-- and a piece that's picked up, shredded or streamed in while it's on keeps up by itself.
+function GarbageVisibility.setGlow(enabled: boolean)
+	if glowing == enabled then
+		return
+	end
+	glowing = enabled
+
+	if enabled then
+		for surfaceId, piece in clones do
+			addGlow(surfaceId, piece)
+		end
+	else
+		for _, highlight in glowHighlights do
+			highlight:Destroy()
+		end
+		table.clear(glowHighlights)
+	end
+end
+
 -- Every live clone, keyed by surfaceId (for the idle reset sweep).
 function GarbageVisibility.getPieces(): { [string]: PVInstance }
 	return clones
@@ -166,8 +245,9 @@ end
 function GarbageVisibility.hideOne(surfaceId: string)
 	local clone = clones[surfaceId]
 	if clone then
-		clone:Destroy()
+		clone:Destroy() -- takes any reveal glow parented to it with it
 		clones[surfaceId] = nil
+		glowHighlights[surfaceId] = nil
 	end
 end
 
@@ -179,6 +259,9 @@ function GarbageVisibility.takePiece(surfaceId: string): PVInstance?
 	local clone = clones[surfaceId]
 	clones[surfaceId] = nil
 	cloneHome[surfaceId] = nil
+	-- The piece isn't "left to clean" any more, so it hands over WITHOUT the reveal glow riding along
+	-- into the disposal animation.
+	removeGlow(surfaceId)
 	return clone
 end
 

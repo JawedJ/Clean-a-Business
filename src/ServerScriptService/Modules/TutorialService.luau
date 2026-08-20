@@ -1,7 +1,7 @@
 --!strict
 
 -- Server authority for the onboarding tutorial (see TutorialConfig for the step table). The
--- tutorial is its own game state: a player in it is walked through the twelve steps with the rest
+-- tutorial is its own game state: a player in it is walked through the fourteen steps with the rest
 -- of the game locked down, and everything about which step they're on lives HERE.
 --
 -- Why the server owns the step number rather than the client:
@@ -115,11 +115,12 @@ end
 -- funnel, and publish it with its resolved text to their client. Past the last step this finishes
 -- the tutorial instead.
 --
--- `isResume` marks the one case that isn't forward progress: picking a run back up on a rejoin.
--- Everything about the step is applied identically -- that's what re-arms the locks -- except the
--- funnel report, which would otherwise count the same player reaching the same step twice (and,
--- for a step that resumes BACKWARD, count them reaching an earlier one again).
-local function enterStep(player: Player, number: number, isResume: boolean?)
+-- `isReplay` marks the cases that AREN'T forward progress: picking a run back up on a rejoin, and
+-- the garbage step sending the player back to the one before it. Everything about the step is
+-- applied identically -- that's what re-arms the locks, and what re-types the line -- except the
+-- funnel report, which would otherwise count the same player reaching the same step twice (and, when
+-- the step went backward, count them reaching an earlier one again).
+local function enterStep(player: Player, number: number, isReplay: boolean?)
 	local step = TutorialConfig.get(number)
 	if not step then
 		finish(player)
@@ -130,7 +131,7 @@ local function enterStep(player: Player, number: number, isResume: boolean?)
 	-- Persist before publishing: if anything below fails, the resume point is already the step the
 	-- player is actually on rather than the one before it.
 	DataService:set(player, { "TutorialStep" }, number)
-	if not isResume then
+	if not isReplay then
 		logFunnelStep(player, step)
 	end
 
@@ -192,7 +193,7 @@ function TutorialService.canPurchaseTool(player: Player, uniqueId: string): bool
 end
 
 -- May this player upgrade a tool right now? No step asks for an upgrade, so the whole action is
--- off for the duration -- the shop is open at step 11 for exactly one purchase.
+-- off for the duration -- the shop is open at the BuyBroom step for exactly one purchase.
 function TutorialService.canUpgradeTool(player: Player): boolean
 	return not TutorialService.isActive(player)
 end
@@ -208,19 +209,67 @@ local function onPlotButtonBought(player: Player, buttonName: string)
 	end)
 end
 
--- The player accepted a job (step 8).
+-- The player accepted a job (the SelectJob step).
 function TutorialService.notifyJobAccepted(player: Player)
 	advanceIf(player, "JobStart")
 end
 
--- The player pressed GoHome on the job summary (step 9). Deliberately GoHome and not the job
--- ending: PlayAgain restarts the job from the same summary, and a player who replays hasn't
--- finished the step yet -- only walking away from the summary counts.
-function TutorialService.notifyGoHome(player: Player)
-	advanceIf(player, "JobDone")
+-- The player picked up a piece of cleanable garbage (the PickUpGarbage step). Any piece counts --
+-- the step is about learning that garbage is carryable at all.
+function TutorialService.notifyGarbagePickedUp(player: Player)
+	advanceIf(player, "GarbagePickup")
 end
 
--- A tool was bought (step 11 -- the broom).
+-- The player fed a piece into the shredder (the ShredGarbage step).
+function TutorialService.notifyGarbageShredded(player: Player)
+	advanceIf(player, "GarbageShred")
+end
+
+-- The player's hands went EMPTY without anything having been shredded -- they dropped what they were
+-- carrying, or lost it to a respawn. The step that asks them to carry a piece to the shredder has
+-- nothing left to be about, so it goes back to the step that has them pick one up rather than
+-- leaving a "bring the garbage to the shredder" line over a player holding no garbage.
+--
+-- The only step that moves BACKWARD, and it's re-entered as a replay so the funnel doesn't count
+-- them reaching the pickup step twice. Which step to fall back to is read off the table (the nearest
+-- earlier GarbagePickup) rather than being "one less", so the pair can be moved or separated without
+-- this quietly landing on whatever now happens to sit before it.
+--
+-- Called on EVERY release, including the shredder swallowing a piece -- GarbageShredService notifies
+-- the shred first, precisely so that by the time the piece leaves the player's hands they're already
+-- on the next step and this is a no-op.
+function TutorialService.notifyGarbageDropped(player: Player)
+	local step = stepFor(player)
+	if not step or step.advance ~= "GarbageShred" then
+		return
+	end
+	for earlier = step.number - 1, 1, -1 do
+		local candidate = TutorialConfig.get(earlier)
+		if candidate and candidate.advance == "GarbagePickup" then
+			enterStep(player, earlier, true)
+			return
+		end
+	end
+end
+
+-- The player pressed GoHome on the job summary. Deliberately GoHome and not the job ending:
+-- PlayAgain restarts the job from the same summary, and a player who replays hasn't finished the
+-- step yet -- only walking away from the summary counts.
+--
+-- This ends the CleanJob step, but it also has to catch the player who bailed out of the job EARLY,
+-- part-way through the garbage steps: their job is over, so no in-job step can ever end on its own
+-- trigger again, and the job board is locked shut so they can't start another. So going home skips
+-- the whole run of in-job steps, exactly as rejoining mid-job does (TutorialConfig.afterJob).
+-- Idempotent: a second GoHome lands on a step that isn't in a job and does nothing.
+function TutorialService.notifyGoHome(player: Player)
+	local step = stepFor(player)
+	if not step or not TutorialConfig.isInJob(step) then
+		return
+	end
+	enterStep(player, TutorialConfig.afterJob(step.number))
+end
+
+-- A tool was bought (the BuyBroom step).
 function TutorialService.notifyToolPurchased(player: Player, uniqueId: string)
 	advanceIf(player, "ToolBuy", function(step)
 		return step.tool == uniqueId

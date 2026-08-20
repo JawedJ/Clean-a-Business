@@ -1,7 +1,7 @@
 --!strict
 
 -- The onboarding tutorial's step table and the constants both sides of it need. The tutorial is
--- its own game state: while it runs, the player is walked through twelve steps and most of the
+-- its own game state: while it runs, the player is walked through fourteen steps and most of the
 -- game's UI/purchases are locked down to just the one thing the current step asks for.
 --
 -- The SERVER owns the step number (TutorialService) -- it's the only side that can be trusted to
@@ -91,7 +91,7 @@ export type HighlightTarget = {
 }
 
 TutorialConfig.HighlightTargets = {
-	-- Step 8: the Wash button on the gas station's row -- the only job a level-1 player can take.
+	-- SelectJob: the Wash button on the gas station's row -- the only job a level-1 player can take.
 	WashButtonHighlight = {
 		frame = "JobFrame",
 		container = "ScrollingFrame",
@@ -99,7 +99,7 @@ TutorialConfig.HighlightTargets = {
 		id = "gasStation",
 		button = "WashButton",
 	},
-	-- Step 11: the broom slot's buy/upgrade button in the shop.
+	-- BuyBroom: the broom slot's buy/upgrade button in the shop.
 	UnlockHighlight = {
 		frame = "UpgradesFrame",
 		container = "Slots",
@@ -109,25 +109,40 @@ TutorialConfig.HighlightTargets = {
 	},
 } :: { [string]: HighlightTarget }
 
--- Where a step's beam points. Resolved client-side against the player's own plot:
+-- Where a step's beam points. All resolved client-side, but against two different things.
+--
+-- The player's own PLOT, by name:
 --   PlotButton -- Plots.<plot>.Buttons.<name>.Interact (the pad they step on)
 --   Board      -- Plots.<plot>.Warehouse.<name>.<union>.Hitbox (the board's walk-in volume)
+--
+-- The business they are ON A JOB in, with nothing to name -- there is one shredder per building, and
+-- which piece of garbage is "the" one is a live question rather than an authored answer:
+--   Shredder   -- Businesses.<job>.Shredder.p1, the machine's mouth
+--   Garbage    -- the piece of this job's remaining cleanable garbage NEAREST the player. It is the
+--                 client's own clone (see GarbageVisibility), so this can only ever be resolved
+--                 client-side, and the set shrinks live as pieces are shredded.
 export type BeamTarget = {
-	kind: "PlotButton" | "Board",
-	-- Button model name for PlotButton; board model name for Board.
-	name: string,
+	kind: "PlotButton" | "Board" | "Shredder" | "Garbage",
+	-- Button model name for PlotButton; board model name for Board. The job-relative kinds have
+	-- nothing to name.
+	name: string?,
 	-- Board only: the union inside the board model holding the hitbox.
 	union: string?,
 }
 
 -- How a step ends.
---   Text       -- types out, holds, then the client reports TextDone
---   PlotButton -- the player buys the named plot button (server sees the purchase)
---   BoardOpen  -- the named panel comes up on screen (client reports BoardOpened)
---   JobStart   -- the player accepts a job (server sees the accept)
---   JobDone    -- the player finishes a job AND picks GoHome on the summary (server sees GoHome)
---   ToolBuy    -- the player buys the named tool (server sees the purchase)
-export type Advance = "Text" | "PlotButton" | "BoardOpen" | "JobStart" | "JobDone" | "ToolBuy"
+--   Text          -- types out, holds, then the client reports TextDone
+--   PlotButton    -- the player buys the named plot button (server sees the purchase)
+--   BoardOpen     -- the named panel comes up on screen (client reports BoardOpened)
+--   JobStart      -- the player accepts a job (server sees the accept)
+--   GarbagePickup -- the player picks up any piece of cleanable garbage (server sees the carry)
+--   GarbageShred  -- the player feeds a piece into the shredder (server sees the shred). This is the
+--                    one step that can go BACKWARD: emptying their hands without shredding puts them
+--                    back on the GarbagePickup step before it (see TutorialService).
+--   JobDone       -- the player finishes a job AND picks GoHome on the summary (server sees GoHome)
+--   ToolBuy       -- the player buys the named tool (server sees the purchase)
+export type Advance =
+	"Text" | "PlotButton" | "BoardOpen" | "JobStart" | "GarbagePickup" | "GarbageShred" | "JobDone" | "ToolBuy"
 
 export type Step = {
 	-- 1-based step number; also the funnel step number.
@@ -169,7 +184,7 @@ export type Step = {
 	hideTextAfter: number?,
 }
 
--- The twelve steps, in order. Index == step.number == funnel step number.
+-- The fourteen steps, in order. Index == step.number == funnel step number.
 TutorialConfig.Steps = {
 	{
 		number = 1,
@@ -231,23 +246,40 @@ TutorialConfig.Steps = {
 		lockJobScroll = true,
 		highlight = "WashButtonHighlight",
 	},
+	-- Steps 9-11 all run INSIDE the job the step above starts (see isInJob): they teach the garbage
+	-- mechanic -- pick a piece up, carry it to the shredder -- before turning the player loose on the
+	-- walls. The two garbage steps are quick, so unlike the wash step their lines stay up throughout.
 	{
 		number = 9,
+		name = "PickUpGarbage",
+		text = "Pick up some garbage by clicking on it",
+		advance = "GarbagePickup",
+		beam = { kind = "Garbage" },
+	},
+	{
+		number = 10,
+		name = "ShredGarbage",
+		text = "Bring the garbage to the shredder",
+		advance = "GarbageShred",
+		beam = { kind = "Shredder" },
+	},
+	{
+		number = 11,
 		name = "CleanJob",
-		text = "Clean the floor until 100% Completion!",
+		text = "Clean the dirt until 100% Completion!",
 		advance = "JobDone",
 		-- The player is on the clock here until they finish and go home, which is far longer than
 		-- the line needs to be readable -- so it clears itself rather than sitting over the job.
 		hideTextAfter = 8,
 	},
 	{
-		number = 10,
+		number = 12,
 		name = "WorkersKeptWorking",
 		text = "Great Job! While you were busy working, your workers kept making gems!",
 		advance = "Text",
 	},
 	{
-		number = 11,
+		number = 13,
 		name = "BuyBroom",
 		text = "Now go to the upgrades board and purchase your next tool.",
 		advance = "ToolBuy",
@@ -259,7 +291,7 @@ TutorialConfig.Steps = {
 		highlightNeedsPanel = true,
 	},
 	{
-		number = 12,
+		number = 14,
 		name = "Complete",
 		text = "You completed the tutorial! Complete more jobs to earn more cash!",
 		advance = "Text",
@@ -282,14 +314,48 @@ function TutorialConfig.get(number: number): Step?
 	return TutorialConfig.Steps[number]
 end
 
+-- Steps that can ONLY be finished while the player is on a job -- carrying a piece of garbage,
+-- feeding the shredder, cleaning to 100%. They're the steps that assume a world state the player can
+-- lose without finishing them: the job doesn't survive a disconnect, and it doesn't survive bailing
+-- out early either. Nothing can re-arm it for them (the job board is locked shut while they run), so
+-- a player who loses the job on one of these would be stranded on a step that can never end.
+--
+-- Both escapes -- rejoining, and going home -- therefore treat the whole run of them as done and
+-- skip past it (see afterJob, and TutorialService.notifyGoHome). They were doing the job when they
+-- dropped out, which is the same generosity the wash step alone used to get.
+local IN_JOB_ADVANCE: { [string]: boolean } = {
+	GarbagePickup = true,
+	GarbageShred = true,
+	JobDone = true,
+}
+
+function TutorialConfig.isInJob(step: Step): boolean
+	return IN_JOB_ADVANCE[step.advance] == true
+end
+
+-- The first step at or after `number` that doesn't need a job -- `number` itself when it already
+-- doesn't. May be one past the end of the table, which enterStep reads as "the tutorial is over".
+function TutorialConfig.afterJob(number: number): number
+	local at = number
+	while true do
+		local step = TutorialConfig.get(at)
+		if not step or not TutorialConfig.isInJob(step) then
+			return at
+		end
+		at += 1
+	end
+end
+
 -- Where a player who left partway through should pick the tutorial back up, given the step they
 -- were on. Usually that step exactly -- but two kinds of step can't simply be re-entered, because
 -- they assume a world state a fresh join doesn't have:
 --
---   * A step that ends on finishing a JOB. The job doesn't survive the disconnect, and a respawn
---     always puts the player back on their plot rather than in the business, so the step could
---     never end on its own trigger -- it would strand them. They were doing the job when they
---     dropped, so it counts as done and they resume on the step after it.
+--   * A step that runs INSIDE A JOB (see isInJob). The job doesn't survive the disconnect, and a
+--     respawn always puts the player back on their plot rather than in the business, so the step
+--     could never end on its own trigger -- it would strand them. They were doing the job when they
+--     dropped, so the whole run of in-job steps counts as done and they resume after it. Past the
+--     first, not just past this one: the step after an in-job step is usually another in-job step,
+--     which would strand them exactly the same way.
 --
 --   * A step that runs with a PANEL already open (it names a `panel` but isn't the step that has
 --     them open it). Nothing is open on a fresh join, so its highlight would point at a panel
@@ -306,8 +372,8 @@ function TutorialConfig.resumeStep(number: number): number
 		return number
 	end
 
-	if step.advance == "JobDone" then
-		return number + 1
+	if TutorialConfig.isInJob(step) then
+		return TutorialConfig.afterJob(number)
 	end
 
 	if step.panel and step.advance ~= "BoardOpen" then
